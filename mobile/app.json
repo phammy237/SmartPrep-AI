@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "SmartPrep AI",
+    "slug": "smartprep-ai",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "smartprep",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "backgroundColor": "#FAF6F0",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.smartprep.ai"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#FAF6F0"
+      },
+      "package": "com.smartprep.ai"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#FAF6F0"
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "SmartPrep uses your camera to scan your fridge, freezer, and pantry so it can identify ingredients for you."
+        }
+      ],
+      "expo-asset"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
