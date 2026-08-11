@@ -32,7 +32,7 @@ export function SignInScreen() {
 
   return (
     <Screen contentContainerStyle={{ flex: 1 }}>
-      <OnboardingProgress step={1} total={6} onBack={() => router.back()} />
+      <OnboardingProgress step={1} total={7} onBack={() => router.back()} />
       <View style={{ flex: 1, padding: theme.spacing.xl, justifyContent: 'center', gap: theme.spacing.xl }}>
         <View style={{ gap: theme.spacing.xs }}>
           <Text style={[theme.typography.title1, { color: theme.colors.textPrimary }]}>Create your account</Text>

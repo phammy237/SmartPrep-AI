@@ -33,6 +33,7 @@ export const MOCK_RECIPES: Recipe[] = [
     servings: 2,
     additionalCostEstimate: 6,
     smartMatchScore: 94,
+    nutritionPerServing: { calories: 620, proteinG: 22, carbsG: 78, fatG: 24, fiberG: 5 },
     reasons: reasons('recipe-creamy-spinach-pasta', [
       'Uses spinach that should be used first',
       '7 of 9 ingredients already in your pantry',
@@ -72,6 +73,7 @@ export const MOCK_RECIPES: Recipe[] = [
     servings: 2,
     additionalCostEstimate: 6,
     smartMatchScore: 81,
+    nutritionPerServing: { calories: 580, proteinG: 42, carbsG: 68, fatG: 14, fiberG: 4 },
     reasons: reasons('recipe-chicken-teriyaki-bowl', [
       '8 of 10 ingredients already in your pantry',
       'Uses broccoli that should be used soon',
@@ -112,6 +114,7 @@ export const MOCK_RECIPES: Recipe[] = [
     servings: 1,
     additionalCostEstimate: 1,
     smartMatchScore: 90,
+    nutritionPerServing: { calories: 430, proteinG: 18, carbsG: 32, fatG: 26, fiberG: 9 },
     reasons: reasons('recipe-avocado-toast', [
       'Uses avocado and bread before they turn',
       'Ready in 10 minutes',
@@ -147,6 +150,7 @@ export const MOCK_RECIPES: Recipe[] = [
     servings: 1,
     additionalCostEstimate: 2,
     smartMatchScore: 88,
+    nutritionPerServing: { calories: 310, proteinG: 20, carbsG: 45, fatG: 6, fiberG: 4 },
     reasons: reasons('recipe-strawberry-parfait', [
       'Uses strawberries before they spoil',
       'No cooking required',
@@ -177,6 +181,7 @@ export const MOCK_RECIPES: Recipe[] = [
     servings: 3,
     additionalCostEstimate: 5,
     smartMatchScore: 75,
+    nutritionPerServing: { calories: 340, proteinG: 13, carbsG: 48, fatG: 11, fiberG: 9 },
     reasons: reasons('recipe-black-bean-tacos', [
       'Uses black beans and bell pepper you have on hand',
       'Fits your favorite Mexican flavors',
@@ -213,6 +218,7 @@ export const MOCK_RECIPES: Recipe[] = [
     servings: 3,
     additionalCostEstimate: 7,
     smartMatchScore: 79,
+    nutritionPerServing: { calories: 480, proteinG: 28, carbsG: 45, fatG: 20, fiberG: 4 },
     reasons: reasons('recipe-beef-broccoli', [
       'Uses ground beef and broccoli that need attention',
       'Pairs well with rice you already have',
@@ -251,6 +257,7 @@ export const MOCK_RECIPES: Recipe[] = [
     servings: 3,
     additionalCostEstimate: 3,
     smartMatchScore: 86,
+    nutritionPerServing: { calories: 410, proteinG: 15, carbsG: 55, fatG: 13, fiberG: 4 },
     reasons: reasons('recipe-veggie-fried-rice', [
       'Uses up frozen peas and rice you already have',
       'A great way to use extra eggs',
@@ -289,6 +296,7 @@ export const MOCK_RECIPES: Recipe[] = [
     servings: 4,
     additionalCostEstimate: 2,
     smartMatchScore: 83,
+    nutritionPerServing: { calories: 390, proteinG: 27, carbsG: 32, fatG: 16, fiberG: 9 },
     reasons: reasons('recipe-beef-chili', [
       'Uses ground beef before it needs to be used',
       '8 of 9 ingredients already in your pantry',
@@ -327,6 +335,7 @@ export const MOCK_RECIPES: Recipe[] = [
     servings: 2,
     additionalCostEstimate: 9,
     smartMatchScore: 68,
+    nutritionPerServing: { calories: 460, proteinG: 32, carbsG: 28, fatG: 22, fiberG: 3 },
     reasons: reasons('recipe-honey-garlic-salmon', [
       'A new way to use broccoli that needs attention',
       'Fits your 15-30 minute cooking window',
@@ -361,6 +370,7 @@ export const MOCK_RECIPES: Recipe[] = [
     servings: 2,
     additionalCostEstimate: 0,
     smartMatchScore: 97,
+    nutritionPerServing: { calories: 380, proteinG: 26, carbsG: 8, fatG: 27, fiberG: 2 },
     reasons: reasons('recipe-veggie-omelet', [
       'You have everything you need - no shopping required',
       'Uses spinach that should be used first',
@@ -395,6 +405,7 @@ export const MOCK_RECIPES: Recipe[] = [
     servings: 4,
     additionalCostEstimate: 4,
     smartMatchScore: 72,
+    nutritionPerServing: { calories: 220, proteinG: 5, carbsG: 18, fatG: 15, fiberG: 3 },
     reasons: reasons('recipe-tomato-soup', [
       'Uses canned tomatoes you already have',
       'A cozy meal built on pantry staples',
@@ -430,6 +441,7 @@ export const MOCK_RECIPES: Recipe[] = [
     servings: 4,
     additionalCostEstimate: 0,
     smartMatchScore: 91,
+    nutritionPerServing: { calories: 140, proteinG: 9, carbsG: 22, fatG: 3, fiberG: 2 },
     reasons: reasons('recipe-berry-bark', [
       'You have everything you need',
       'A great way to use frozen berries',
@@ -460,6 +472,7 @@ export const MOCK_RECIPES: Recipe[] = [
     servings: 3,
     additionalCostEstimate: 11,
     smartMatchScore: 58,
+    nutritionPerServing: { calories: 260, proteinG: 24, carbsG: 16, fatG: 11, fiberG: 3 },
     reasons: reasons('recipe-shrimp-stirfry', [
       "Introduces a new protein you haven't tried recently",
       'Uses vegetables you already have',
@@ -495,6 +508,7 @@ export const MOCK_RECIPES: Recipe[] = [
     servings: 4,
     additionalCostEstimate: 8,
     smartMatchScore: 55,
+    nutritionPerServing: { calories: 310, proteinG: 11, carbsG: 42, fatG: 12, fiberG: 8 },
     reasons: reasons('recipe-quinoa-chickpea-salad', [
       'A healthy new recipe to try',
       'Uses vegetables you already have',
@@ -530,6 +544,7 @@ export const MOCK_RECIPES: Recipe[] = [
     servings: 6,
     additionalCostEstimate: 0,
     smartMatchScore: 89,
+    nutritionPerServing: { calories: 230, proteinG: 6, carbsG: 32, fatG: 9, fiberG: 2 },
     reasons: reasons('recipe-cornbread-skillet', [
       'You have everything you need',
       'Uses corn from your freezer',
@@ -564,6 +579,7 @@ export const MOCK_RECIPES: Recipe[] = [
     servings: 4,
     additionalCostEstimate: 4,
     smartMatchScore: 84,
+    nutritionPerServing: { calories: 380, proteinG: 15, carbsG: 48, fatG: 14, fiberG: 3 },
     reasons: reasons('recipe-caprese-pasta-salad', [
       'Uses tomato and basil that need attention',
       'Fits your Italian cuisine preference',

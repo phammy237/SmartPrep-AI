@@ -5,6 +5,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { useTheme } from '@/hooks/useTheme';
 import { Recipe } from '@/types';
+import { formatMinutes } from '@/utils/format';
 
 interface RecipeCardProps {
   recipe: Recipe;
@@ -16,6 +17,7 @@ interface RecipeCardProps {
 export function RecipeCard({ recipe, onPress, subtitle, width = 190 }: RecipeCardProps) {
   const theme = useTheme();
   const [saved, setSaved] = useState(false);
+  const defaultSubtitle = `${formatMinutes(recipe.prepTimeMinutes + recipe.cookTimeMinutes)} · ${Math.round(recipe.nutritionPerServing.calories)} kcal`;
 
   return (
     <Pressable
@@ -31,6 +33,9 @@ export function RecipeCard({ recipe, onPress, subtitle, width = 190 }: RecipeCar
         ]}
       >
         <Image source={{ uri: recipe.imageUri }} style={StyleSheet.absoluteFillObject} contentFit="cover" transition={150} />
+        <View style={[styles.matchBadge, { backgroundColor: 'rgba(255,255,255,0.92)' }]}>
+          <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>{recipe.smartMatchScore}% match</Text>
+        </View>
         <Pressable
           onPress={() => setSaved((s) => !s)}
           accessibilityRole="button"
@@ -44,11 +49,9 @@ export function RecipeCard({ recipe, onPress, subtitle, width = 190 }: RecipeCar
           <Text numberOfLines={1} style={[theme.typography.subhead, { color: theme.colors.textPrimary }]}>
             {recipe.title}
           </Text>
-          {subtitle ? (
-            <Text numberOfLines={1} style={[theme.typography.caption, { color: theme.colors.textSecondary, marginTop: 1 }]}>
-              {subtitle}
-            </Text>
-          ) : null}
+          <Text numberOfLines={1} style={[theme.typography.caption, { color: theme.colors.textSecondary, marginTop: 1 }]}>
+            {subtitle ?? defaultSubtitle}
+          </Text>
         </View>
       </View>
     </Pressable>
@@ -61,6 +64,14 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.92,
+  },
+  matchBadge: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    borderRadius: 999,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
   },
   saveButton: {
     position: 'absolute',

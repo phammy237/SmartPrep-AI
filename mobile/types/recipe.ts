@@ -1,4 +1,5 @@
 import { QuantityUnit } from './common';
+import { NutritionFacts } from './nutrition';
 
 export type RecipeDifficulty = 'easy' | 'medium' | 'hard';
 
@@ -43,6 +44,7 @@ export interface Recipe {
   additionalCostEstimate: number;
   /** 0-100 SmartPrep Match score. Hydrated by recipeService alongside `reasons`. */
   smartMatchScore: number;
+  nutritionPerServing: NutritionFacts;
   reasons: RecommendationReason[];
   ingredients: RecipeIngredient[];
   steps: string[];

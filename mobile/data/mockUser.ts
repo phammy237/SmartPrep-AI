@@ -22,5 +22,19 @@ export const MOCK_USER: User = {
       cookQuickly: 50,
       tryNewFoods: 35,
     },
+    nutritionGoals: {
+      dailyCalories: 1800,
+      macroPreference: 'balanced',
+      proteinG: 150,
+      carbsG: 220,
+      fatG: 60,
+      fiberG: 28,
+    },
+    weightGoal: {
+      direction: 'lose',
+      targetLbs: 10,
+      targetDate: '2026-09-30',
+    },
+    weeklyGroceryBudget: 60,
   },
 };

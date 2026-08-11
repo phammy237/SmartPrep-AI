@@ -7,9 +7,12 @@ import {
   CookingConfidence,
   CookingTimePreference,
   DietaryPreference,
+  MacroPreference,
   SmartPrepPriorities,
   UserPreferences,
+  WeightGoalDirection,
 } from '@/types';
+import { computeMacroGoals } from '@/utils/nutrition';
 
 type ListField = 'allergies' | 'favoriteCuisines' | 'dislikedFoods';
 
@@ -22,6 +25,12 @@ interface OnboardingDraft {
   cookingTime: CookingTimePreference;
   cookingConfidence: CookingConfidence;
   priorities: SmartPrepPriorities;
+  weightGoalDirection: WeightGoalDirection;
+  weightGoalTargetLbs: number;
+  weightGoalTargetDate: string;
+  dailyCalories: number;
+  macroPreference: MacroPreference;
+  weeklyGroceryBudget: number;
 }
 
 const DEFAULT_DRAFT: OnboardingDraft = {
@@ -40,6 +49,12 @@ const DEFAULT_DRAFT: OnboardingDraft = {
     cookQuickly: 50,
     tryNewFoods: 50,
   },
+  weightGoalDirection: 'maintain',
+  weightGoalTargetLbs: 0,
+  weightGoalTargetDate: new Date(Date.now() + 1000 * 60 * 60 * 24 * 60).toISOString().slice(0, 10),
+  dailyCalories: 2000,
+  macroPreference: 'balanced',
+  weeklyGroceryBudget: 75,
 };
 
 interface OnboardingState extends OnboardingDraft {
@@ -49,6 +64,12 @@ interface OnboardingState extends OnboardingDraft {
   setCookingTime: (value: CookingTimePreference) => void;
   setCookingConfidence: (value: CookingConfidence) => void;
   setPriority: (key: keyof SmartPrepPriorities, value: number) => void;
+  setWeightGoalDirection: (value: WeightGoalDirection) => void;
+  setWeightGoalTargetLbs: (value: number) => void;
+  setWeightGoalTargetDate: (value: string) => void;
+  setDailyCalories: (value: number) => void;
+  setMacroPreference: (value: MacroPreference) => void;
+  setWeeklyGroceryBudget: (value: number) => void;
   reset: () => void;
   toPreferences: () => UserPreferences;
 }
@@ -87,10 +108,18 @@ export const useOnboardingStore = create<OnboardingState>()(
       setPriority: (key, value) =>
         set((state) => ({ priorities: { ...state.priorities, [key]: value } })),
 
+      setWeightGoalDirection: (value) => set({ weightGoalDirection: value }),
+      setWeightGoalTargetLbs: (value) => set({ weightGoalTargetLbs: value }),
+      setWeightGoalTargetDate: (value) => set({ weightGoalTargetDate: value }),
+      setDailyCalories: (value) => set({ dailyCalories: value }),
+      setMacroPreference: (value) => set({ macroPreference: value }),
+      setWeeklyGroceryBudget: (value) => set({ weeklyGroceryBudget: value }),
+
       reset: () => set(DEFAULT_DRAFT),
 
       toPreferences: () => {
         const state = get();
+        const macros = computeMacroGoals(state.dailyCalories, state.macroPreference);
         return {
           dietary: state.dietary,
           allergies: state.allergies,
@@ -99,6 +128,17 @@ export const useOnboardingStore = create<OnboardingState>()(
           cookingTime: state.cookingTime,
           cookingConfidence: state.cookingConfidence,
           priorities: state.priorities,
+          nutritionGoals: {
+            dailyCalories: state.dailyCalories,
+            macroPreference: state.macroPreference,
+            ...macros,
+          },
+          weightGoal: {
+            direction: state.weightGoalDirection,
+            targetLbs: state.weightGoalTargetLbs,
+            targetDate: state.weightGoalTargetDate,
+          },
+          weeklyGroceryBudget: state.weeklyGroceryBudget,
         };
       },
     }),

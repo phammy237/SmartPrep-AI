@@ -2,6 +2,7 @@ import React from 'react';
 import { Text, View } from 'react-native';
 
 import { useTheme } from '@/hooks/useTheme';
+import { SmartPrepLogo } from './SmartPrepLogo';
 
 interface AppHeaderProps {
   rightAccessory?: React.ReactNode;
@@ -22,8 +23,8 @@ export function AppHeader({ rightAccessory }: AppHeaderProps) {
         paddingBottom: theme.spacing.sm,
       }}
     >
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-        <Text style={{ fontSize: 18 }}>🌿</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <SmartPrepLogo size={24} />
         <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>SmartPrep</Text>
       </View>
       {rightAccessory}

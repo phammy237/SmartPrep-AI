@@ -57,19 +57,25 @@ export function GroceryItemRow({ item, isLast, onToggle, onDelete }: GroceryItem
         {item.isChecked ? <Ionicons name="checkmark" size={16} color={theme.colors.textOnAccent} /> : null}
       </Pressable>
       <IngredientAvatar imageUri={item.imageUri} variant="compact" />
-      <Text
-        style={[
-          theme.typography.body,
-          {
-            color: item.isChecked ? theme.colors.textTertiary : theme.colors.textPrimary,
-            flex: 1,
-            textDecorationLine: item.isChecked ? 'line-through' : 'none',
-          },
-        ]}
-      >
-        {item.name}
-        {label ? ` ${label}` : ''}
-      </Text>
+      <View style={{ flex: 1, gap: 1 }}>
+        <Text
+          style={[
+            theme.typography.body,
+            {
+              color: item.isChecked ? theme.colors.textTertiary : theme.colors.textPrimary,
+              textDecorationLine: item.isChecked ? 'line-through' : 'none',
+            },
+          ]}
+        >
+          {item.name}
+          {label ? ` ${label}` : ''}
+        </Text>
+        {item.wasteNote ? (
+          <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>Low-waste: {item.wasteNote}</Text>
+        ) : item.swapSuggestion ? (
+          <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>{item.swapSuggestion}</Text>
+        ) : null}
+      </View>
       <Pressable onPress={onDelete} accessibilityRole="button" accessibilityLabel={`Delete ${item.name}`} hitSlop={8}>
         <Ionicons name="trash-outline" size={18} color={theme.colors.textTertiary} />
       </Pressable>

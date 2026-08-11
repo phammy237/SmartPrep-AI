@@ -61,6 +61,7 @@ function RootNavigator() {
         <Stack.Screen name="scan" options={{ presentation: 'modal' }} />
         <Stack.Screen name="recipes" />
         <Stack.Screen name="grocery" />
+        <Stack.Screen name="nutrition" />
         <Stack.Screen name="+not-found" />
       </Stack>
     </>

@@ -17,3 +17,7 @@ export * from './EmptyState';
 export * from './LoadingState';
 export * from './ListRow';
 export * from './IngredientAvatar';
+export * from './SmartPrepLogo';
+export * from './MacroBar';
+export * from './BarChart';
+export * from './NutritionFactsRow';

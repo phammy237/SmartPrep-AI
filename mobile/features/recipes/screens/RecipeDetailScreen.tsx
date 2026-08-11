@@ -4,7 +4,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import React from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { Button, EmptyState, LoadingState, ProgressRing, Screen } from '@/components';
+import { Button, EmptyState, LoadingState, NutritionFactsRow, ProgressRing, Screen } from '@/components';
 import { useAddMissingIngredientsForRecipe, useRecipe } from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
 import { getMissingIngredients, getRecipeAvailability } from '@/services';
@@ -66,6 +66,27 @@ export function RecipeDetailScreen() {
               <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>{recipe.smartMatchScore}</Text>
             </ProgressRing>
             <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>SmartPrep Match</Text>
+          </View>
+        </View>
+
+        <NutritionFactsRow facts={recipe.nutritionPerServing} servingLabel="per serving" />
+
+        <View style={{ gap: 6 }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+            <Text style={[theme.typography.subhead, { color: theme.colors.textPrimary }]}>Pantry match</Text>
+            <Text style={[theme.typography.subhead, { color: theme.colors.textSecondary }]}>
+              {owned} of {total} ingredients
+            </Text>
+          </View>
+          <View style={{ height: 6, borderRadius: 3, backgroundColor: theme.colors.surfaceMuted, overflow: 'hidden' }}>
+            <View
+              style={{
+                height: '100%',
+                width: `${total > 0 ? (owned / total) * 100 : 0}%`,
+                backgroundColor: theme.colors.accent,
+                borderRadius: 3,
+              }}
+            />
           </View>
         </View>
 

@@ -1,5 +1,6 @@
 export * from './common';
 export * from './freshness';
+export * from './nutrition';
 export * from './ingredient';
 export * from './pantry';
 export * from './scan';

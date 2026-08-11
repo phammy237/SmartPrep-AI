@@ -5,4 +5,7 @@ export interface KitchenImpact {
   estimatedFoodValueUtilized: number;
   pantryUtilizationPercent: number;
   itemsDiscarded: number;
+  /** Estimated, not measured - phrased as an estimate everywhere it's shown. */
+  estimatedFoodSavedLbs: number;
+  cookingStreakDays: number;
 }

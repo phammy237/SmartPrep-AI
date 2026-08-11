@@ -22,6 +22,26 @@ export interface SmartPrepPriorities {
   tryNewFoods: number;
 }
 
+export type MacroPreference = 'balanced' | 'low_carb' | 'high_protein';
+
+export interface NutritionGoals {
+  dailyCalories: number;
+  macroPreference: MacroPreference;
+  proteinG: number;
+  carbsG: number;
+  fatG: number;
+  fiberG: number;
+}
+
+export type WeightGoalDirection = 'lose' | 'maintain' | 'gain';
+
+export interface WeightGoal {
+  direction: WeightGoalDirection;
+  targetLbs: number;
+  /** ISO date. */
+  targetDate: string;
+}
+
 export interface UserPreferences {
   dietary: DietaryPreference[];
   allergies: string[];
@@ -30,6 +50,9 @@ export interface UserPreferences {
   cookingTime: CookingTimePreference;
   cookingConfidence: CookingConfidence;
   priorities: SmartPrepPriorities;
+  nutritionGoals: NutritionGoals;
+  weightGoal: WeightGoal;
+  weeklyGroceryBudget: number;
 }
 
 export type AuthProvider = 'apple' | 'google' | 'email' | null;

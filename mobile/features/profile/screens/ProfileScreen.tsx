@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { Text, View } from 'react-native';
+import { Alert, Text, View } from 'react-native';
 
-import { Chip, ChipGroup, ConfidenceSelector, EmptyState, LoadingState, PrioritySlider, Screen, SectionHeader, TagInput } from '@/components';
+import { Card, Chip, ChipGroup, ConfidenceSelector, EmptyState, ListRow, LoadingState, PrioritySlider, Screen, SectionHeader, Stepper, TagInput } from '@/components';
 import { useKitchenImpact, useUpdatePreferences, useUser } from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
-import { CookingTimePreference, DietaryPreference, SmartPrepPriorities } from '@/types';
+import { CookingTimePreference, DietaryPreference, MacroPreference, SmartPrepPriorities, WeightGoalDirection } from '@/types';
+import { computeMacroGoals } from '@/utils/nutrition';
 import { KitchenImpactSection } from '../components/KitchenImpactSection';
 import { ProfileHeader } from '../components/ProfileHeader';
 
@@ -26,6 +27,18 @@ const TIME_OPTIONS: { value: CookingTimePreference; label: string }[] = [
   { value: 'no_preference', label: "Doesn't matter" },
 ];
 
+const DIRECTION_OPTIONS: { value: WeightGoalDirection; label: string }[] = [
+  { value: 'lose', label: 'Lose weight' },
+  { value: 'maintain', label: 'Maintain' },
+  { value: 'gain', label: 'Gain weight' },
+];
+
+const MACRO_OPTIONS: { value: MacroPreference; label: string }[] = [
+  { value: 'balanced', label: 'Balanced' },
+  { value: 'low_carb', label: 'Low Carb' },
+  { value: 'high_protein', label: 'High Protein' },
+];
+
 const PRIORITY_FIELDS: { key: keyof SmartPrepPriorities; label: string }[] = [
   { key: 'useWhatIHave', label: 'Use what I have' },
   { key: 'reduceFoodWaste', label: 'Reduce food waste' },
@@ -34,6 +47,10 @@ const PRIORITY_FIELDS: { key: keyof SmartPrepPriorities; label: string }[] = [
   { key: 'cookQuickly', label: 'Cook quickly' },
   { key: 'tryNewFoods', label: 'Try new foods' },
 ];
+
+function comingSoon(feature: string) {
+  Alert.alert(feature, `${feature} is coming in a future update.`);
+}
 
 export function ProfileScreen() {
   const theme = useTheme();
@@ -102,6 +119,20 @@ export function ProfileScreen() {
     updatePreferences.mutate({ dislikedFoods: next });
   };
 
+  const setWeightGoalDirection = (direction: WeightGoalDirection) =>
+    updatePreferences.mutate({ weightGoal: { ...prefs.weightGoal, direction } });
+  const setWeightGoalTargetLbs = (targetLbs: number) =>
+    updatePreferences.mutate({ weightGoal: { ...prefs.weightGoal, targetLbs } });
+  const setDailyCalories = (dailyCalories: number) =>
+    updatePreferences.mutate({
+      nutritionGoals: { ...prefs.nutritionGoals, dailyCalories, ...computeMacroGoals(dailyCalories, prefs.nutritionGoals.macroPreference) },
+    });
+  const setMacroPreference = (macroPreference: MacroPreference) =>
+    updatePreferences.mutate({
+      nutritionGoals: { ...prefs.nutritionGoals, macroPreference, ...computeMacroGoals(prefs.nutritionGoals.dailyCalories, macroPreference) },
+    });
+  const setWeeklyGroceryBudget = (weeklyGroceryBudget: number) => updatePreferences.mutate({ weeklyGroceryBudget });
+
   return (
     <Screen scroll header edges={['top', 'left', 'right']} contentContainerStyle={{ padding: theme.spacing.lg, paddingTop: theme.spacing.xs, gap: theme.spacing.xl }}>
       <ProfileHeader name={user.name} email={user.email} initials={user.avatarInitials} />
@@ -164,6 +195,57 @@ export function ProfileScreen() {
       </View>
 
       <View style={{ gap: theme.spacing.lg }}>
+        <SectionHeader title="Goals" subtitle="Powers your daily nutrition targets and grocery budget" />
+
+        <View style={{ gap: theme.spacing.sm }}>
+          <Text style={[theme.typography.subhead, { color: theme.colors.textPrimary }]}>Weight goal</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+            {DIRECTION_OPTIONS.map((option) => (
+              <Chip
+                key={option.value}
+                label={option.label}
+                selected={prefs.weightGoal.direction === option.value}
+                onPress={() => setWeightGoalDirection(option.value)}
+              />
+            ))}
+          </View>
+          {prefs.weightGoal.direction !== 'maintain' ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>Target pounds</Text>
+              <Stepper value={prefs.weightGoal.targetLbs} onChange={setWeightGoalTargetLbs} min={0} max={100} accessibilityLabel="target pounds" />
+            </View>
+          ) : null}
+        </View>
+
+        <View style={{ gap: theme.spacing.sm }}>
+          <Text style={[theme.typography.subhead, { color: theme.colors.textPrimary }]}>Daily calorie target</Text>
+          <Stepper value={prefs.nutritionGoals.dailyCalories} onChange={setDailyCalories} min={1200} max={4000} step={50} accessibilityLabel="daily calories" />
+        </View>
+
+        <View style={{ gap: theme.spacing.sm }}>
+          <Text style={[theme.typography.subhead, { color: theme.colors.textPrimary }]}>Macro preference</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+            {MACRO_OPTIONS.map((option) => (
+              <Chip
+                key={option.value}
+                label={option.label}
+                selected={prefs.nutritionGoals.macroPreference === option.value}
+                onPress={() => setMacroPreference(option.value)}
+              />
+            ))}
+          </View>
+          <Text style={[theme.typography.footnote, { color: theme.colors.textTertiary }]}>
+            ~{prefs.nutritionGoals.proteinG}g protein · {prefs.nutritionGoals.carbsG}g carbs · {prefs.nutritionGoals.fatG}g fat
+          </Text>
+        </View>
+
+        <View style={{ gap: theme.spacing.sm }}>
+          <Text style={[theme.typography.subhead, { color: theme.colors.textPrimary }]}>Weekly grocery budget</Text>
+          <Stepper value={prefs.weeklyGroceryBudget} onChange={setWeeklyGroceryBudget} min={20} max={300} step={5} accessibilityLabel="weekly grocery budget" />
+        </View>
+      </View>
+
+      <View style={{ gap: theme.spacing.lg }}>
         <SectionHeader title="SmartPrep Priorities" subtitle="Shapes how we recommend meals" />
         {localPriorities
           ? PRIORITY_FIELDS.map((field) => (
@@ -183,6 +265,31 @@ export function ProfileScreen() {
       </View>
 
       {impactQuery.data ? <KitchenImpactSection impact={impactQuery.data} /> : null}
+
+      <View style={{ gap: theme.spacing.sm }}>
+        <SectionHeader title="More" />
+        <Card padded={false} style={{ paddingHorizontal: theme.spacing.md }}>
+          <ListRow
+            title="Notifications"
+            subtitle="Meal reminders, plan updates"
+            showChevron
+            onPress={() => comingSoon('Notifications')}
+          />
+          <ListRow
+            title="Connected Apps"
+            subtitle="Apple Health, Fitbit"
+            showChevron
+            onPress={() => comingSoon('Connected Apps')}
+          />
+          <ListRow
+            title="Data & Privacy"
+            subtitle="Export data, delete account"
+            showChevron
+            isLast
+            onPress={() => comingSoon('Data & Privacy')}
+          />
+        </Card>
+      </View>
 
       {!prefs.allergies.length && !prefs.favoriteCuisines.length && !prefs.dislikedFoods.length ? (
         <Text style={[theme.typography.footnote, { color: theme.colors.textTertiary }]}>

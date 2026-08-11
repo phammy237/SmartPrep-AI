@@ -8,8 +8,10 @@ import { useKitchenImpact, useMealPlan, usePantry, useRecipeCollections, useReci
 import { useTheme } from '@/hooks/useTheme';
 import { countIngredientsNeedingAttention, getRecipeAvailability } from '@/services';
 import { freshnessSortWeight } from '@/utils/freshness';
+import { sumNutrition } from '@/utils/nutrition';
 import { GreetingHeader } from '../components/GreetingHeader';
 import { ImpactSummaryCard } from '../components/ImpactSummaryCard';
+import { NutritionCard } from '../components/NutritionCard';
 import { ScanHeroCard } from '../components/ScanHeroCard';
 import { TonightCard } from '../components/TonightCard';
 import { UseFirstSection } from '../components/UseFirstSection';
@@ -50,6 +52,15 @@ export function HomeScreen() {
     [mealPlanQuery.data],
   );
 
+  /** Always Monday's plan (not the real device date) so the card stays populated whenever this is demoed. */
+  const todaysNutrition = useMemo(() => {
+    const mondayItems = (mealPlanQuery.data?.items ?? []).filter((item) => item.day === 'mon');
+    const facts = mondayItems
+      .map((item) => recipesById[item.recipeId]?.nutritionPerServing)
+      .filter((f): f is NonNullable<typeof f> => !!f);
+    return sumNutrition(facts);
+  }, [mealPlanQuery.data, recipesById]);
+
   const isLoading =
     userQuery.isLoading || pantryQuery.isLoading || collectionsQuery.isLoading || recipesQuery.isLoading;
   const isError =
@@ -88,6 +99,8 @@ export function HomeScreen() {
   return (
     <Screen scroll header contentContainerStyle={{ padding: theme.spacing.lg, gap: theme.spacing.xl }}>
       <GreetingHeader name={user.name} />
+
+      <NutritionCard consumed={todaysNutrition} goals={user.preferences.nutritionGoals} onPress={() => router.push('/nutrition')} />
 
       <ScanHeroCard />
 

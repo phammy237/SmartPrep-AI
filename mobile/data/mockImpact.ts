@@ -12,4 +12,6 @@ export const MOCK_KITCHEN_IMPACT: KitchenImpact = {
   estimatedFoodValueUtilized: 31,
   pantryUtilizationPercent: 87,
   itemsDiscarded: 6,
+  estimatedFoodSavedLbs: 12.4,
+  cookingStreakDays: 7,
 };

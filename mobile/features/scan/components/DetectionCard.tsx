@@ -1,14 +1,17 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 
 import { Badge, Chip, FreshnessTag, IngredientAvatar } from '@/components';
+import { INGREDIENTS } from '@/data';
 import { useTheme } from '@/hooks/useTheme';
 import { useScanSessionStore } from '@/store';
 import { ScanDetection } from '@/types';
 import { formatConfidence } from '@/utils/format';
 import { FRESHNESS_LABELS, FRESHNESS_META, FRESHNESS_OVERRIDE_VALUES } from '@/utils/freshness';
 import { QuantityVerifier } from './QuantityVerifier';
+
+const LOW_CONFIDENCE_THRESHOLD = 0.7;
 
 interface DetectionCardProps {
   detection: ScanDetection;
@@ -22,6 +25,8 @@ export function DetectionCard({ detection, isActive, onPress }: DetectionCardPro
   const removeDetection = useScanSessionStore((s) => s.removeDetection);
   const restoreDetection = useScanSessionStore((s) => s.restoreDetection);
   const [editingFreshness, setEditingFreshness] = useState(false);
+  const [reclassifying, setReclassifying] = useState(false);
+  const isLowConfidence = detection.detectionConfidence < LOW_CONFIDENCE_THRESHOLD;
 
   if (detection.isRemoved) {
     return (
@@ -76,6 +81,43 @@ export function DetectionCard({ detection, isActive, onPress }: DetectionCardPro
             </Pressable>
           </View>
           <Badge label={`${formatConfidence(detection.detectionConfidence)} detection confidence`} tone="neutral" />
+
+          {isLowConfidence ? (
+            <View style={{ gap: 6 }}>
+              <Text style={[theme.typography.footnote, { color: theme.colors.freshness.useSoon }]}>
+                We're not fully sure this is {detection.name}.
+              </Text>
+              <Pressable
+                onPress={() => setReclassifying((v) => !v)}
+                accessibilityRole="button"
+                accessibilityLabel="Did we get this right? Change ingredient"
+              >
+                <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>
+                  {reclassifying ? 'Cancel' : 'Not quite? Change ingredient'}
+                </Text>
+              </Pressable>
+              {reclassifying ? (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxHeight: 40 }} contentContainerStyle={{ gap: 6 }}>
+                  {INGREDIENTS.map((ingredient) => (
+                    <Chip
+                      key={ingredient.id}
+                      label={ingredient.name}
+                      onPress={() => {
+                        updateDetection(detection.id, {
+                          ingredientId: ingredient.id,
+                          name: ingredient.name,
+                          imageUri: ingredient.imageUri,
+                          category: ingredient.category,
+                          detectionConfidence: 1,
+                        });
+                        setReclassifying(false);
+                      }}
+                    />
+                  ))}
+                </ScrollView>
+              ) : null}
+            </View>
+          ) : null}
 
           <QuantityVerifier
             quantity={detection.quantity}

@@ -11,6 +11,11 @@ export interface GroceryListItem {
   isChecked: boolean;
   sourceRecipeIds?: string[];
   isManuallyAdded?: boolean;
+  estimatedPrice?: number;
+  /** e.g. "Swap: Cucumber" - a lower-waste substitution suggestion. */
+  swapSuggestion?: string;
+  /** e.g. "Use stems in soup" - a tip to reduce waste from this item. */
+  wasteNote?: string;
 }
 
 export interface GroceryList {

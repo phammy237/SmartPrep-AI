@@ -1,0 +1,2454 @@
+diff --git a/mobile/app/_layout.tsx b/mobile/app/_layout.tsx
+index fb9189a..3acb0a7 100644
+--- a/mobile/app/_layout.tsx
++++ b/mobile/app/_layout.tsx
+@@ -61,6 +61,7 @@ function RootNavigator() {
+         <Stack.Screen name="scan" options={{ presentation: 'modal' }} />
+         <Stack.Screen name="recipes" />
+         <Stack.Screen name="grocery" />
++        <Stack.Screen name="nutrition" />
+         <Stack.Screen name="+not-found" />
+       </Stack>
+     </>
+diff --git a/mobile/app/nutrition/_layout.tsx b/mobile/app/nutrition/_layout.tsx
+new file mode 100644
+index 0000000..b625893
+--- /dev/null
++++ b/mobile/app/nutrition/_layout.tsx
+@@ -0,0 +1,5 @@
++import { Stack } from 'expo-router';
++
++export default function NutritionLayout() {
++  return <Stack screenOptions={{ headerShown: false }} />;
++}
+diff --git a/mobile/app/nutrition/index.tsx b/mobile/app/nutrition/index.tsx
+new file mode 100644
+index 0000000..c6c2eb1
+--- /dev/null
++++ b/mobile/app/nutrition/index.tsx
+@@ -0,0 +1,3 @@
++import { NutritionProgressScreen } from '@/features/nutrition/screens/NutritionProgressScreen';
++
++export default NutritionProgressScreen;
+diff --git a/mobile/app/onboarding/goals.tsx b/mobile/app/onboarding/goals.tsx
+new file mode 100644
+index 0000000..88854d1
+--- /dev/null
++++ b/mobile/app/onboarding/goals.tsx
+@@ -0,0 +1,3 @@
++import { GoalsScreen } from '@/features/onboarding/screens/GoalsScreen';
++
++export default GoalsScreen;
+diff --git a/mobile/components/AppHeader.tsx b/mobile/components/AppHeader.tsx
+index 749d4b9..bfef442 100644
+--- a/mobile/components/AppHeader.tsx
++++ b/mobile/components/AppHeader.tsx
+@@ -2,6 +2,7 @@ import React from 'react';
+ import { Text, View } from 'react-native';
+ 
+ import { useTheme } from '@/hooks/useTheme';
++import { SmartPrepLogo } from './SmartPrepLogo';
+ 
+ interface AppHeaderProps {
+   rightAccessory?: React.ReactNode;
+@@ -22,8 +23,8 @@ export function AppHeader({ rightAccessory }: AppHeaderProps) {
+         paddingBottom: theme.spacing.sm,
+       }}
+     >
+-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+-        <Text style={{ fontSize: 18 }}>🌿</Text>
++      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
++        <SmartPrepLogo size={24} />
+         <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>SmartPrep</Text>
+       </View>
+       {rightAccessory}
+diff --git a/mobile/components/BarChart.tsx b/mobile/components/BarChart.tsx
+new file mode 100644
+index 0000000..949205f
+--- /dev/null
++++ b/mobile/components/BarChart.tsx
+@@ -0,0 +1,62 @@
++import React from 'react';
++import { DimensionValue, Text, View } from 'react-native';
++
++import { useTheme } from '@/hooks/useTheme';
++
++export interface BarChartDatum {
++  label: string;
++  value: number;
++  highlighted?: boolean;
++}
++
++interface BarChartProps {
++  data: BarChartDatum[];
++  goal?: number;
++  height?: number;
++}
++
++/** Simple flexbox weekly bar chart with an optional dashed goal line - no chart library needed. */
++export function BarChart({ data, goal, height = 120 }: BarChartProps) {
++  const theme = useTheme();
++  const max = Math.max(goal ?? 0, ...data.map((d) => d.value), 1);
++  const goalPercent = goal ? Math.min(100, (goal / max) * 100) : null;
++
++  return (
++    <View>
++      <View style={{ height, flexDirection: 'row', alignItems: 'flex-end', gap: 8 }}>
++        {goalPercent !== null ? (
++          <View
++            pointerEvents="none"
++            style={{
++              position: 'absolute',
++              left: 0,
++              right: 0,
++              bottom: `${goalPercent}%` as DimensionValue,
++              borderTopWidth: 1,
++              borderColor: theme.colors.borderStrong,
++              borderStyle: 'dashed',
++            }}
++          />
++        ) : null}
++        {data.map((d) => (
++          <View
++            key={d.label}
++            style={{
++              flex: 1,
++              height: `${Math.max(4, (d.value / max) * 100)}%` as DimensionValue,
++              borderRadius: 4,
++              backgroundColor: d.highlighted ? theme.colors.accent : theme.colors.surfaceMuted,
++            }}
++          />
++        ))}
++      </View>
++      <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
++        {data.map((d) => (
++          <Text key={d.label} style={[theme.typography.caption, { flex: 1, textAlign: 'center', color: theme.colors.textTertiary }]}>
++            {d.label}
++          </Text>
++        ))}
++      </View>
++    </View>
++  );
++}
+diff --git a/mobile/components/MacroBar.tsx b/mobile/components/MacroBar.tsx
+new file mode 100644
+index 0000000..9e3f1ba
+--- /dev/null
++++ b/mobile/components/MacroBar.tsx
+@@ -0,0 +1,33 @@
++import React from 'react';
++import { Text, View } from 'react-native';
++
++import { useTheme } from '@/hooks/useTheme';
++import { formatNumber } from '@/utils/format';
++
++interface MacroBarProps {
++  label: string;
++  value: number;
++  goal: number;
++  unit?: string;
++  color?: string;
++}
++
++export function MacroBar({ label, value, goal, unit = 'g', color }: MacroBarProps) {
++  const theme = useTheme();
++  const percent = goal > 0 ? Math.min(100, Math.round((value / goal) * 100)) : 0;
++  const barColor = color ?? theme.colors.accent;
++
++  return (
++    <View style={{ gap: 4 }}>
++      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
++        <Text style={[theme.typography.subhead, { color: theme.colors.textPrimary }]}>{label}</Text>
++        <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>
++          {formatNumber(value)}/{formatNumber(goal)}{unit}
++        </Text>
++      </View>
++      <View style={{ height: 6, borderRadius: 3, backgroundColor: theme.colors.surfaceMuted, overflow: 'hidden' }}>
++        <View style={{ height: '100%', width: `${percent}%`, backgroundColor: barColor, borderRadius: 3 }} />
++      </View>
++    </View>
++  );
++}
+diff --git a/mobile/components/NutritionFactsRow.tsx b/mobile/components/NutritionFactsRow.tsx
+new file mode 100644
+index 0000000..c0e8d40
+--- /dev/null
++++ b/mobile/components/NutritionFactsRow.tsx
+@@ -0,0 +1,37 @@
++import React from 'react';
++import { Text, View } from 'react-native';
++
++import { useTheme } from '@/hooks/useTheme';
++import { NutritionFacts } from '@/types';
++
++interface NutritionFactsRowProps {
++  facts: NutritionFacts;
++  servingLabel?: string;
++}
++
++export function NutritionFactsRow({ facts, servingLabel }: NutritionFactsRowProps) {
++  const theme = useTheme();
++  const stats = [
++    { label: 'kcal', value: String(Math.round(facts.calories)) },
++    { label: 'Protein', value: `${Math.round(facts.proteinG)}g` },
++    { label: 'Carbs', value: `${Math.round(facts.carbsG)}g` },
++    { label: 'Fat', value: `${Math.round(facts.fatG)}g` },
++    { label: 'Fiber', value: `${Math.round(facts.fiberG)}g` },
++  ];
++
++  return (
++    <View style={{ gap: theme.spacing.sm }}>
++      {servingLabel ? (
++        <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Nutrition ({servingLabel})</Text>
++      ) : null}
++      <View style={{ flexDirection: 'row' }}>
++        {stats.map((stat) => (
++          <View key={stat.label} style={{ flex: 1, alignItems: 'center', gap: 2 }}>
++            <Text style={[theme.typography.title3, { color: theme.colors.textPrimary }]}>{stat.value}</Text>
++            <Text style={[theme.typography.caption, { color: theme.colors.textSecondary }]}>{stat.label}</Text>
++          </View>
++        ))}
++      </View>
++    </View>
++  );
++}
+diff --git a/mobile/components/SmartPrepLogo.tsx b/mobile/components/SmartPrepLogo.tsx
+new file mode 100644
+index 0000000..3ebeb6f
+--- /dev/null
++++ b/mobile/components/SmartPrepLogo.tsx
+@@ -0,0 +1,39 @@
++import { Ionicons } from '@expo/vector-icons';
++import React from 'react';
++import { StyleSheet, View } from 'react-native';
++
++import { useTheme } from '@/hooks/useTheme';
++
++interface SmartPrepLogoProps {
++  size?: number;
++}
++
++/** Viewfinder-bracket mark framing a leaf - nods to the scan-first product idea. */
++export function SmartPrepLogo({ size = 28 }: SmartPrepLogoProps) {
++  const theme = useTheme();
++  const corner = size * 0.32;
++  const stroke = Math.max(1.5, size * 0.06);
++
++  return (
++    <View style={{ width: size, height: size }}>
++      <View style={[styles.corner, { width: corner, height: corner, top: 0, left: 0, borderTopWidth: stroke, borderLeftWidth: stroke, borderColor: theme.colors.accent, borderTopLeftRadius: corner * 0.4 }]} />
++      <View style={[styles.corner, { width: corner, height: corner, top: 0, right: 0, borderTopWidth: stroke, borderRightWidth: stroke, borderColor: theme.colors.accent, borderTopRightRadius: corner * 0.4 }]} />
++      <View style={[styles.corner, { width: corner, height: corner, bottom: 0, left: 0, borderBottomWidth: stroke, borderLeftWidth: stroke, borderColor: theme.colors.accent, borderBottomLeftRadius: corner * 0.4 }]} />
++      <View style={[styles.corner, { width: corner, height: corner, bottom: 0, right: 0, borderBottomWidth: stroke, borderRightWidth: stroke, borderColor: theme.colors.accent, borderBottomRightRadius: corner * 0.4 }]} />
++      <View style={styles.center}>
++        <Ionicons name="leaf" size={size * 0.42} color={theme.colors.accent} />
++      </View>
++    </View>
++  );
++}
++
++const styles = StyleSheet.create({
++  corner: {
++    position: 'absolute',
++  },
++  center: {
++    flex: 1,
++    alignItems: 'center',
++    justifyContent: 'center',
++  },
++});
+diff --git a/mobile/components/index.ts b/mobile/components/index.ts
+index 5cf2128..30dbafc 100644
+--- a/mobile/components/index.ts
++++ b/mobile/components/index.ts
+@@ -17,3 +17,7 @@ export * from './EmptyState';
+ export * from './LoadingState';
+ export * from './ListRow';
+ export * from './IngredientAvatar';
++export * from './SmartPrepLogo';
++export * from './MacroBar';
++export * from './BarChart';
++export * from './NutritionFactsRow';
+diff --git a/mobile/data/ingredients.ts b/mobile/data/ingredients.ts
+index 7bc5299..3fc9f2c 100644
+--- a/mobile/data/ingredients.ts
++++ b/mobile/data/ingredients.ts
+@@ -5,76 +5,78 @@ import { ingredientPhotoUri } from '@/utils/ingredientPhoto';
+  * Canonical ingredient catalog. Pantry items, scan detections, recipe
+  * ingredients, and grocery items all reference these by id, denormalizing
+  * name/imageUri/category onto themselves for fast rendering (see `Ingredient`).
++ * Nutrition figures are reasonable approximations for a fixed reference
++ * serving (see `servingDescription`), not lab-measured values.
+  */
+ const RAW_INGREDIENTS: Omit<Ingredient, 'imageUri'>[] = [
+   // Produce
+-  { id: 'ing-spinach', name: 'Spinach', category: 'produce', defaultUnit: 'bag' },
+-  { id: 'ing-avocado', name: 'Avocado', category: 'produce', defaultUnit: 'item' },
+-  { id: 'ing-strawberries', name: 'Strawberries', category: 'produce', defaultUnit: 'container' },
+-  { id: 'ing-tomato', name: 'Tomato', category: 'produce', defaultUnit: 'item' },
+-  { id: 'ing-garlic', name: 'Garlic', category: 'produce', defaultUnit: 'item' },
+-  { id: 'ing-onion', name: 'Onion', category: 'produce', defaultUnit: 'item' },
+-  { id: 'ing-bell-pepper', name: 'Bell Pepper', category: 'produce', defaultUnit: 'item' },
+-  { id: 'ing-carrot', name: 'Carrot', category: 'produce', defaultUnit: 'item' },
+-  { id: 'ing-broccoli', name: 'Broccoli', category: 'produce', defaultUnit: 'item' },
+-  { id: 'ing-basil', name: 'Basil', category: 'produce', defaultUnit: 'bag' },
+-  { id: 'ing-lemon', name: 'Lemon', category: 'produce', defaultUnit: 'item' },
+-  { id: 'ing-cucumber', name: 'Cucumber', category: 'produce', defaultUnit: 'item' },
+-  { id: 'ing-kale', name: 'Kale', category: 'produce', defaultUnit: 'bag' },
+-  { id: 'ing-ginger', name: 'Ginger', category: 'produce', defaultUnit: 'item' },
+-  { id: 'ing-green-onion', name: 'Green Onion', category: 'produce', defaultUnit: 'bag' },
+-  { id: 'ing-cilantro', name: 'Cilantro', category: 'produce', defaultUnit: 'bag' },
+-  { id: 'ing-mushroom', name: 'Mushroom', category: 'produce', defaultUnit: 'container' },
++  { id: 'ing-spinach', name: 'Spinach', category: 'produce', defaultUnit: 'bag', servingDescription: '1 cup', nutritionPerServing: { calories: 7, proteinG: 0.9, carbsG: 1.1, fatG: 0.1, fiberG: 0.7 } },
++  { id: 'ing-avocado', name: 'Avocado', category: 'produce', defaultUnit: 'item', servingDescription: '1/2 avocado', nutritionPerServing: { calories: 120, proteinG: 1.5, carbsG: 6, fatG: 11, fiberG: 5 } },
++  { id: 'ing-strawberries', name: 'Strawberries', category: 'produce', defaultUnit: 'container', servingDescription: '1 cup', nutritionPerServing: { calories: 49, proteinG: 1, carbsG: 12, fatG: 0.5, fiberG: 3 } },
++  { id: 'ing-tomato', name: 'Tomato', category: 'produce', defaultUnit: 'item', servingDescription: '1 medium', nutritionPerServing: { calories: 22, proteinG: 1.1, carbsG: 4.8, fatG: 0.2, fiberG: 1.5 } },
++  { id: 'ing-garlic', name: 'Garlic', category: 'produce', defaultUnit: 'item', servingDescription: '1 clove', nutritionPerServing: { calories: 4, proteinG: 0.2, carbsG: 1, fatG: 0, fiberG: 0.1 } },
++  { id: 'ing-onion', name: 'Onion', category: 'produce', defaultUnit: 'item', servingDescription: '1 medium', nutritionPerServing: { calories: 44, proteinG: 1.2, carbsG: 10, fatG: 0.1, fiberG: 1.9 } },
++  { id: 'ing-bell-pepper', name: 'Bell Pepper', category: 'produce', defaultUnit: 'item', servingDescription: '1 medium', nutritionPerServing: { calories: 24, proteinG: 1, carbsG: 6, fatG: 0.2, fiberG: 2 } },
++  { id: 'ing-carrot', name: 'Carrot', category: 'produce', defaultUnit: 'item', servingDescription: '1 medium', nutritionPerServing: { calories: 25, proteinG: 0.6, carbsG: 6, fatG: 0.1, fiberG: 1.7 } },
++  { id: 'ing-broccoli', name: 'Broccoli', category: 'produce', defaultUnit: 'item', servingDescription: '1 cup', nutritionPerServing: { calories: 31, proteinG: 2.5, carbsG: 6, fatG: 0.3, fiberG: 2.4 } },
++  { id: 'ing-basil', name: 'Basil', category: 'produce', defaultUnit: 'bag', servingDescription: '1/4 cup', nutritionPerServing: { calories: 1, proteinG: 0.2, carbsG: 0.2, fatG: 0, fiberG: 0.1 } },
++  { id: 'ing-lemon', name: 'Lemon', category: 'produce', defaultUnit: 'item', servingDescription: '1 whole', nutritionPerServing: { calories: 17, proteinG: 0.6, carbsG: 5, fatG: 0.2, fiberG: 1.6 } },
++  { id: 'ing-cucumber', name: 'Cucumber', category: 'produce', defaultUnit: 'item', servingDescription: '1/2 cup', nutritionPerServing: { calories: 8, proteinG: 0.3, carbsG: 2, fatG: 0.1, fiberG: 0.3 } },
++  { id: 'ing-kale', name: 'Kale', category: 'produce', defaultUnit: 'bag', servingDescription: '1 cup', nutritionPerServing: { calories: 33, proteinG: 2.9, carbsG: 6, fatG: 0.6, fiberG: 1.3 } },
++  { id: 'ing-ginger', name: 'Ginger', category: 'produce', defaultUnit: 'item', servingDescription: '1 tbsp', nutritionPerServing: { calories: 5, proteinG: 0.1, carbsG: 1, fatG: 0, fiberG: 0.1 } },
++  { id: 'ing-green-onion', name: 'Green Onion', category: 'produce', defaultUnit: 'bag', servingDescription: '1/4 cup', nutritionPerServing: { calories: 8, proteinG: 0.5, carbsG: 1.8, fatG: 0, fiberG: 0.7 } },
++  { id: 'ing-cilantro', name: 'Cilantro', category: 'produce', defaultUnit: 'bag', servingDescription: '1/4 cup', nutritionPerServing: { calories: 1, proteinG: 0.1, carbsG: 0.1, fatG: 0, fiberG: 0.1 } },
++  { id: 'ing-mushroom', name: 'Mushroom', category: 'produce', defaultUnit: 'container', servingDescription: '1 cup', nutritionPerServing: { calories: 15, proteinG: 2.2, carbsG: 2.3, fatG: 0.2, fiberG: 0.7 } },
+ 
+   // Protein
+-  { id: 'ing-eggs', name: 'Eggs', category: 'protein', defaultUnit: 'item' },
+-  { id: 'ing-chicken-breast', name: 'Chicken Breast', category: 'protein', defaultUnit: 'lb' },
+-  { id: 'ing-ground-beef', name: 'Ground Beef', category: 'protein', defaultUnit: 'lb' },
+-  { id: 'ing-salmon', name: 'Salmon Fillet', category: 'protein', defaultUnit: 'item' },
+-  { id: 'ing-shrimp', name: 'Shrimp', category: 'protein', defaultUnit: 'lb' },
+-  { id: 'ing-tofu', name: 'Tofu', category: 'protein', defaultUnit: 'package' },
+-  { id: 'ing-black-beans', name: 'Black Beans', category: 'protein', defaultUnit: 'can' },
+-  { id: 'ing-chickpeas', name: 'Chickpeas', category: 'protein', defaultUnit: 'can' },
+-  { id: 'ing-bacon', name: 'Bacon', category: 'protein', defaultUnit: 'package' },
++  { id: 'ing-eggs', name: 'Eggs', category: 'protein', defaultUnit: 'item', servingDescription: '1 large', nutritionPerServing: { calories: 72, proteinG: 6.3, carbsG: 0.4, fatG: 5, fiberG: 0 } },
++  { id: 'ing-chicken-breast', name: 'Chicken Breast', category: 'protein', defaultUnit: 'lb', servingDescription: '3 oz cooked', nutritionPerServing: { calories: 128, proteinG: 26, carbsG: 0, fatG: 2.7, fiberG: 0 } },
++  { id: 'ing-ground-beef', name: 'Ground Beef', category: 'protein', defaultUnit: 'lb', servingDescription: '3 oz cooked', nutritionPerServing: { calories: 213, proteinG: 22, carbsG: 0, fatG: 13, fiberG: 0 } },
++  { id: 'ing-salmon', name: 'Salmon Fillet', category: 'protein', defaultUnit: 'item', servingDescription: '3 oz cooked', nutritionPerServing: { calories: 175, proteinG: 19, carbsG: 0, fatG: 10, fiberG: 0 } },
++  { id: 'ing-shrimp', name: 'Shrimp', category: 'protein', defaultUnit: 'lb', servingDescription: '3 oz cooked', nutritionPerServing: { calories: 84, proteinG: 18, carbsG: 0, fatG: 0.9, fiberG: 0 } },
++  { id: 'ing-tofu', name: 'Tofu', category: 'protein', defaultUnit: 'package', servingDescription: '1/2 cup', nutritionPerServing: { calories: 94, proteinG: 10, carbsG: 2.3, fatG: 6, fiberG: 0.4 } },
++  { id: 'ing-black-beans', name: 'Black Beans', category: 'protein', defaultUnit: 'can', servingDescription: '1/2 cup cooked', nutritionPerServing: { calories: 114, proteinG: 7.6, carbsG: 20, fatG: 0.5, fiberG: 7.5 } },
++  { id: 'ing-chickpeas', name: 'Chickpeas', category: 'protein', defaultUnit: 'can', servingDescription: '1/2 cup cooked', nutritionPerServing: { calories: 134, proteinG: 7, carbsG: 21, fatG: 2, fiberG: 6 } },
++  { id: 'ing-bacon', name: 'Bacon', category: 'protein', defaultUnit: 'package', servingDescription: '2 slices cooked', nutritionPerServing: { calories: 90, proteinG: 6, carbsG: 0.3, fatG: 7, fiberG: 0 } },
+ 
+   // Dairy
+-  { id: 'ing-milk', name: 'Milk', category: 'dairy', defaultUnit: 'L' },
+-  { id: 'ing-greek-yogurt', name: 'Greek Yogurt', category: 'dairy', defaultUnit: 'container' },
+-  { id: 'ing-butter', name: 'Butter', category: 'dairy', defaultUnit: 'package' },
+-  { id: 'ing-cheddar', name: 'Cheddar Cheese', category: 'dairy', defaultUnit: 'package' },
+-  { id: 'ing-parmesan', name: 'Parmesan', category: 'dairy', defaultUnit: 'package' },
+-  { id: 'ing-heavy-cream', name: 'Heavy Cream', category: 'dairy', defaultUnit: 'ml' },
+-  { id: 'ing-mozzarella', name: 'Mozzarella', category: 'dairy', defaultUnit: 'package' },
+-  { id: 'ing-cream-cheese', name: 'Cream Cheese', category: 'dairy', defaultUnit: 'package' },
++  { id: 'ing-milk', name: 'Milk', category: 'dairy', defaultUnit: 'L', servingDescription: '1 cup', nutritionPerServing: { calories: 122, proteinG: 8, carbsG: 12, fatG: 5, fiberG: 0 } },
++  { id: 'ing-greek-yogurt', name: 'Greek Yogurt', category: 'dairy', defaultUnit: 'container', servingDescription: '1 cup plain', nutritionPerServing: { calories: 146, proteinG: 25, carbsG: 8, fatG: 0.7, fiberG: 0 } },
++  { id: 'ing-butter', name: 'Butter', category: 'dairy', defaultUnit: 'package', servingDescription: '1 tbsp', nutritionPerServing: { calories: 102, proteinG: 0.1, carbsG: 0, fatG: 11.5, fiberG: 0 } },
++  { id: 'ing-cheddar', name: 'Cheddar Cheese', category: 'dairy', defaultUnit: 'package', servingDescription: '1 oz', nutritionPerServing: { calories: 113, proteinG: 7, carbsG: 0.4, fatG: 9, fiberG: 0 } },
++  { id: 'ing-parmesan', name: 'Parmesan', category: 'dairy', defaultUnit: 'package', servingDescription: '2 tbsp grated', nutritionPerServing: { calories: 43, proteinG: 3.8, carbsG: 0.4, fatG: 2.9, fiberG: 0 } },
++  { id: 'ing-heavy-cream', name: 'Heavy Cream', category: 'dairy', defaultUnit: 'ml', servingDescription: '2 tbsp', nutritionPerServing: { calories: 102, proteinG: 0.6, carbsG: 0.8, fatG: 11, fiberG: 0 } },
++  { id: 'ing-mozzarella', name: 'Mozzarella', category: 'dairy', defaultUnit: 'package', servingDescription: '1 oz', nutritionPerServing: { calories: 85, proteinG: 6.3, carbsG: 0.6, fatG: 6.3, fiberG: 0 } },
++  { id: 'ing-cream-cheese', name: 'Cream Cheese', category: 'dairy', defaultUnit: 'package', servingDescription: '2 tbsp', nutritionPerServing: { calories: 99, proteinG: 1.7, carbsG: 1.6, fatG: 9.9, fiberG: 0 } },
+ 
+   // Pantry
+-  { id: 'ing-pasta', name: 'Pasta', category: 'pantry', defaultUnit: 'package' },
+-  { id: 'ing-rice', name: 'Rice', category: 'pantry', defaultUnit: 'bag' },
+-  { id: 'ing-olive-oil', name: 'Olive Oil', category: 'pantry', defaultUnit: 'bottle' },
+-  { id: 'ing-canned-tomatoes', name: 'Canned Tomatoes', category: 'pantry', defaultUnit: 'can' },
+-  { id: 'ing-bread', name: 'Bread', category: 'pantry', defaultUnit: 'item' },
+-  { id: 'ing-honey', name: 'Honey', category: 'pantry', defaultUnit: 'bottle' },
+-  { id: 'ing-flour', name: 'Flour', category: 'pantry', defaultUnit: 'kg' },
+-  { id: 'ing-quinoa', name: 'Quinoa', category: 'pantry', defaultUnit: 'bag' },
+-  { id: 'ing-soy-sauce', name: 'Soy Sauce', category: 'pantry', defaultUnit: 'bottle' },
+-  { id: 'ing-vegetable-broth', name: 'Vegetable Broth', category: 'pantry', defaultUnit: 'container' },
+-  { id: 'ing-tortillas', name: 'Tortillas', category: 'pantry', defaultUnit: 'package' },
+-  { id: 'ing-panko', name: 'Panko Breadcrumbs', category: 'pantry', defaultUnit: 'bag' },
+-  { id: 'ing-sesame-oil', name: 'Sesame Oil', category: 'pantry', defaultUnit: 'bottle' },
+-  { id: 'ing-hot-sauce', name: 'Hot Sauce', category: 'pantry', defaultUnit: 'bottle' },
+-  { id: 'ing-granola', name: 'Granola', category: 'pantry', defaultUnit: 'bag' },
+-  { id: 'ing-chili-powder', name: 'Chili Powder', category: 'other', defaultUnit: 'container' },
++  { id: 'ing-pasta', name: 'Pasta', category: 'pantry', defaultUnit: 'package', servingDescription: '2 oz dry', nutritionPerServing: { calories: 200, proteinG: 7, carbsG: 42, fatG: 1, fiberG: 2 } },
++  { id: 'ing-rice', name: 'Rice', category: 'pantry', defaultUnit: 'bag', servingDescription: '1/4 cup dry', nutritionPerServing: { calories: 170, proteinG: 3.5, carbsG: 37, fatG: 0.4, fiberG: 0.6 } },
++  { id: 'ing-olive-oil', name: 'Olive Oil', category: 'pantry', defaultUnit: 'bottle', servingDescription: '1 tbsp', nutritionPerServing: { calories: 119, proteinG: 0, carbsG: 0, fatG: 13.5, fiberG: 0 } },
++  { id: 'ing-canned-tomatoes', name: 'Canned Tomatoes', category: 'pantry', defaultUnit: 'can', servingDescription: '1/2 cup', nutritionPerServing: { calories: 22, proteinG: 1.1, carbsG: 4.8, fatG: 0.2, fiberG: 1.2 } },
++  { id: 'ing-bread', name: 'Bread', category: 'pantry', defaultUnit: 'item', servingDescription: '1 slice', nutritionPerServing: { calories: 79, proteinG: 3.9, carbsG: 14, fatG: 1, fiberG: 1.9 } },
++  { id: 'ing-honey', name: 'Honey', category: 'pantry', defaultUnit: 'bottle', servingDescription: '1 tbsp', nutritionPerServing: { calories: 64, proteinG: 0.1, carbsG: 17, fatG: 0, fiberG: 0 } },
++  { id: 'ing-flour', name: 'Flour', category: 'pantry', defaultUnit: 'kg', servingDescription: '1/4 cup', nutritionPerServing: { calories: 114, proteinG: 3, carbsG: 24, fatG: 0.3, fiberG: 0.9 } },
++  { id: 'ing-quinoa', name: 'Quinoa', category: 'pantry', defaultUnit: 'bag', servingDescription: '1/4 cup dry', nutritionPerServing: { calories: 172, proteinG: 6, carbsG: 30, fatG: 2.7, fiberG: 3 } },
++  { id: 'ing-soy-sauce', name: 'Soy Sauce', category: 'pantry', defaultUnit: 'bottle', servingDescription: '1 tbsp', nutritionPerServing: { calories: 8, proteinG: 1.3, carbsG: 0.8, fatG: 0, fiberG: 0.1 } },
++  { id: 'ing-vegetable-broth', name: 'Vegetable Broth', category: 'pantry', defaultUnit: 'container', servingDescription: '1 cup', nutritionPerServing: { calories: 12, proteinG: 0.4, carbsG: 2.4, fatG: 0, fiberG: 0 } },
++  { id: 'ing-tortillas', name: 'Tortillas', category: 'pantry', defaultUnit: 'package', servingDescription: '1 tortilla', nutritionPerServing: { calories: 96, proteinG: 2.5, carbsG: 16, fatG: 2.4, fiberG: 1 } },
++  { id: 'ing-panko', name: 'Panko Breadcrumbs', category: 'pantry', defaultUnit: 'bag', servingDescription: '1/4 cup', nutritionPerServing: { calories: 55, proteinG: 2, carbsG: 10, fatG: 0.5, fiberG: 0.5 } },
++  { id: 'ing-sesame-oil', name: 'Sesame Oil', category: 'pantry', defaultUnit: 'bottle', servingDescription: '1 tbsp', nutritionPerServing: { calories: 120, proteinG: 0, carbsG: 0, fatG: 13.6, fiberG: 0 } },
++  { id: 'ing-hot-sauce', name: 'Hot Sauce', category: 'pantry', defaultUnit: 'bottle', servingDescription: '1 tsp', nutritionPerServing: { calories: 1, proteinG: 0.1, carbsG: 0.2, fatG: 0, fiberG: 0 } },
++  { id: 'ing-granola', name: 'Granola', category: 'pantry', defaultUnit: 'bag', servingDescription: '1/2 cup', nutritionPerServing: { calories: 220, proteinG: 5, carbsG: 33, fatG: 8, fiberG: 4 } },
++  { id: 'ing-chili-powder', name: 'Chili Powder', category: 'other', defaultUnit: 'container', servingDescription: '1 tsp', nutritionPerServing: { calories: 8, proteinG: 0.4, carbsG: 1.4, fatG: 0.4, fiberG: 0.9 } },
+ 
+   // Frozen
+-  { id: 'ing-frozen-peas', name: 'Frozen Peas', category: 'frozen', defaultUnit: 'bag' },
+-  { id: 'ing-frozen-berries', name: 'Frozen Mixed Berries', category: 'frozen', defaultUnit: 'bag' },
+-  { id: 'ing-frozen-corn', name: 'Frozen Corn', category: 'frozen', defaultUnit: 'bag' },
+-  { id: 'ing-ice-cream', name: 'Ice Cream', category: 'frozen', defaultUnit: 'container' },
+-  { id: 'ing-frozen-shrimp', name: 'Frozen Shrimp', category: 'frozen', defaultUnit: 'bag' },
++  { id: 'ing-frozen-peas', name: 'Frozen Peas', category: 'frozen', defaultUnit: 'bag', servingDescription: '1/2 cup', nutritionPerServing: { calories: 62, proteinG: 4, carbsG: 11, fatG: 0.2, fiberG: 4 } },
++  { id: 'ing-frozen-berries', name: 'Frozen Mixed Berries', category: 'frozen', defaultUnit: 'bag', servingDescription: '1 cup', nutritionPerServing: { calories: 70, proteinG: 1, carbsG: 17, fatG: 0.5, fiberG: 4 } },
++  { id: 'ing-frozen-corn', name: 'Frozen Corn', category: 'frozen', defaultUnit: 'bag', servingDescription: '1/2 cup', nutritionPerServing: { calories: 66, proteinG: 2.4, carbsG: 15, fatG: 0.6, fiberG: 1.9 } },
++  { id: 'ing-ice-cream', name: 'Ice Cream', category: 'frozen', defaultUnit: 'container', servingDescription: '1/2 cup', nutritionPerServing: { calories: 137, proteinG: 2.3, carbsG: 16, fatG: 7.3, fiberG: 0.5 } },
++  { id: 'ing-frozen-shrimp', name: 'Frozen Shrimp', category: 'frozen', defaultUnit: 'bag', servingDescription: '3 oz cooked', nutritionPerServing: { calories: 84, proteinG: 18, carbsG: 0, fatG: 0.9, fiberG: 0 } },
+ 
+   // Other
+-  { id: 'ing-salt', name: 'Salt', category: 'other', defaultUnit: 'container' },
+-  { id: 'ing-black-pepper', name: 'Black Pepper', category: 'other', defaultUnit: 'container' },
++  { id: 'ing-salt', name: 'Salt', category: 'other', defaultUnit: 'container', servingDescription: '1/4 tsp', nutritionPerServing: { calories: 0, proteinG: 0, carbsG: 0, fatG: 0, fiberG: 0 } },
++  { id: 'ing-black-pepper', name: 'Black Pepper', category: 'other', defaultUnit: 'container', servingDescription: '1/4 tsp', nutritionPerServing: { calories: 1, proteinG: 0, carbsG: 0.3, fatG: 0, fiberG: 0.1 } },
+ ];
+ 
+ export const INGREDIENTS: Ingredient[] = RAW_INGREDIENTS.map((ingredient) => ({
+diff --git a/mobile/data/mockGroceryList.ts b/mobile/data/mockGroceryList.ts
+index f742e58..80a8063 100644
+--- a/mobile/data/mockGroceryList.ts
++++ b/mobile/data/mockGroceryList.ts
+@@ -5,7 +5,8 @@ import { getIngredient } from './ingredients';
+ /**
+  * Seeded as "required for this week's plan - pantry inventory = missing",
+  * computed by hand here; plannerService/groceryService will do this
+- * subtraction for real once recipes/plan change.
++ * subtraction for real once recipes/plan change. `estimatedPrice` is a
++ * rough per-line estimate, not a real store lookup.
+  */
+ interface Seed {
+   ingredientId?: string;
+@@ -16,25 +17,28 @@ interface Seed {
+   isChecked?: boolean;
+   sourceRecipeIds?: string[];
+   isManuallyAdded?: boolean;
++  estimatedPrice: number;
++  swapSuggestion?: string;
++  wasteNote?: string;
+ }
+ 
+ const seeds: Seed[] = [
+-  { ingredientId: 'ing-lemon', category: 'produce', quantity: 3, unit: 'item', sourceRecipeIds: ['recipe-avocado-toast'] },
+-  { ingredientId: 'ing-cilantro', category: 'produce', quantity: 1, unit: 'bag', sourceRecipeIds: ['recipe-black-bean-tacos'] },
+-  { ingredientId: 'ing-ginger', category: 'produce', quantity: 1, unit: 'item', sourceRecipeIds: ['recipe-beef-broccoli', 'recipe-chicken-teriyaki-bowl'], isChecked: true },
+-  { ingredientId: 'ing-green-onion', category: 'produce', quantity: 1, unit: 'bag', sourceRecipeIds: ['recipe-veggie-fried-rice'] },
+-  { ingredientId: 'ing-basil', category: 'produce', quantity: 1, unit: 'bag', isManuallyAdded: true },
+-  { ingredientId: 'ing-parmesan', category: 'dairy', quantity: 1, unit: 'package', sourceRecipeIds: ['recipe-creamy-spinach-pasta'] },
+-  { ingredientId: 'ing-heavy-cream', category: 'dairy', quantity: 1, unit: 'ml', sourceRecipeIds: ['recipe-creamy-spinach-pasta', 'recipe-tomato-soup'] },
+-  { ingredientId: 'ing-mozzarella', category: 'dairy', quantity: 1, unit: 'package', sourceRecipeIds: ['recipe-caprese-pasta-salad'], isChecked: true },
+-  { ingredientId: 'ing-greek-yogurt', category: 'dairy', quantity: 1, unit: 'container', isManuallyAdded: true },
+-  { ingredientId: 'ing-soy-sauce', category: 'pantry', quantity: 1, unit: 'bottle', sourceRecipeIds: ['recipe-beef-broccoli', 'recipe-chicken-teriyaki-bowl', 'recipe-veggie-fried-rice'] },
+-  { ingredientId: 'ing-sesame-oil', category: 'pantry', quantity: 1, unit: 'bottle', sourceRecipeIds: ['recipe-beef-broccoli'] },
+-  { ingredientId: 'ing-tortillas', category: 'pantry', quantity: 1, unit: 'package', sourceRecipeIds: ['recipe-black-bean-tacos'], isChecked: true },
+-  { ingredientId: 'ing-hot-sauce', category: 'pantry', quantity: 1, unit: 'bottle', sourceRecipeIds: ['recipe-black-bean-tacos'] },
+-  { ingredientId: 'ing-chili-powder', category: 'other', quantity: 1, unit: 'container', sourceRecipeIds: ['recipe-beef-chili'] },
+-  { ingredientId: 'ing-vegetable-broth', category: 'pantry', quantity: 1, unit: 'container', sourceRecipeIds: ['recipe-tomato-soup'] },
+-  { name: 'Coffee', category: 'other', quantity: 1, unit: 'bag', isManuallyAdded: true },
++  { ingredientId: 'ing-lemon', category: 'produce', quantity: 3, unit: 'item', sourceRecipeIds: ['recipe-avocado-toast'], estimatedPrice: 1.5 },
++  { ingredientId: 'ing-cilantro', category: 'produce', quantity: 1, unit: 'bag', sourceRecipeIds: ['recipe-black-bean-tacos'], estimatedPrice: 1.5, wasteNote: 'Use the stems in soup or salsa instead of tossing them.' },
++  { ingredientId: 'ing-ginger', category: 'produce', quantity: 1, unit: 'item', sourceRecipeIds: ['recipe-beef-broccoli', 'recipe-chicken-teriyaki-bowl'], isChecked: true, estimatedPrice: 1.0 },
++  { ingredientId: 'ing-green-onion', category: 'produce', quantity: 1, unit: 'bag', sourceRecipeIds: ['recipe-veggie-fried-rice'], estimatedPrice: 1.5, swapSuggestion: 'Swap: Chives' },
++  { ingredientId: 'ing-basil', category: 'produce', quantity: 1, unit: 'bag', isManuallyAdded: true, estimatedPrice: 2.5 },
++  { ingredientId: 'ing-parmesan', category: 'dairy', quantity: 1, unit: 'package', sourceRecipeIds: ['recipe-creamy-spinach-pasta'], estimatedPrice: 5.0 },
++  { ingredientId: 'ing-heavy-cream', category: 'dairy', quantity: 1, unit: 'ml', sourceRecipeIds: ['recipe-creamy-spinach-pasta', 'recipe-tomato-soup'], estimatedPrice: 3.5 },
++  { ingredientId: 'ing-mozzarella', category: 'dairy', quantity: 1, unit: 'package', sourceRecipeIds: ['recipe-caprese-pasta-salad'], isChecked: true, estimatedPrice: 4.0 },
++  { ingredientId: 'ing-greek-yogurt', category: 'dairy', quantity: 1, unit: 'container', isManuallyAdded: true, estimatedPrice: 4.5 },
++  { ingredientId: 'ing-soy-sauce', category: 'pantry', quantity: 1, unit: 'bottle', sourceRecipeIds: ['recipe-beef-broccoli', 'recipe-chicken-teriyaki-bowl', 'recipe-veggie-fried-rice'], estimatedPrice: 3.0 },
++  { ingredientId: 'ing-sesame-oil', category: 'pantry', quantity: 1, unit: 'bottle', sourceRecipeIds: ['recipe-beef-broccoli'], estimatedPrice: 5.0 },
++  { ingredientId: 'ing-tortillas', category: 'pantry', quantity: 1, unit: 'package', sourceRecipeIds: ['recipe-black-bean-tacos'], isChecked: true, estimatedPrice: 3.5 },
++  { ingredientId: 'ing-hot-sauce', category: 'pantry', quantity: 1, unit: 'bottle', sourceRecipeIds: ['recipe-black-bean-tacos'], estimatedPrice: 3.0 },
++  { ingredientId: 'ing-chili-powder', category: 'other', quantity: 1, unit: 'container', sourceRecipeIds: ['recipe-beef-chili'], estimatedPrice: 2.5 },
++  { ingredientId: 'ing-vegetable-broth', category: 'pantry', quantity: 1, unit: 'container', sourceRecipeIds: ['recipe-tomato-soup'], estimatedPrice: 2.75 },
++  { name: 'Coffee', category: 'other', quantity: 1, unit: 'bag', isManuallyAdded: true, estimatedPrice: 9.0 },
+ ];
+ 
+ export const MOCK_GROCERY_LIST: GroceryList = {
+@@ -53,6 +57,9 @@ export const MOCK_GROCERY_LIST: GroceryList = {
+       isChecked: seed.isChecked ?? false,
+       sourceRecipeIds: seed.sourceRecipeIds,
+       isManuallyAdded: seed.isManuallyAdded,
++      estimatedPrice: seed.estimatedPrice,
++      swapSuggestion: seed.swapSuggestion,
++      wasteNote: seed.wasteNote,
+     };
+   }),
+ };
+diff --git a/mobile/data/mockImpact.ts b/mobile/data/mockImpact.ts
+index 9e96051..96c9ca1 100644
+--- a/mobile/data/mockImpact.ts
++++ b/mobile/data/mockImpact.ts
+@@ -12,4 +12,6 @@ export const MOCK_KITCHEN_IMPACT: KitchenImpact = {
+   estimatedFoodValueUtilized: 31,
+   pantryUtilizationPercent: 87,
+   itemsDiscarded: 6,
++  estimatedFoodSavedLbs: 12.4,
++  cookingStreakDays: 7,
+ };
+diff --git a/mobile/data/mockRecipes.ts b/mobile/data/mockRecipes.ts
+index 19fafcb..91ef7e2 100644
+--- a/mobile/data/mockRecipes.ts
++++ b/mobile/data/mockRecipes.ts
+@@ -33,6 +33,7 @@ export const MOCK_RECIPES: Recipe[] = [
+     servings: 2,
+     additionalCostEstimate: 6,
+     smartMatchScore: 94,
++    nutritionPerServing: { calories: 620, proteinG: 22, carbsG: 78, fatG: 24, fiberG: 5 },
+     reasons: reasons('recipe-creamy-spinach-pasta', [
+       'Uses spinach that should be used first',
+       '7 of 9 ingredients already in your pantry',
+@@ -72,6 +73,7 @@ export const MOCK_RECIPES: Recipe[] = [
+     servings: 2,
+     additionalCostEstimate: 6,
+     smartMatchScore: 81,
++    nutritionPerServing: { calories: 580, proteinG: 42, carbsG: 68, fatG: 14, fiberG: 4 },
+     reasons: reasons('recipe-chicken-teriyaki-bowl', [
+       '8 of 10 ingredients already in your pantry',
+       'Uses broccoli that should be used soon',
+@@ -112,6 +114,7 @@ export const MOCK_RECIPES: Recipe[] = [
+     servings: 1,
+     additionalCostEstimate: 1,
+     smartMatchScore: 90,
++    nutritionPerServing: { calories: 430, proteinG: 18, carbsG: 32, fatG: 26, fiberG: 9 },
+     reasons: reasons('recipe-avocado-toast', [
+       'Uses avocado and bread before they turn',
+       'Ready in 10 minutes',
+@@ -147,6 +150,7 @@ export const MOCK_RECIPES: Recipe[] = [
+     servings: 1,
+     additionalCostEstimate: 2,
+     smartMatchScore: 88,
++    nutritionPerServing: { calories: 310, proteinG: 20, carbsG: 45, fatG: 6, fiberG: 4 },
+     reasons: reasons('recipe-strawberry-parfait', [
+       'Uses strawberries before they spoil',
+       'No cooking required',
+@@ -177,6 +181,7 @@ export const MOCK_RECIPES: Recipe[] = [
+     servings: 3,
+     additionalCostEstimate: 5,
+     smartMatchScore: 75,
++    nutritionPerServing: { calories: 340, proteinG: 13, carbsG: 48, fatG: 11, fiberG: 9 },
+     reasons: reasons('recipe-black-bean-tacos', [
+       'Uses black beans and bell pepper you have on hand',
+       'Fits your favorite Mexican flavors',
+@@ -213,6 +218,7 @@ export const MOCK_RECIPES: Recipe[] = [
+     servings: 3,
+     additionalCostEstimate: 7,
+     smartMatchScore: 79,
++    nutritionPerServing: { calories: 480, proteinG: 28, carbsG: 45, fatG: 20, fiberG: 4 },
+     reasons: reasons('recipe-beef-broccoli', [
+       'Uses ground beef and broccoli that need attention',
+       'Pairs well with rice you already have',
+@@ -251,6 +257,7 @@ export const MOCK_RECIPES: Recipe[] = [
+     servings: 3,
+     additionalCostEstimate: 3,
+     smartMatchScore: 86,
++    nutritionPerServing: { calories: 410, proteinG: 15, carbsG: 55, fatG: 13, fiberG: 4 },
+     reasons: reasons('recipe-veggie-fried-rice', [
+       'Uses up frozen peas and rice you already have',
+       'A great way to use extra eggs',
+@@ -289,6 +296,7 @@ export const MOCK_RECIPES: Recipe[] = [
+     servings: 4,
+     additionalCostEstimate: 2,
+     smartMatchScore: 83,
++    nutritionPerServing: { calories: 390, proteinG: 27, carbsG: 32, fatG: 16, fiberG: 9 },
+     reasons: reasons('recipe-beef-chili', [
+       'Uses ground beef before it needs to be used',
+       '8 of 9 ingredients already in your pantry',
+@@ -327,6 +335,7 @@ export const MOCK_RECIPES: Recipe[] = [
+     servings: 2,
+     additionalCostEstimate: 9,
+     smartMatchScore: 68,
++    nutritionPerServing: { calories: 460, proteinG: 32, carbsG: 28, fatG: 22, fiberG: 3 },
+     reasons: reasons('recipe-honey-garlic-salmon', [
+       'A new way to use broccoli that needs attention',
+       'Fits your 15-30 minute cooking window',
+@@ -361,6 +370,7 @@ export const MOCK_RECIPES: Recipe[] = [
+     servings: 2,
+     additionalCostEstimate: 0,
+     smartMatchScore: 97,
++    nutritionPerServing: { calories: 380, proteinG: 26, carbsG: 8, fatG: 27, fiberG: 2 },
+     reasons: reasons('recipe-veggie-omelet', [
+       'You have everything you need - no shopping required',
+       'Uses spinach that should be used first',
+@@ -395,6 +405,7 @@ export const MOCK_RECIPES: Recipe[] = [
+     servings: 4,
+     additionalCostEstimate: 4,
+     smartMatchScore: 72,
++    nutritionPerServing: { calories: 220, proteinG: 5, carbsG: 18, fatG: 15, fiberG: 3 },
+     reasons: reasons('recipe-tomato-soup', [
+       'Uses canned tomatoes you already have',
+       'A cozy meal built on pantry staples',
+@@ -430,6 +441,7 @@ export const MOCK_RECIPES: Recipe[] = [
+     servings: 4,
+     additionalCostEstimate: 0,
+     smartMatchScore: 91,
++    nutritionPerServing: { calories: 140, proteinG: 9, carbsG: 22, fatG: 3, fiberG: 2 },
+     reasons: reasons('recipe-berry-bark', [
+       'You have everything you need',
+       'A great way to use frozen berries',
+@@ -460,6 +472,7 @@ export const MOCK_RECIPES: Recipe[] = [
+     servings: 3,
+     additionalCostEstimate: 11,
+     smartMatchScore: 58,
++    nutritionPerServing: { calories: 260, proteinG: 24, carbsG: 16, fatG: 11, fiberG: 3 },
+     reasons: reasons('recipe-shrimp-stirfry', [
+       "Introduces a new protein you haven't tried recently",
+       'Uses vegetables you already have',
+@@ -495,6 +508,7 @@ export const MOCK_RECIPES: Recipe[] = [
+     servings: 4,
+     additionalCostEstimate: 8,
+     smartMatchScore: 55,
++    nutritionPerServing: { calories: 310, proteinG: 11, carbsG: 42, fatG: 12, fiberG: 8 },
+     reasons: reasons('recipe-quinoa-chickpea-salad', [
+       'A healthy new recipe to try',
+       'Uses vegetables you already have',
+@@ -530,6 +544,7 @@ export const MOCK_RECIPES: Recipe[] = [
+     servings: 6,
+     additionalCostEstimate: 0,
+     smartMatchScore: 89,
++    nutritionPerServing: { calories: 230, proteinG: 6, carbsG: 32, fatG: 9, fiberG: 2 },
+     reasons: reasons('recipe-cornbread-skillet', [
+       'You have everything you need',
+       'Uses corn from your freezer',
+@@ -564,6 +579,7 @@ export const MOCK_RECIPES: Recipe[] = [
+     servings: 4,
+     additionalCostEstimate: 4,
+     smartMatchScore: 84,
++    nutritionPerServing: { calories: 380, proteinG: 15, carbsG: 48, fatG: 14, fiberG: 3 },
+     reasons: reasons('recipe-caprese-pasta-salad', [
+       'Uses tomato and basil that need attention',
+       'Fits your Italian cuisine preference',
+diff --git a/mobile/data/mockScans.ts b/mobile/data/mockScans.ts
+index f3cd7f1..8d934e8 100644
+--- a/mobile/data/mockScans.ts
++++ b/mobile/data/mockScans.ts
+@@ -149,7 +149,7 @@ export const GUIDED_SCAN_SECTIONS: Record<'fridge' | 'freezer' | 'pantry', ScanD
+     },
+     {
+       ingredientId: 'ing-ice-cream',
+-      detectionConfidence: 0.72,
++      detectionConfidence: 0.62,
+       quantity: quantityOf(1, 'container', 0.55),
+       freshness: freshnessOf(50, 0.5),
+     },
+diff --git a/mobile/data/mockUser.ts b/mobile/data/mockUser.ts
+index 9742c8b..296f5fb 100644
+--- a/mobile/data/mockUser.ts
++++ b/mobile/data/mockUser.ts
+@@ -22,5 +22,19 @@ export const MOCK_USER: User = {
+       cookQuickly: 50,
+       tryNewFoods: 35,
+     },
++    nutritionGoals: {
++      dailyCalories: 1800,
++      macroPreference: 'balanced',
++      proteinG: 150,
++      carbsG: 220,
++      fatG: 60,
++      fiberG: 28,
++    },
++    weightGoal: {
++      direction: 'lose',
++      targetLbs: 10,
++      targetDate: '2026-09-30',
++    },
++    weeklyGroceryBudget: 60,
+   },
+ };
+diff --git a/mobile/features/grocery/components/GroceryBudgetTiles.tsx b/mobile/features/grocery/components/GroceryBudgetTiles.tsx
+new file mode 100644
+index 0000000..da9925d
+--- /dev/null
++++ b/mobile/features/grocery/components/GroceryBudgetTiles.tsx
+@@ -0,0 +1,45 @@
++import React from 'react';
++import { Text, View } from 'react-native';
++
++import { useTheme } from '@/hooks/useTheme';
++import { formatCurrency } from '@/utils/format';
++
++interface GroceryBudgetTilesProps {
++  itemCount: number;
++  estimatedTotal: number;
++  budget: number;
++}
++
++export function GroceryBudgetTiles({ itemCount, estimatedTotal, budget }: GroceryBudgetTilesProps) {
++  const theme = useTheme();
++  const diff = budget - estimatedTotal;
++  const isUnder = diff >= 0;
++  const diffColor = isUnder ? theme.colors.accent : theme.colors.freshness.prioritize;
++  const diffTint = isUnder ? theme.colors.accentMuted : theme.colors.freshness.prioritizeMuted;
++
++  const tiles = [
++    { value: String(itemCount), label: 'Items', tint: theme.colors.surfaceMuted, valueColor: theme.colors.textPrimary },
++    { value: formatCurrency(estimatedTotal), label: 'Est. total', tint: theme.colors.secondaryMuted, valueColor: theme.colors.textPrimary },
++    { value: formatCurrency(Math.abs(diff)), label: isUnder ? 'Under budget' : 'Over budget', tint: diffTint, valueColor: diffColor },
++  ];
++
++  return (
++    <View style={{ flexDirection: 'row', gap: theme.spacing.sm }}>
++      {tiles.map((tile) => (
++        <View
++          key={tile.label}
++          style={{
++            flex: 1,
++            backgroundColor: tile.tint,
++            borderRadius: theme.radius.lg,
++            padding: theme.spacing.md,
++            gap: 2,
++          }}
++        >
++          <Text style={[theme.typography.title3, { color: tile.valueColor }]}>{tile.value}</Text>
++          <Text style={[theme.typography.caption, { color: theme.colors.textSecondary }]}>{tile.label}</Text>
++        </View>
++      ))}
++    </View>
++  );
++}
+diff --git a/mobile/features/grocery/components/GroceryItemRow.tsx b/mobile/features/grocery/components/GroceryItemRow.tsx
+index 70085cf..9254380 100644
+--- a/mobile/features/grocery/components/GroceryItemRow.tsx
++++ b/mobile/features/grocery/components/GroceryItemRow.tsx
+@@ -57,19 +57,25 @@ export function GroceryItemRow({ item, isLast, onToggle, onDelete }: GroceryItem
+         {item.isChecked ? <Ionicons name="checkmark" size={16} color={theme.colors.textOnAccent} /> : null}
+       </Pressable>
+       <IngredientAvatar imageUri={item.imageUri} variant="compact" />
+-      <Text
+-        style={[
+-          theme.typography.body,
+-          {
+-            color: item.isChecked ? theme.colors.textTertiary : theme.colors.textPrimary,
+-            flex: 1,
+-            textDecorationLine: item.isChecked ? 'line-through' : 'none',
+-          },
+-        ]}
+-      >
+-        {item.name}
+-        {label ? ` ${label}` : ''}
+-      </Text>
++      <View style={{ flex: 1, gap: 1 }}>
++        <Text
++          style={[
++            theme.typography.body,
++            {
++              color: item.isChecked ? theme.colors.textTertiary : theme.colors.textPrimary,
++              textDecorationLine: item.isChecked ? 'line-through' : 'none',
++            },
++          ]}
++        >
++          {item.name}
++          {label ? ` ${label}` : ''}
++        </Text>
++        {item.wasteNote ? (
++          <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>Low-waste: {item.wasteNote}</Text>
++        ) : item.swapSuggestion ? (
++          <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>{item.swapSuggestion}</Text>
++        ) : null}
++      </View>
+       <Pressable onPress={onDelete} accessibilityRole="button" accessibilityLabel={`Delete ${item.name}`} hitSlop={8}>
+         <Ionicons name="trash-outline" size={18} color={theme.colors.textTertiary} />
+       </Pressable>
+diff --git a/mobile/features/grocery/components/GroceryStatTile.tsx b/mobile/features/grocery/components/GroceryStatTile.tsx
+deleted file mode 100644
+index 7612270..0000000
+--- a/mobile/features/grocery/components/GroceryStatTile.tsx
++++ /dev/null
+@@ -1,22 +0,0 @@
+-import React from 'react';
+-import { Text, View } from 'react-native';
+-
+-import { useTheme } from '@/hooks/useTheme';
+-
+-interface GroceryStatTileProps {
+-  label: string;
+-  value: number;
+-  tint: string;
+-}
+-
+-export function GroceryStatTile({ label, value, tint }: GroceryStatTileProps) {
+-  const theme = useTheme();
+-
+-  return (
+-    <View style={{ flex: 1, backgroundColor: tint, borderRadius: theme.radius.lg, padding: theme.spacing.md, gap: 2 }}>
+-      <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>{label}</Text>
+-      <Text style={[theme.typography.title1, { color: theme.colors.textPrimary }]}>{value}</Text>
+-      <Text style={[theme.typography.caption, { color: theme.colors.textSecondary }]}>item{value === 1 ? '' : 's'}</Text>
+-    </View>
+-  );
+-}
+diff --git a/mobile/features/grocery/screens/GroceryScreen.tsx b/mobile/features/grocery/screens/GroceryScreen.tsx
+index bf67907..138ebac 100644
+--- a/mobile/features/grocery/screens/GroceryScreen.tsx
++++ b/mobile/features/grocery/screens/GroceryScreen.tsx
+@@ -1,15 +1,15 @@
+ import { Ionicons } from '@expo/vector-icons';
+ import { router } from 'expo-router';
+ import React, { useMemo, useState } from 'react';
+-import { Pressable, Text, View } from 'react-native';
++import { Alert, Pressable, Text, View } from 'react-native';
+ 
+ import { Button, Card, EmptyState, LoadingState, Screen } from '@/components';
+-import { useAddGroceryItem, useGroceryList, useRemoveGroceryItem, useToggleGroceryItem } from '@/hooks';
++import { useAddGroceryItem, useGroceryList, useRemoveGroceryItem, useToggleGroceryItem, useUser } from '@/hooks';
+ import { useTheme } from '@/hooks/useTheme';
+ import { GroceryListItem, IngredientCategory } from '@/types';
+ import { AddGroceryItemModal } from '../components/AddGroceryItemModal';
++import { GroceryBudgetTiles } from '../components/GroceryBudgetTiles';
+ import { GroceryItemRow } from '../components/GroceryItemRow';
+-import { GroceryStatTile } from '../components/GroceryStatTile';
+ 
+ const CATEGORY_ORDER: IngredientCategory[] = ['produce', 'dairy', 'protein', 'pantry', 'frozen', 'other'];
+ const CATEGORY_LABELS: Record<IngredientCategory, string> = {
+@@ -24,10 +24,12 @@ const CATEGORY_LABELS: Record<IngredientCategory, string> = {
+ export function GroceryScreen() {
+   const theme = useTheme();
+   const listQuery = useGroceryList();
++  const userQuery = useUser();
+   const toggle = useToggleGroceryItem();
+   const remove = useRemoveGroceryItem();
+   const add = useAddGroceryItem();
+   const [showAdd, setShowAdd] = useState(false);
++  const [collapsedCategories, setCollapsedCategories] = useState<Set<IngredientCategory>>(new Set());
+ 
+   const itemsByCategory = useMemo(() => {
+     const buckets: Record<IngredientCategory, GroceryListItem[]> = {
+@@ -44,11 +46,24 @@ export function GroceryScreen() {
+     return buckets;
+   }, [listQuery.data]);
+ 
+-  const checkedCount = useMemo(
+-    () => (listQuery.data?.items ?? []).filter((i) => i.isChecked).length,
++  const estimatedTotal = useMemo(
++    () => (listQuery.data?.items ?? []).reduce((sum, item) => sum + (item.estimatedPrice ?? 0), 0),
+     [listQuery.data],
+   );
+-  const uncheckedCount = (listQuery.data?.items.length ?? 0) - checkedCount;
++
++  const lowWasteItems = useMemo(
++    () => (listQuery.data?.items ?? []).filter((item) => item.swapSuggestion || item.wasteNote),
++    [listQuery.data],
++  );
++
++  const toggleCategoryCollapsed = (category: IngredientCategory) => {
++    setCollapsedCategories((prev) => {
++      const next = new Set(prev);
++      if (next.has(category)) next.delete(category);
++      else next.add(category);
++      return next;
++    });
++  };
+ 
+   return (
+     <Screen scroll header edges={['top', 'left', 'right']} contentContainerStyle={{ padding: theme.spacing.lg, paddingTop: theme.spacing.xs, gap: theme.spacing.lg }}>
+@@ -71,32 +86,62 @@ export function GroceryScreen() {
+         />
+       ) : (
+         <>
+-          <View style={{ flexDirection: 'row', gap: theme.spacing.md }}>
+-            <GroceryStatTile label="Already at home" value={checkedCount} tint={theme.colors.accentMuted} />
+-            <GroceryStatTile label="Still to buy" value={uncheckedCount} tint={theme.colors.secondaryMuted} />
+-          </View>
++          <GroceryBudgetTiles
++            itemCount={listQuery.data.items.length}
++            estimatedTotal={estimatedTotal}
++            budget={userQuery.data?.preferences.weeklyGroceryBudget ?? estimatedTotal}
++          />
+           {CATEGORY_ORDER.map((category) => {
+             const items = itemsByCategory[category];
+             if (items.length === 0) return null;
++            const collapsed = collapsedCategories.has(category);
+             return (
+               <View key={category} style={{ gap: theme.spacing.sm }}>
+-                <Text style={[theme.typography.caption, { color: theme.colors.textTertiary, letterSpacing: 0.5 }]}>
+-                  {CATEGORY_LABELS[category].toUpperCase()}
+-                </Text>
+-                <Card>
+-                  {items.map((item, index) => (
+-                    <GroceryItemRow
+-                      key={item.id}
+-                      item={item}
+-                      isLast={index === items.length - 1}
+-                      onToggle={() => toggle.mutate(item.id)}
+-                      onDelete={() => remove.mutate(item.id)}
+-                    />
+-                  ))}
+-                </Card>
++                <Pressable
++                  onPress={() => toggleCategoryCollapsed(category)}
++                  accessibilityRole="button"
++                  accessibilityLabel={`${collapsed ? 'Expand' : 'Collapse'} ${CATEGORY_LABELS[category]}`}
++                  style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
++                >
++                  <Text style={[theme.typography.caption, { color: theme.colors.textTertiary, letterSpacing: 0.5 }]}>
++                    {CATEGORY_LABELS[category].toUpperCase()} ({items.length})
++                  </Text>
++                  <Ionicons
++                    name={collapsed ? 'chevron-down' : 'chevron-up'}
++                    size={16}
++                    color={theme.colors.textTertiary}
++                  />
++                </Pressable>
++                {collapsed ? null : (
++                  <Card>
++                    {items.map((item, index) => (
++                      <GroceryItemRow
++                        key={item.id}
++                        item={item}
++                        isLast={index === items.length - 1}
++                        onToggle={() => toggle.mutate(item.id)}
++                        onDelete={() => remove.mutate(item.id)}
++                      />
++                    ))}
++                  </Card>
++                )}
+               </View>
+             );
+           })}
++
++          {lowWasteItems.length > 0 ? (
++            <Button
++              label={`View Low-Waste Swaps (${lowWasteItems.length})`}
++              variant="secondary"
++              onPress={() =>
++                Alert.alert(
++                  'Low-Waste Swaps',
++                  lowWasteItems.map((item) => `${item.name}: ${item.wasteNote ?? item.swapSuggestion}`).join('\n\n'),
++                )
++              }
++              fullWidth
++            />
++          ) : null}
+         </>
+       )}
+ 
+diff --git a/mobile/features/home/components/NutritionCard.tsx b/mobile/features/home/components/NutritionCard.tsx
+new file mode 100644
+index 0000000..c7d616c
+--- /dev/null
++++ b/mobile/features/home/components/NutritionCard.tsx
+@@ -0,0 +1,48 @@
++import React from 'react';
++import { Pressable, Text, View } from 'react-native';
++
++import { Card, MacroBar, ProgressRing } from '@/components';
++import { useTheme } from '@/hooks/useTheme';
++import { NutritionFacts, NutritionGoals } from '@/types';
++import { macroPercent } from '@/utils/nutrition';
++
++interface NutritionCardProps {
++  consumed: NutritionFacts;
++  goals: NutritionGoals;
++  onPress: () => void;
++}
++
++export function NutritionCard({ consumed, goals, onPress }: NutritionCardProps) {
++  const theme = useTheme();
++  const percent = Math.min(100, macroPercent(consumed.calories, goals.dailyCalories));
++  const remaining = Math.max(0, Math.round(goals.dailyCalories - consumed.calories));
++
++  return (
++    <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel="Today's nutrition">
++      <Card>
++        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
++          <View style={{ gap: 2 }}>
++            <Text style={[theme.typography.subhead, { color: theme.colors.textSecondary }]}>Today's plan</Text>
++            <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4 }}>
++              <Text style={[theme.typography.title1, { color: theme.colors.textPrimary }]}>
++                {Math.round(consumed.calories)}
++              </Text>
++              <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>
++                / {goals.dailyCalories} kcal
++              </Text>
++            </View>
++            <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>{remaining} kcal left</Text>
++          </View>
++          <ProgressRing progress={percent} size={64} strokeWidth={7}>
++            <Text style={[theme.typography.subhead, { color: theme.colors.textPrimary }]}>{percent}%</Text>
++          </ProgressRing>
++        </View>
++        <View style={{ gap: theme.spacing.sm, marginTop: theme.spacing.md }}>
++          <MacroBar label="Protein" value={consumed.proteinG} goal={goals.proteinG} />
++          <MacroBar label="Carbs" value={consumed.carbsG} goal={goals.carbsG} color={theme.colors.freshness.useSoon} />
++          <MacroBar label="Fat" value={consumed.fatG} goal={goals.fatG} color={theme.colors.secondary} />
++        </View>
++      </Card>
++    </Pressable>
++  );
++}
+diff --git a/mobile/features/home/screens/HomeScreen.tsx b/mobile/features/home/screens/HomeScreen.tsx
+index 6eb3328..6cb1cc3 100644
+--- a/mobile/features/home/screens/HomeScreen.tsx
++++ b/mobile/features/home/screens/HomeScreen.tsx
+@@ -8,8 +8,10 @@ import { useKitchenImpact, useMealPlan, usePantry, useRecipeCollections, useReci
+ import { useTheme } from '@/hooks/useTheme';
+ import { countIngredientsNeedingAttention, getRecipeAvailability } from '@/services';
+ import { freshnessSortWeight } from '@/utils/freshness';
++import { sumNutrition } from '@/utils/nutrition';
+ import { GreetingHeader } from '../components/GreetingHeader';
+ import { ImpactSummaryCard } from '../components/ImpactSummaryCard';
++import { NutritionCard } from '../components/NutritionCard';
+ import { ScanHeroCard } from '../components/ScanHeroCard';
+ import { TonightCard } from '../components/TonightCard';
+ import { UseFirstSection } from '../components/UseFirstSection';
+@@ -50,6 +52,15 @@ export function HomeScreen() {
+     [mealPlanQuery.data],
+   );
+ 
++  /** Always Monday's plan (not the real device date) so the card stays populated whenever this is demoed. */
++  const todaysNutrition = useMemo(() => {
++    const mondayItems = (mealPlanQuery.data?.items ?? []).filter((item) => item.day === 'mon');
++    const facts = mondayItems
++      .map((item) => recipesById[item.recipeId]?.nutritionPerServing)
++      .filter((f): f is NonNullable<typeof f> => !!f);
++    return sumNutrition(facts);
++  }, [mealPlanQuery.data, recipesById]);
++
+   const isLoading =
+     userQuery.isLoading || pantryQuery.isLoading || collectionsQuery.isLoading || recipesQuery.isLoading;
+   const isError =
+@@ -89,6 +100,8 @@ export function HomeScreen() {
+     <Screen scroll header contentContainerStyle={{ padding: theme.spacing.lg, gap: theme.spacing.xl }}>
+       <GreetingHeader name={user.name} />
+ 
++      <NutritionCard consumed={todaysNutrition} goals={user.preferences.nutritionGoals} onPress={() => router.push('/nutrition')} />
++
+       <ScanHeroCard />
+ 
+       <UseFirstSection items={useFirstItems} />
+diff --git a/mobile/features/nutrition/screens/NutritionProgressScreen.tsx b/mobile/features/nutrition/screens/NutritionProgressScreen.tsx
+new file mode 100644
+index 0000000..a2e2b48
+--- /dev/null
++++ b/mobile/features/nutrition/screens/NutritionProgressScreen.tsx
+@@ -0,0 +1,154 @@
++import { Ionicons } from '@expo/vector-icons';
++import { router } from 'expo-router';
++import React, { useMemo, useState } from 'react';
++import { Pressable, Text, View } from 'react-native';
++
++import { BarChart, Card, Chip, EmptyState, LoadingState, MacroBar, ProgressRing, Screen } from '@/components';
++import { DAY_LABELS, DAY_ORDER } from '@/features/planner/constants';
++import { useKitchenImpact, useMealPlan, useRecipes, useUser } from '@/hooks';
++import { useTheme } from '@/hooks/useTheme';
++import { DayOfWeek, NutritionFacts } from '@/types';
++import { formatNumber } from '@/utils/format';
++import { macroPercent, sumNutrition } from '@/utils/nutrition';
++
++type Period = 'today' | 'week' | 'month';
++
++const PERIODS: { value: Period; label: string }[] = [
++  { value: 'today', label: 'Today' },
++  { value: 'week', label: 'Week' },
++  { value: 'month', label: 'Month' },
++];
++
++function scale(facts: NutritionFacts, factor: number): NutritionFacts {
++  return {
++    calories: facts.calories * factor,
++    proteinG: facts.proteinG * factor,
++    carbsG: facts.carbsG * factor,
++    fatG: facts.fatG * factor,
++    fiberG: facts.fiberG * factor,
++  };
++}
++
++export function NutritionProgressScreen() {
++  const theme = useTheme();
++  const userQuery = useUser();
++  const mealPlanQuery = useMealPlan();
++  const recipesQuery = useRecipes();
++  const impactQuery = useKitchenImpact();
++  const [period, setPeriod] = useState<Period>('week');
++
++  const recipesById = useMemo(
++    () => Object.fromEntries((recipesQuery.data ?? []).map((r) => [r.id, r])),
++    [recipesQuery.data],
++  );
++
++  const dayTotals = useMemo(() => {
++    const totals = {} as Record<DayOfWeek, NutritionFacts>;
++    for (const day of DAY_ORDER) {
++      const items = (mealPlanQuery.data?.items ?? []).filter((i) => i.day === day);
++      totals[day] = sumNutrition(
++        items.map((i) => recipesById[i.recipeId]?.nutritionPerServing).filter((f): f is NutritionFacts => !!f),
++      );
++    }
++    return totals;
++  }, [mealPlanQuery.data, recipesById]);
++
++  const isLoading = userQuery.isLoading || mealPlanQuery.isLoading || recipesQuery.isLoading;
++
++  if (isLoading) {
++    return (
++      <Screen>
++        <LoadingState fullscreen message="Loading your nutrition..." />
++      </Screen>
++    );
++  }
++
++  if (!userQuery.data) {
++    return (
++      <Screen>
++        <EmptyState icon="⚠️" title="Couldn't load nutrition" actionLabel="Retry" onActionPress={() => userQuery.refetch()} />
++      </Screen>
++    );
++  }
++
++  const goals = userQuery.data.preferences.nutritionGoals;
++  const weeklyTotals = sumNutrition(DAY_ORDER.map((day) => dayTotals[day]));
++
++  const scoped =
++    period === 'today'
++      ? { consumed: dayTotals.mon, goal: goals }
++      : period === 'week'
++        ? {
++            consumed: weeklyTotals,
++            goal: { dailyCalories: goals.dailyCalories * 7, proteinG: goals.proteinG * 7, carbsG: goals.carbsG * 7, fatG: goals.fatG * 7 },
++          }
++        : {
++            consumed: scale(weeklyTotals, 4.345),
++            goal: { dailyCalories: goals.dailyCalories * 30, proteinG: goals.proteinG * 30, carbsG: goals.carbsG * 30, fatG: goals.fatG * 30 },
++          };
++
++  const percent = Math.min(100, macroPercent(scoped.consumed.calories, scoped.goal.dailyCalories));
++
++  const chartData = DAY_ORDER.map((day) => ({
++    label: DAY_LABELS[day].slice(0, 3),
++    value: dayTotals[day].calories,
++    highlighted: day === 'mon',
++  }));
++
++  return (
++    <Screen scroll edges={['top', 'left', 'right']} contentContainerStyle={{ padding: theme.spacing.lg, gap: theme.spacing.xl }}>
++      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
++        <Text style={[theme.typography.title1, { color: theme.colors.textPrimary }]}>Nutrition & Progress</Text>
++        <Pressable onPress={() => router.back()} accessibilityRole="button" accessibilityLabel="Close" hitSlop={8}>
++          <Ionicons name="close" size={24} color={theme.colors.textPrimary} />
++        </Pressable>
++      </View>
++
++      <View style={{ flexDirection: 'row', gap: 8 }}>
++        {PERIODS.map((option) => (
++          <Chip key={option.value} label={option.label} selected={period === option.value} onPress={() => setPeriod(option.value)} />
++        ))}
++      </View>
++
++      <Card>
++        <View style={{ alignItems: 'center', gap: theme.spacing.sm }}>
++          <ProgressRing progress={percent} size={96} strokeWidth={9}>
++            <Text style={[theme.typography.title3, { color: theme.colors.textPrimary }]}>{percent}%</Text>
++          </ProgressRing>
++          <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>
++            {formatNumber(Math.round(scoped.consumed.calories))} of {formatNumber(Math.round(scoped.goal.dailyCalories))} kcal
++          </Text>
++        </View>
++        <View style={{ gap: theme.spacing.sm, marginTop: theme.spacing.lg }}>
++          <MacroBar label="Protein" value={scoped.consumed.proteinG} goal={scoped.goal.proteinG} />
++          <MacroBar label="Carbs" value={scoped.consumed.carbsG} goal={scoped.goal.carbsG} color={theme.colors.freshness.useSoon} />
++          <MacroBar label="Fat" value={scoped.consumed.fatG} goal={scoped.goal.fatG} color={theme.colors.secondary} />
++        </View>
++      </Card>
++
++      <View style={{ gap: theme.spacing.sm }}>
++        <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Weekly trend (kcal)</Text>
++        <Card>
++          <BarChart data={chartData} goal={goals.dailyCalories} />
++        </Card>
++      </View>
++
++      <View style={{ flexDirection: 'row', gap: theme.spacing.md }}>
++        <Card style={{ flex: 1, alignItems: 'center', gap: 4 }}>
++          <Ionicons name="flame" size={22} color={theme.colors.freshness.useSoon} />
++          <Text style={[theme.typography.title2, { color: theme.colors.textPrimary }]}>
++            {impactQuery.data?.cookingStreakDays ?? 0}
++          </Text>
++          <Text style={[theme.typography.caption, { color: theme.colors.textSecondary }]}>Day streak</Text>
++        </Card>
++        <Card style={{ flex: 1, alignItems: 'center', gap: 4 }}>
++          <Ionicons name="leaf" size={22} color={theme.colors.accent} />
++          <Text style={[theme.typography.title2, { color: theme.colors.textPrimary }]}>
++            {impactQuery.data?.estimatedFoodSavedLbs ?? 0} lbs
++          </Text>
++          <Text style={[theme.typography.caption, { color: theme.colors.textSecondary }]}>Estimated food saved</Text>
++        </Card>
++      </View>
++    </Screen>
++  );
++}
+diff --git a/mobile/features/onboarding/screens/AllergiesScreen.tsx b/mobile/features/onboarding/screens/AllergiesScreen.tsx
+index 94a25ca..90287db 100644
+--- a/mobile/features/onboarding/screens/AllergiesScreen.tsx
++++ b/mobile/features/onboarding/screens/AllergiesScreen.tsx
+@@ -31,7 +31,7 @@ export function AllergiesScreen() {
+ 
+   return (
+     <Screen scroll>
+-      <OnboardingProgress step={3} total={6} onBack={() => router.back()} />
++      <OnboardingProgress step={3} total={7} onBack={() => router.back()} />
+       <View style={{ padding: theme.spacing.xl, gap: theme.spacing.xl }}>
+         <View style={{ gap: theme.spacing.xs }}>
+           <Text style={[theme.typography.title1, { color: theme.colors.textPrimary }]}>
+diff --git a/mobile/features/onboarding/screens/CookingProfileScreen.tsx b/mobile/features/onboarding/screens/CookingProfileScreen.tsx
+index 768859a..3c95973 100644
+--- a/mobile/features/onboarding/screens/CookingProfileScreen.tsx
++++ b/mobile/features/onboarding/screens/CookingProfileScreen.tsx
+@@ -24,7 +24,7 @@ export function CookingProfileScreen() {
+ 
+   return (
+     <Screen scroll>
+-      <OnboardingProgress step={5} total={6} onBack={() => router.back()} />
++      <OnboardingProgress step={5} total={7} onBack={() => router.back()} />
+       <View style={{ padding: theme.spacing.xl, gap: theme.spacing.xl }}>
+         <View style={{ gap: theme.spacing.xs }}>
+           <Text style={[theme.typography.title1, { color: theme.colors.textPrimary }]}>
+@@ -55,7 +55,7 @@ export function CookingProfileScreen() {
+           <ConfidenceSelector value={cookingConfidence} onChange={setCookingConfidence} />
+         </View>
+ 
+-        <Button label="Continue" onPress={() => router.push('/onboarding/priorities')} fullWidth />
++        <Button label="Continue" onPress={() => router.push('/onboarding/goals')} fullWidth />
+       </View>
+     </Screen>
+   );
+diff --git a/mobile/features/onboarding/screens/DietaryScreen.tsx b/mobile/features/onboarding/screens/DietaryScreen.tsx
+index 1d218b0..5db2f58 100644
+--- a/mobile/features/onboarding/screens/DietaryScreen.tsx
++++ b/mobile/features/onboarding/screens/DietaryScreen.tsx
+@@ -26,7 +26,7 @@ export function DietaryScreen() {
+ 
+   return (
+     <Screen scroll>
+-      <OnboardingProgress step={2} total={6} onBack={() => router.back()} />
++      <OnboardingProgress step={2} total={7} onBack={() => router.back()} />
+       <View style={{ padding: theme.spacing.xl, gap: theme.spacing.xl }}>
+         <View style={{ gap: theme.spacing.xs }}>
+           <Text style={[theme.typography.title1, { color: theme.colors.textPrimary }]}>
+diff --git a/mobile/features/onboarding/screens/FoodPreferencesScreen.tsx b/mobile/features/onboarding/screens/FoodPreferencesScreen.tsx
+index 08c7bbb..6171e7b 100644
+--- a/mobile/features/onboarding/screens/FoodPreferencesScreen.tsx
++++ b/mobile/features/onboarding/screens/FoodPreferencesScreen.tsx
+@@ -31,7 +31,7 @@ export function FoodPreferencesScreen() {
+ 
+   return (
+     <Screen scroll contentContainerStyle={{ flex: 1 }}>
+-      <OnboardingProgress step={4} total={6} onBack={() => router.back()} />
++      <OnboardingProgress step={4} total={7} onBack={() => router.back()} />
+       <View style={{ flex: 1, padding: theme.spacing.xl, gap: theme.spacing.xl }}>
+         <View style={{ gap: theme.spacing.xs }}>
+           <Text style={[theme.typography.title1, { color: theme.colors.textPrimary }]}>What do you love to cook?</Text>
+diff --git a/mobile/features/onboarding/screens/GoalsScreen.tsx b/mobile/features/onboarding/screens/GoalsScreen.tsx
+new file mode 100644
+index 0000000..49be39e
+--- /dev/null
++++ b/mobile/features/onboarding/screens/GoalsScreen.tsx
+@@ -0,0 +1,133 @@
++import { router } from 'expo-router';
++import React from 'react';
++import { Text, View } from 'react-native';
++
++import { Button, Chip, Screen, Stepper } from '@/components';
++import { useTheme } from '@/hooks/useTheme';
++import { useOnboardingStore } from '@/store';
++import { WeightGoalDirection } from '@/types';
++import { computeMacroGoals } from '@/utils/nutrition';
++import { OnboardingProgress } from '../components/OnboardingProgress';
++
++const DIRECTION_OPTIONS: { value: WeightGoalDirection; label: string }[] = [
++  { value: 'lose', label: 'Lose weight' },
++  { value: 'maintain', label: 'Maintain' },
++  { value: 'gain', label: 'Gain weight' },
++];
++
++const TIMEFRAME_OPTIONS = [
++  { label: '4 weeks', weeks: 4 },
++  { label: '8 weeks', weeks: 8 },
++  { label: '12 weeks', weeks: 12 },
++];
++
++const MACRO_OPTIONS: { value: 'balanced' | 'low_carb' | 'high_protein'; label: string }[] = [
++  { value: 'balanced', label: 'Balanced' },
++  { value: 'low_carb', label: 'Low Carb' },
++  { value: 'high_protein', label: 'High Protein' },
++];
++
++function weeksFromToday(weeks: number): string {
++  const d = new Date();
++  d.setDate(d.getDate() + weeks * 7);
++  return d.toISOString().slice(0, 10);
++}
++
++export function GoalsScreen() {
++  const theme = useTheme();
++  const weightGoalDirection = useOnboardingStore((s) => s.weightGoalDirection);
++  const setWeightGoalDirection = useOnboardingStore((s) => s.setWeightGoalDirection);
++  const weightGoalTargetLbs = useOnboardingStore((s) => s.weightGoalTargetLbs);
++  const setWeightGoalTargetLbs = useOnboardingStore((s) => s.setWeightGoalTargetLbs);
++  const weightGoalTargetDate = useOnboardingStore((s) => s.weightGoalTargetDate);
++  const setWeightGoalTargetDate = useOnboardingStore((s) => s.setWeightGoalTargetDate);
++  const dailyCalories = useOnboardingStore((s) => s.dailyCalories);
++  const setDailyCalories = useOnboardingStore((s) => s.setDailyCalories);
++  const macroPreference = useOnboardingStore((s) => s.macroPreference);
++  const setMacroPreference = useOnboardingStore((s) => s.setMacroPreference);
++  const weeklyGroceryBudget = useOnboardingStore((s) => s.weeklyGroceryBudget);
++  const setWeeklyGroceryBudget = useOnboardingStore((s) => s.setWeeklyGroceryBudget);
++
++  const macros = computeMacroGoals(dailyCalories, macroPreference);
++
++  return (
++    <Screen scroll>
++      <OnboardingProgress step={6} total={7} onBack={() => router.back()} />
++      <View style={{ padding: theme.spacing.xl, gap: theme.spacing.xl }}>
++        <View style={{ gap: theme.spacing.xs }}>
++          <Text style={[theme.typography.title1, { color: theme.colors.textPrimary }]}>Set your goals</Text>
++          <Text style={[theme.typography.body, { color: theme.colors.textSecondary }]}>
++            This helps us personalize recipes and daily targets. You can change this anytime.
++          </Text>
++        </View>
++
++        <View style={{ gap: theme.spacing.sm }}>
++          <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Weight goal</Text>
++          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
++            {DIRECTION_OPTIONS.map((option) => (
++              <Chip
++                key={option.value}
++                label={option.label}
++                selected={weightGoalDirection === option.value}
++                onPress={() => setWeightGoalDirection(option.value)}
++              />
++            ))}
++          </View>
++          {weightGoalDirection !== 'maintain' ? (
++            <>
++              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
++                <Text style={[theme.typography.subhead, { color: theme.colors.textSecondary }]}>Target pounds</Text>
++                <Stepper
++                  value={weightGoalTargetLbs}
++                  onChange={setWeightGoalTargetLbs}
++                  min={0}
++                  max={100}
++                  accessibilityLabel="target pounds"
++                />
++              </View>
++              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
++                {TIMEFRAME_OPTIONS.map((option) => (
++                  <Chip
++                    key={option.label}
++                    label={`In ${option.label}`}
++                    selected={weightGoalTargetDate === weeksFromToday(option.weeks)}
++                    onPress={() => setWeightGoalTargetDate(weeksFromToday(option.weeks))}
++                  />
++                ))}
++              </View>
++            </>
++          ) : null}
++        </View>
++
++        <View style={{ gap: theme.spacing.sm }}>
++          <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Daily calorie target</Text>
++          <Stepper value={dailyCalories} onChange={setDailyCalories} min={1200} max={4000} step={50} accessibilityLabel="daily calories" />
++        </View>
++
++        <View style={{ gap: theme.spacing.sm }}>
++          <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Macro preference</Text>
++          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
++            {MACRO_OPTIONS.map((option) => (
++              <Chip
++                key={option.value}
++                label={option.label}
++                selected={macroPreference === option.value}
++                onPress={() => setMacroPreference(option.value)}
++              />
++            ))}
++          </View>
++          <Text style={[theme.typography.footnote, { color: theme.colors.textTertiary }]}>
++            ~{macros.proteinG}g protein · {macros.carbsG}g carbs · {macros.fatG}g fat · {macros.fiberG}g fiber
++          </Text>
++        </View>
++
++        <View style={{ gap: theme.spacing.sm }}>
++          <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Weekly grocery budget</Text>
++          <Stepper value={weeklyGroceryBudget} onChange={setWeeklyGroceryBudget} min={20} max={300} step={5} accessibilityLabel="weekly grocery budget" />
++        </View>
++
++        <Button label="Continue" onPress={() => router.push('/onboarding/priorities')} fullWidth />
++      </View>
++    </Screen>
++  );
++}
+diff --git a/mobile/features/onboarding/screens/PrioritiesScreen.tsx b/mobile/features/onboarding/screens/PrioritiesScreen.tsx
+index 2be5e9a..56ee5a8 100644
+--- a/mobile/features/onboarding/screens/PrioritiesScreen.tsx
++++ b/mobile/features/onboarding/screens/PrioritiesScreen.tsx
+@@ -24,7 +24,7 @@ export function PrioritiesScreen() {
+ 
+   return (
+     <Screen scroll contentContainerStyle={{ flex: 1 }}>
+-      <OnboardingProgress step={6} total={6} onBack={() => router.back()} />
++      <OnboardingProgress step={7} total={7} onBack={() => router.back()} />
+       <View style={{ flex: 1, padding: theme.spacing.xl, gap: theme.spacing.xl }}>
+         <View style={{ gap: theme.spacing.xs }}>
+           <Text style={[theme.typography.title1, { color: theme.colors.textPrimary }]}>
+diff --git a/mobile/features/onboarding/screens/SignInScreen.tsx b/mobile/features/onboarding/screens/SignInScreen.tsx
+index d74a20f..04b0775 100644
+--- a/mobile/features/onboarding/screens/SignInScreen.tsx
++++ b/mobile/features/onboarding/screens/SignInScreen.tsx
+@@ -32,7 +32,7 @@ export function SignInScreen() {
+ 
+   return (
+     <Screen contentContainerStyle={{ flex: 1 }}>
+-      <OnboardingProgress step={1} total={6} onBack={() => router.back()} />
++      <OnboardingProgress step={1} total={7} onBack={() => router.back()} />
+       <View style={{ flex: 1, padding: theme.spacing.xl, justifyContent: 'center', gap: theme.spacing.xl }}>
+         <View style={{ gap: theme.spacing.xs }}>
+           <Text style={[theme.typography.title1, { color: theme.colors.textPrimary }]}>Create your account</Text>
+diff --git a/mobile/features/onboarding/screens/WelcomeScreen.tsx b/mobile/features/onboarding/screens/WelcomeScreen.tsx
+index 0eb4e15..f4ed5aa 100644
+--- a/mobile/features/onboarding/screens/WelcomeScreen.tsx
++++ b/mobile/features/onboarding/screens/WelcomeScreen.tsx
+@@ -2,7 +2,7 @@ import { router } from 'expo-router';
+ import React from 'react';
+ import { Text, View } from 'react-native';
+ 
+-import { Button, Screen } from '@/components';
++import { Button, Screen, SmartPrepLogo } from '@/components';
+ import { useTheme } from '@/hooks/useTheme';
+ 
+ export function WelcomeScreen() {
+@@ -11,18 +11,8 @@ export function WelcomeScreen() {
+   return (
+     <Screen contentContainerStyle={{ padding: theme.spacing.xl, justifyContent: 'space-between' }}>
+       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: theme.spacing.lg }}>
+-        <View
+-          style={{
+-            width: 88,
+-            height: 88,
+-            borderRadius: 44,
+-            backgroundColor: theme.colors.accentMuted,
+-            alignItems: 'center',
+-            justifyContent: 'center',
+-          }}
+-        >
+-          <Text style={{ fontSize: 44 }}>🥗</Text>
+-        </View>
++        <SmartPrepLogo size={80} />
++        <Text style={[theme.typography.title2, { color: theme.colors.textPrimary }]}>SmartPrep AI</Text>
+         <Text
+           style={[
+             theme.typography.largeTitle,
+diff --git a/mobile/features/pantry/components/FreshnessTimeline.tsx b/mobile/features/pantry/components/FreshnessTimeline.tsx
+new file mode 100644
+index 0000000..5975843
+--- /dev/null
++++ b/mobile/features/pantry/components/FreshnessTimeline.tsx
+@@ -0,0 +1,65 @@
++import React from 'react';
++import { DimensionValue, Text, View } from 'react-native';
++
++import { useTheme } from '@/hooks/useTheme';
++import { PantryItem } from '@/types';
++
++function toneColor(theme: ReturnType<typeof useTheme>, label: PantryItem['freshness']['label']): string {
++  switch (label) {
++    case 'fresh':
++      return theme.colors.freshness.fresh;
++    case 'use_soon':
++      return theme.colors.freshness.useSoon;
++    case 'prioritize':
++      return theme.colors.freshness.prioritize;
++    case 'cant_tell':
++      return theme.colors.freshness.cantTell;
++  }
++}
++
++function formatDate(date: Date): string {
++  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
++}
++
++interface FreshnessTimelineProps {
++  item: PantryItem;
++}
++
++/**
++ * Illustrative freshness timeline: position along the bar reflects the
++ * 0-100 freshness score, not a lab-measured expiration date.
++ */
++export function FreshnessTimeline({ item }: FreshnessTimelineProps) {
++  const theme = useTheme();
++  const opened = new Date(item.addedAt);
++  const bestBy = new Date(opened);
++  bestBy.setDate(bestBy.getDate() + 10);
++  const position = Math.max(4, Math.min(96, 100 - item.freshness.score));
++  const dotColor = toneColor(theme, item.freshness.label);
++
++  return (
++    <View style={{ gap: theme.spacing.sm }}>
++      <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Freshness timeline</Text>
++      <View style={{ height: 6, borderRadius: 3, backgroundColor: theme.colors.surfaceMuted }}>
++        <View
++          style={{
++            position: 'absolute',
++            left: `${position}%` as DimensionValue,
++            marginLeft: -8,
++            top: -5,
++            width: 16,
++            height: 16,
++            borderRadius: 8,
++            backgroundColor: dotColor,
++            borderWidth: 2,
++            borderColor: theme.colors.backgroundElevated,
++          }}
++        />
++      </View>
++      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
++        <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>Opened {formatDate(opened)}</Text>
++        <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>Best by {formatDate(bestBy)}</Text>
++      </View>
++    </View>
++  );
++}
+diff --git a/mobile/features/pantry/components/RecipesUsingIngredient.tsx b/mobile/features/pantry/components/RecipesUsingIngredient.tsx
+new file mode 100644
+index 0000000..ba367b5
+--- /dev/null
++++ b/mobile/features/pantry/components/RecipesUsingIngredient.tsx
+@@ -0,0 +1,22 @@
++import React from 'react';
++import { View } from 'react-native';
++
++import { SectionHeader } from '@/components';
++import { RecipeCarousel } from '@/features/recipes/components/RecipeCarousel';
++import { Recipe } from '@/types';
++
++interface RecipesUsingIngredientProps {
++  recipes: Recipe[];
++  onPressRecipe: (recipeId: string) => void;
++}
++
++export function RecipesUsingIngredient({ recipes, onPressRecipe }: RecipesUsingIngredientProps) {
++  if (recipes.length === 0) return null;
++
++  return (
++    <View style={{ gap: 8 }}>
++      <SectionHeader title="Recipes using this" />
++      <RecipeCarousel recipes={recipes} onPressRecipe={onPressRecipe} />
++    </View>
++  );
++}
+diff --git a/mobile/features/pantry/components/StorageTipCard.tsx b/mobile/features/pantry/components/StorageTipCard.tsx
+new file mode 100644
+index 0000000..4423f6c
+--- /dev/null
++++ b/mobile/features/pantry/components/StorageTipCard.tsx
+@@ -0,0 +1,33 @@
++import { Ionicons } from '@expo/vector-icons';
++import React from 'react';
++import { Text, View } from 'react-native';
++
++import { useTheme } from '@/hooks/useTheme';
++import { IngredientCategory } from '@/types';
++import { STORAGE_TIPS } from '@/utils/nutrition';
++
++interface StorageTipCardProps {
++  category: IngredientCategory;
++}
++
++export function StorageTipCard({ category }: StorageTipCardProps) {
++  const theme = useTheme();
++
++  return (
++    <View
++      style={{
++        flexDirection: 'row',
++        gap: theme.spacing.sm,
++        backgroundColor: theme.colors.accentMuted,
++        borderRadius: theme.radius.lg,
++        padding: theme.spacing.md,
++      }}
++    >
++      <Ionicons name="bulb-outline" size={20} color={theme.colors.accent} />
++      <View style={{ flex: 1, gap: 2 }}>
++        <Text style={[theme.typography.subhead, { color: theme.colors.textPrimary }]}>Storage tip</Text>
++        <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>{STORAGE_TIPS[category]}</Text>
++      </View>
++    </View>
++  );
++}
+diff --git a/mobile/features/pantry/screens/PantryItemDetailScreen.tsx b/mobile/features/pantry/screens/PantryItemDetailScreen.tsx
+index 8362c22..949d9a9 100644
+--- a/mobile/features/pantry/screens/PantryItemDetailScreen.tsx
++++ b/mobile/features/pantry/screens/PantryItemDetailScreen.tsx
+@@ -2,11 +2,15 @@ import { router, useLocalSearchParams } from 'expo-router';
+ import React from 'react';
+ import { Alert, ScrollView, Text, View } from 'react-native';
+ 
+-import { Button, Chip, EmptyState, FreshnessTag, IngredientAvatar, LoadingState, Screen, Stepper } from '@/components';
+-import { usePantryItem, useRemovePantryItem, useUpdatePantryItem, useUpdatePantryItemFreshness, useUseSomePantryItem } from '@/hooks';
++import { Button, Chip, EmptyState, FreshnessTag, IngredientAvatar, LoadingState, NutritionFactsRow, Screen, Stepper } from '@/components';
++import { INGREDIENTS_BY_ID } from '@/data';
++import { usePantryItem, useRecipes, useRemovePantryItem, useUpdatePantryItem, useUpdatePantryItemFreshness, useUseSomePantryItem } from '@/hooks';
+ import { useTheme } from '@/hooks/useTheme';
+ import { IngredientCategory, QuantityUnit } from '@/types';
+ import { FRESHNESS_LABELS, FRESHNESS_META, FRESHNESS_OVERRIDE_VALUES } from '@/utils/freshness';
++import { FreshnessTimeline } from '../components/FreshnessTimeline';
++import { RecipesUsingIngredient } from '../components/RecipesUsingIngredient';
++import { StorageTipCard } from '../components/StorageTipCard';
+ 
+ const CATEGORY_OPTIONS: { value: IngredientCategory; label: string }[] = [
+   { value: 'produce', label: 'Produce' },
+@@ -25,6 +29,7 @@ export function PantryItemDetailScreen() {
+   const theme = useTheme();
+   const { id } = useLocalSearchParams<{ id: string }>();
+   const itemQuery = usePantryItem(id);
++  const recipesQuery = useRecipes();
+   const updateItem = useUpdatePantryItem();
+   const updateFreshness = useUpdatePantryItemFreshness();
+   const useSome = useUseSomePantryItem();
+@@ -47,6 +52,11 @@ export function PantryItemDetailScreen() {
+   }
+ 
+   const item = itemQuery.data;
++  /** Manually-added items don't have a catalog entry, so nutrition facts are unavailable for them. */
++  const catalogIngredient = INGREDIENTS_BY_ID[item.ingredientId];
++  const recipesUsingIngredient = (recipesQuery.data ?? []).filter((recipe) =>
++    recipe.ingredients.some((i) => i.ingredientId === item.ingredientId),
++  );
+ 
+   const confirmAndRemove = (title: string, message: string, reason: 'finished' | 'discarded' | 'removed') => {
+     Alert.alert(title, message, [
+@@ -72,6 +82,8 @@ export function PantryItemDetailScreen() {
+         ) : null}
+       </View>
+ 
++      <FreshnessTimeline item={item} />
++
+       <View style={{ gap: theme.spacing.sm }}>
+         <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Quantity</Text>
+         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+@@ -132,6 +144,17 @@ export function PantryItemDetailScreen() {
+         </View>
+       </View>
+ 
++      {catalogIngredient ? (
++        <NutritionFactsRow facts={catalogIngredient.nutritionPerServing} servingLabel={catalogIngredient.servingDescription} />
++      ) : null}
++
++      <StorageTipCard category={item.category} />
++
++      <RecipesUsingIngredient
++        recipes={recipesUsingIngredient}
++        onPressRecipe={(recipeId) => router.push(`/recipes/${recipeId}`)}
++      />
++
+       <View style={{ gap: theme.spacing.sm }}>
+         <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Actions</Text>
+         <Button
+diff --git a/mobile/features/profile/screens/ProfileScreen.tsx b/mobile/features/profile/screens/ProfileScreen.tsx
+index bb8371d..a4c4eb2 100644
+--- a/mobile/features/profile/screens/ProfileScreen.tsx
++++ b/mobile/features/profile/screens/ProfileScreen.tsx
+@@ -1,10 +1,11 @@
+ import React, { useEffect, useState } from 'react';
+-import { Text, View } from 'react-native';
++import { Alert, Text, View } from 'react-native';
+ 
+-import { Chip, ChipGroup, ConfidenceSelector, EmptyState, LoadingState, PrioritySlider, Screen, SectionHeader, TagInput } from '@/components';
++import { Card, Chip, ChipGroup, ConfidenceSelector, EmptyState, ListRow, LoadingState, PrioritySlider, Screen, SectionHeader, Stepper, TagInput } from '@/components';
+ import { useKitchenImpact, useUpdatePreferences, useUser } from '@/hooks';
+ import { useTheme } from '@/hooks/useTheme';
+-import { CookingTimePreference, DietaryPreference, SmartPrepPriorities } from '@/types';
++import { CookingTimePreference, DietaryPreference, MacroPreference, SmartPrepPriorities, WeightGoalDirection } from '@/types';
++import { computeMacroGoals } from '@/utils/nutrition';
+ import { KitchenImpactSection } from '../components/KitchenImpactSection';
+ import { ProfileHeader } from '../components/ProfileHeader';
+ 
+@@ -26,6 +27,18 @@ const TIME_OPTIONS: { value: CookingTimePreference; label: string }[] = [
+   { value: 'no_preference', label: "Doesn't matter" },
+ ];
+ 
++const DIRECTION_OPTIONS: { value: WeightGoalDirection; label: string }[] = [
++  { value: 'lose', label: 'Lose weight' },
++  { value: 'maintain', label: 'Maintain' },
++  { value: 'gain', label: 'Gain weight' },
++];
++
++const MACRO_OPTIONS: { value: MacroPreference; label: string }[] = [
++  { value: 'balanced', label: 'Balanced' },
++  { value: 'low_carb', label: 'Low Carb' },
++  { value: 'high_protein', label: 'High Protein' },
++];
++
+ const PRIORITY_FIELDS: { key: keyof SmartPrepPriorities; label: string }[] = [
+   { key: 'useWhatIHave', label: 'Use what I have' },
+   { key: 'reduceFoodWaste', label: 'Reduce food waste' },
+@@ -35,6 +48,10 @@ const PRIORITY_FIELDS: { key: keyof SmartPrepPriorities; label: string }[] = [
+   { key: 'tryNewFoods', label: 'Try new foods' },
+ ];
+ 
++function comingSoon(feature: string) {
++  Alert.alert(feature, `${feature} is coming in a future update.`);
++}
++
+ export function ProfileScreen() {
+   const theme = useTheme();
+   const userQuery = useUser();
+@@ -102,6 +119,20 @@ export function ProfileScreen() {
+     updatePreferences.mutate({ dislikedFoods: next });
+   };
+ 
++  const setWeightGoalDirection = (direction: WeightGoalDirection) =>
++    updatePreferences.mutate({ weightGoal: { ...prefs.weightGoal, direction } });
++  const setWeightGoalTargetLbs = (targetLbs: number) =>
++    updatePreferences.mutate({ weightGoal: { ...prefs.weightGoal, targetLbs } });
++  const setDailyCalories = (dailyCalories: number) =>
++    updatePreferences.mutate({
++      nutritionGoals: { ...prefs.nutritionGoals, dailyCalories, ...computeMacroGoals(dailyCalories, prefs.nutritionGoals.macroPreference) },
++    });
++  const setMacroPreference = (macroPreference: MacroPreference) =>
++    updatePreferences.mutate({
++      nutritionGoals: { ...prefs.nutritionGoals, macroPreference, ...computeMacroGoals(prefs.nutritionGoals.dailyCalories, macroPreference) },
++    });
++  const setWeeklyGroceryBudget = (weeklyGroceryBudget: number) => updatePreferences.mutate({ weeklyGroceryBudget });
++
+   return (
+     <Screen scroll header edges={['top', 'left', 'right']} contentContainerStyle={{ padding: theme.spacing.lg, paddingTop: theme.spacing.xs, gap: theme.spacing.xl }}>
+       <ProfileHeader name={user.name} email={user.email} initials={user.avatarInitials} />
+@@ -163,6 +194,57 @@ export function ProfileScreen() {
+         />
+       </View>
+ 
++      <View style={{ gap: theme.spacing.lg }}>
++        <SectionHeader title="Goals" subtitle="Powers your daily nutrition targets and grocery budget" />
++
++        <View style={{ gap: theme.spacing.sm }}>
++          <Text style={[theme.typography.subhead, { color: theme.colors.textPrimary }]}>Weight goal</Text>
++          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
++            {DIRECTION_OPTIONS.map((option) => (
++              <Chip
++                key={option.value}
++                label={option.label}
++                selected={prefs.weightGoal.direction === option.value}
++                onPress={() => setWeightGoalDirection(option.value)}
++              />
++            ))}
++          </View>
++          {prefs.weightGoal.direction !== 'maintain' ? (
++            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
++              <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>Target pounds</Text>
++              <Stepper value={prefs.weightGoal.targetLbs} onChange={setWeightGoalTargetLbs} min={0} max={100} accessibilityLabel="target pounds" />
++            </View>
++          ) : null}
++        </View>
++
++        <View style={{ gap: theme.spacing.sm }}>
++          <Text style={[theme.typography.subhead, { color: theme.colors.textPrimary }]}>Daily calorie target</Text>
++          <Stepper value={prefs.nutritionGoals.dailyCalories} onChange={setDailyCalories} min={1200} max={4000} step={50} accessibilityLabel="daily calories" />
++        </View>
++
++        <View style={{ gap: theme.spacing.sm }}>
++          <Text style={[theme.typography.subhead, { color: theme.colors.textPrimary }]}>Macro preference</Text>
++          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
++            {MACRO_OPTIONS.map((option) => (
++              <Chip
++                key={option.value}
++                label={option.label}
++                selected={prefs.nutritionGoals.macroPreference === option.value}
++                onPress={() => setMacroPreference(option.value)}
++              />
++            ))}
++          </View>
++          <Text style={[theme.typography.footnote, { color: theme.colors.textTertiary }]}>
++            ~{prefs.nutritionGoals.proteinG}g protein · {prefs.nutritionGoals.carbsG}g carbs · {prefs.nutritionGoals.fatG}g fat
++          </Text>
++        </View>
++
++        <View style={{ gap: theme.spacing.sm }}>
++          <Text style={[theme.typography.subhead, { color: theme.colors.textPrimary }]}>Weekly grocery budget</Text>
++          <Stepper value={prefs.weeklyGroceryBudget} onChange={setWeeklyGroceryBudget} min={20} max={300} step={5} accessibilityLabel="weekly grocery budget" />
++        </View>
++      </View>
++
+       <View style={{ gap: theme.spacing.lg }}>
+         <SectionHeader title="SmartPrep Priorities" subtitle="Shapes how we recommend meals" />
+         {localPriorities
+@@ -184,6 +266,31 @@ export function ProfileScreen() {
+ 
+       {impactQuery.data ? <KitchenImpactSection impact={impactQuery.data} /> : null}
+ 
++      <View style={{ gap: theme.spacing.sm }}>
++        <SectionHeader title="More" />
++        <Card padded={false} style={{ paddingHorizontal: theme.spacing.md }}>
++          <ListRow
++            title="Notifications"
++            subtitle="Meal reminders, plan updates"
++            showChevron
++            onPress={() => comingSoon('Notifications')}
++          />
++          <ListRow
++            title="Connected Apps"
++            subtitle="Apple Health, Fitbit"
++            showChevron
++            onPress={() => comingSoon('Connected Apps')}
++          />
++          <ListRow
++            title="Data & Privacy"
++            subtitle="Export data, delete account"
++            showChevron
++            isLast
++            onPress={() => comingSoon('Data & Privacy')}
++          />
++        </Card>
++      </View>
++
+       {!prefs.allergies.length && !prefs.favoriteCuisines.length && !prefs.dislikedFoods.length ? (
+         <Text style={[theme.typography.footnote, { color: theme.colors.textTertiary }]}>
+           Add allergies, cuisines, and foods to avoid above to fine-tune your recommendations.
+diff --git a/mobile/features/recipes/components/RecipeCard.tsx b/mobile/features/recipes/components/RecipeCard.tsx
+index c58bf20..15601a6 100644
+--- a/mobile/features/recipes/components/RecipeCard.tsx
++++ b/mobile/features/recipes/components/RecipeCard.tsx
+@@ -5,6 +5,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
+ 
+ import { useTheme } from '@/hooks/useTheme';
+ import { Recipe } from '@/types';
++import { formatMinutes } from '@/utils/format';
+ 
+ interface RecipeCardProps {
+   recipe: Recipe;
+@@ -16,6 +17,7 @@ interface RecipeCardProps {
+ export function RecipeCard({ recipe, onPress, subtitle, width = 190 }: RecipeCardProps) {
+   const theme = useTheme();
+   const [saved, setSaved] = useState(false);
++  const defaultSubtitle = `${formatMinutes(recipe.prepTimeMinutes + recipe.cookTimeMinutes)} · ${Math.round(recipe.nutritionPerServing.calories)} kcal`;
+ 
+   return (
+     <Pressable
+@@ -31,6 +33,9 @@ export function RecipeCard({ recipe, onPress, subtitle, width = 190 }: RecipeCar
+         ]}
+       >
+         <Image source={{ uri: recipe.imageUri }} style={StyleSheet.absoluteFillObject} contentFit="cover" transition={150} />
++        <View style={[styles.matchBadge, { backgroundColor: 'rgba(255,255,255,0.92)' }]}>
++          <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>{recipe.smartMatchScore}% match</Text>
++        </View>
+         <Pressable
+           onPress={() => setSaved((s) => !s)}
+           accessibilityRole="button"
+@@ -44,11 +49,9 @@ export function RecipeCard({ recipe, onPress, subtitle, width = 190 }: RecipeCar
+           <Text numberOfLines={1} style={[theme.typography.subhead, { color: theme.colors.textPrimary }]}>
+             {recipe.title}
+           </Text>
+-          {subtitle ? (
+-            <Text numberOfLines={1} style={[theme.typography.caption, { color: theme.colors.textSecondary, marginTop: 1 }]}>
+-              {subtitle}
+-            </Text>
+-          ) : null}
++          <Text numberOfLines={1} style={[theme.typography.caption, { color: theme.colors.textSecondary, marginTop: 1 }]}>
++            {subtitle ?? defaultSubtitle}
++          </Text>
+         </View>
+       </View>
+     </Pressable>
+@@ -62,6 +65,14 @@ const styles = StyleSheet.create({
+   pressed: {
+     opacity: 0.92,
+   },
++  matchBadge: {
++    position: 'absolute',
++    top: 8,
++    left: 8,
++    borderRadius: 999,
++    paddingVertical: 4,
++    paddingHorizontal: 8,
++  },
+   saveButton: {
+     position: 'absolute',
+     top: 8,
+diff --git a/mobile/features/recipes/screens/RecipeDetailScreen.tsx b/mobile/features/recipes/screens/RecipeDetailScreen.tsx
+index a6cddb1..2d71028 100644
+--- a/mobile/features/recipes/screens/RecipeDetailScreen.tsx
++++ b/mobile/features/recipes/screens/RecipeDetailScreen.tsx
+@@ -4,7 +4,7 @@ import { router, useLocalSearchParams } from 'expo-router';
+ import React from 'react';
+ import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+ 
+-import { Button, EmptyState, LoadingState, ProgressRing, Screen } from '@/components';
++import { Button, EmptyState, LoadingState, NutritionFactsRow, ProgressRing, Screen } from '@/components';
+ import { useAddMissingIngredientsForRecipe, useRecipe } from '@/hooks';
+ import { useTheme } from '@/hooks/useTheme';
+ import { getMissingIngredients, getRecipeAvailability } from '@/services';
+@@ -69,6 +69,27 @@ export function RecipeDetailScreen() {
+           </View>
+         </View>
+ 
++        <NutritionFactsRow facts={recipe.nutritionPerServing} servingLabel="per serving" />
++
++        <View style={{ gap: 6 }}>
++          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
++            <Text style={[theme.typography.subhead, { color: theme.colors.textPrimary }]}>Pantry match</Text>
++            <Text style={[theme.typography.subhead, { color: theme.colors.textSecondary }]}>
++              {owned} of {total} ingredients
++            </Text>
++          </View>
++          <View style={{ height: 6, borderRadius: 3, backgroundColor: theme.colors.surfaceMuted, overflow: 'hidden' }}>
++            <View
++              style={{
++                height: '100%',
++                width: `${total > 0 ? (owned / total) * 100 : 0}%`,
++                backgroundColor: theme.colors.accent,
++                borderRadius: 3,
++              }}
++            />
++          </View>
++        </View>
++
+         {recipe.reasons.length > 0 ? (
+           <View style={{ gap: theme.spacing.sm }}>
+             <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Why this works</Text>
+diff --git a/mobile/features/recipes/screens/RecipeDiscoveryScreen.tsx b/mobile/features/recipes/screens/RecipeDiscoveryScreen.tsx
+index 7500667..4d65a06 100644
+--- a/mobile/features/recipes/screens/RecipeDiscoveryScreen.tsx
++++ b/mobile/features/recipes/screens/RecipeDiscoveryScreen.tsx
+@@ -1,30 +1,100 @@
++import { Ionicons } from '@expo/vector-icons';
+ import { router } from 'expo-router';
+-import React from 'react';
+-import { View } from 'react-native';
++import React, { useMemo, useState } from 'react';
++import { TextInput, View } from 'react-native';
+ 
+-import { EmptyState, LoadingState, Screen, SectionHeader } from '@/components';
+-import { useRecipeCollections } from '@/hooks';
++import { EmptyState, FilterBar, FilterOption, LoadingState, Screen, SectionHeader } from '@/components';
++import { useRecipeCollections, useRecipes } from '@/hooks';
+ import { useTheme } from '@/hooks/useTheme';
+ import { getRecipeAvailability } from '@/services';
+ import { RecipeCarousel } from '../components/RecipeCarousel';
+ 
++type FilterValue = 'all' | 'quick' | 'high_protein' | 'low_carb';
++
++const FILTERS: FilterOption<FilterValue>[] = [
++  { value: 'all', label: 'All' },
++  { value: 'quick', label: '<30 min' },
++  { value: 'high_protein', label: 'High Protein' },
++  { value: 'low_carb', label: 'Low Carb' },
++];
++
+ export function RecipeDiscoveryScreen() {
+   const theme = useTheme();
+   const collectionsQuery = useRecipeCollections();
++  const recipesQuery = useRecipes();
++  const [search, setSearch] = useState('');
++  const [filter, setFilter] = useState<FilterValue>('all');
++
++  const isFiltering = search.trim().length > 0 || filter !== 'all';
++
++  const filteredRecipes = useMemo(() => {
++    const query = search.trim().toLowerCase();
++    return (recipesQuery.data ?? []).filter((recipe) => {
++      if (query && !recipe.title.toLowerCase().includes(query)) return false;
++      if (filter === 'quick' && recipe.prepTimeMinutes + recipe.cookTimeMinutes >= 30) return false;
++      if (filter === 'high_protein' && recipe.nutritionPerServing.proteinG < 20) return false;
++      if (filter === 'low_carb' && recipe.nutritionPerServing.carbsG > 25) return false;
++      return true;
++    });
++  }, [recipesQuery.data, search, filter]);
+ 
+   return (
+     <Screen scroll header edges={['top', 'left', 'right']} contentContainerStyle={{ padding: theme.spacing.lg, gap: theme.spacing.xl }}>
+       <SectionHeader title="Recipes" />
+ 
+-      {collectionsQuery.isLoading ? (
++      <View
++        style={{
++          flexDirection: 'row',
++          alignItems: 'center',
++          gap: 8,
++          borderWidth: 1,
++          borderColor: theme.colors.border,
++          borderRadius: theme.radius.md,
++          paddingHorizontal: 12,
++          backgroundColor: theme.colors.backgroundElevated,
++        }}
++      >
++        <Ionicons name="search" size={18} color={theme.colors.textTertiary} />
++        <TextInput
++          value={search}
++          onChangeText={setSearch}
++          placeholder="Search recipes"
++          placeholderTextColor={theme.colors.textTertiary}
++          accessibilityLabel="Search recipes"
++          style={[theme.typography.body, { flex: 1, color: theme.colors.textPrimary, minHeight: 44 }]}
++        />
++      </View>
++
++      <FilterBar options={FILTERS} selected={filter} onSelect={setFilter} />
++
++      {collectionsQuery.isLoading || recipesQuery.isLoading ? (
+         <LoadingState message="Finding recipes for you..." />
+-      ) : collectionsQuery.isError ? (
++      ) : collectionsQuery.isError || recipesQuery.isError ? (
+         <EmptyState
+           icon="⚠️"
+           title="Couldn't load recipes"
+           actionLabel="Retry"
+-          onActionPress={() => collectionsQuery.refetch()}
++          onActionPress={() => {
++            collectionsQuery.refetch();
++            recipesQuery.refetch();
++          }}
+         />
++      ) : isFiltering ? (
++        filteredRecipes.length === 0 ? (
++          <EmptyState icon="🔍" title="No recipes match" message="Try a different search or filter." />
++        ) : (
++          <View style={{ gap: theme.spacing.sm }}>
++            <SectionHeader title="Results" subtitle={`${filteredRecipes.length} recipe${filteredRecipes.length === 1 ? '' : 's'}`} />
++            <RecipeCarousel
++              recipes={filteredRecipes}
++              getSubtitle={(r) => {
++                const { owned, total } = getRecipeAvailability(r);
++                return `${owned}/${total} ingredients`;
++              }}
++              onPressRecipe={(id) => router.push(`/recipes/${id}`)}
++            />
++          </View>
++        )
+       ) : (
+         collectionsQuery.data
+           ?.filter((collection) => collection.recipes.length > 0)
+@@ -35,7 +105,7 @@ export function RecipeDiscoveryScreen() {
+                 recipes={collection.recipes}
+                 getSubtitle={(r) => {
+                   const { owned, total } = getRecipeAvailability(r);
+-                  return `${owned}/${total} ingredients · ${r.smartMatchScore} Match`;
++                  return `${owned}/${total} ingredients`;
+                 }}
+                 onPressRecipe={(id) => router.push(`/recipes/${id}`)}
+               />
+diff --git a/mobile/features/scan/components/DetectionCard.tsx b/mobile/features/scan/components/DetectionCard.tsx
+index b57fd94..0b0eb90 100644
+--- a/mobile/features/scan/components/DetectionCard.tsx
++++ b/mobile/features/scan/components/DetectionCard.tsx
+@@ -1,8 +1,9 @@
+ import { Ionicons } from '@expo/vector-icons';
+ import React, { useState } from 'react';
+-import { Pressable, Text, View } from 'react-native';
++import { Pressable, ScrollView, Text, View } from 'react-native';
+ 
+ import { Badge, Chip, FreshnessTag, IngredientAvatar } from '@/components';
++import { INGREDIENTS } from '@/data';
+ import { useTheme } from '@/hooks/useTheme';
+ import { useScanSessionStore } from '@/store';
+ import { ScanDetection } from '@/types';
+@@ -10,6 +11,8 @@ import { formatConfidence } from '@/utils/format';
+ import { FRESHNESS_LABELS, FRESHNESS_META, FRESHNESS_OVERRIDE_VALUES } from '@/utils/freshness';
+ import { QuantityVerifier } from './QuantityVerifier';
+ 
++const LOW_CONFIDENCE_THRESHOLD = 0.7;
++
+ interface DetectionCardProps {
+   detection: ScanDetection;
+   isActive: boolean;
+@@ -22,6 +25,8 @@ export function DetectionCard({ detection, isActive, onPress }: DetectionCardPro
+   const removeDetection = useScanSessionStore((s) => s.removeDetection);
+   const restoreDetection = useScanSessionStore((s) => s.restoreDetection);
+   const [editingFreshness, setEditingFreshness] = useState(false);
++  const [reclassifying, setReclassifying] = useState(false);
++  const isLowConfidence = detection.detectionConfidence < LOW_CONFIDENCE_THRESHOLD;
+ 
+   if (detection.isRemoved) {
+     return (
+@@ -77,6 +82,43 @@ export function DetectionCard({ detection, isActive, onPress }: DetectionCardPro
+           </View>
+           <Badge label={`${formatConfidence(detection.detectionConfidence)} detection confidence`} tone="neutral" />
+ 
++          {isLowConfidence ? (
++            <View style={{ gap: 6 }}>
++              <Text style={[theme.typography.footnote, { color: theme.colors.freshness.useSoon }]}>
++                We're not fully sure this is {detection.name}.
++              </Text>
++              <Pressable
++                onPress={() => setReclassifying((v) => !v)}
++                accessibilityRole="button"
++                accessibilityLabel="Did we get this right? Change ingredient"
++              >
++                <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>
++                  {reclassifying ? 'Cancel' : 'Not quite? Change ingredient'}
++                </Text>
++              </Pressable>
++              {reclassifying ? (
++                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxHeight: 40 }} contentContainerStyle={{ gap: 6 }}>
++                  {INGREDIENTS.map((ingredient) => (
++                    <Chip
++                      key={ingredient.id}
++                      label={ingredient.name}
++                      onPress={() => {
++                        updateDetection(detection.id, {
++                          ingredientId: ingredient.id,
++                          name: ingredient.name,
++                          imageUri: ingredient.imageUri,
++                          category: ingredient.category,
++                          detectionConfidence: 1,
++                        });
++                        setReclassifying(false);
++                      }}
++                    />
++                  ))}
++                </ScrollView>
++              ) : null}
++            </View>
++          ) : null}
++
+           <QuantityVerifier
+             quantity={detection.quantity}
+             onChange={(value) =>
+diff --git a/mobile/features/scan/screens/CaptureScreen.tsx b/mobile/features/scan/screens/CaptureScreen.tsx
+index 7b54f90..2b32197 100644
+--- a/mobile/features/scan/screens/CaptureScreen.tsx
++++ b/mobile/features/scan/screens/CaptureScreen.tsx
+@@ -1,4 +1,5 @@
+ import { Ionicons } from '@expo/vector-icons';
++import { Image } from 'expo-image';
+ import { router, useLocalSearchParams } from 'expo-router';
+ import React, { useState } from 'react';
+ import { Pressable, StyleSheet, Text, View } from 'react-native';
+@@ -6,20 +7,21 @@ import { SafeAreaView } from 'react-native-safe-area-context';
+ 
+ import { ScanMode, ScanSection } from '@/types';
+ import { haptics } from '@/utils/haptics';
++import { placeholderPhotoUri } from '@/utils/ingredientPhoto';
+ import { SECTION_LABELS } from '../constants';
+ 
+ export function CaptureScreen() {
+   const { mode, section } = useLocalSearchParams<{ mode: ScanMode; section: ScanSection }>();
+   const [capturing, setCapturing] = useState(false);
+   const label = SECTION_LABELS[section] ?? 'your kitchen';
++  const previewUri = placeholderPhotoUri(`scan-${mode}-${section}`, 900, 1200);
+ 
+   const handleCapture = () => {
+     if (capturing) return;
+     haptics.tap();
+     setCapturing(true);
+     setTimeout(() => {
+-      const imageUri = `https://picsum.photos/seed/scan-${mode}-${section}/900/1200`;
+-      router.replace({ pathname: '/scan/processing', params: { mode, section, imageUri } });
++      router.replace({ pathname: '/scan/processing', params: { mode, section, imageUri: previewUri } });
+     }, 350);
+   };
+ 
+@@ -41,6 +43,8 @@ export function CaptureScreen() {
+         </View>
+ 
+         <View style={styles.viewfinder}>
++          <Image source={{ uri: previewUri }} style={StyleSheet.absoluteFillObject} contentFit="cover" transition={200} />
++          <View style={styles.dim} />
+           <View style={[styles.corner, styles.cornerTL]} />
+           <View style={[styles.corner, styles.cornerTR]} />
+           <View style={[styles.corner, styles.cornerBL]} />
+@@ -97,16 +101,24 @@ const styles = StyleSheet.create({
+     backgroundColor: '#1c1c1c',
+     alignItems: 'center',
+     justifyContent: 'center',
++    overflow: 'hidden',
++  },
++  dim: {
++    ...StyleSheet.absoluteFillObject,
++    backgroundColor: 'rgba(0,0,0,0.25)',
+   },
+   hint: {
+-    color: 'rgba(255,255,255,0.75)',
++    color: '#fff',
+     fontSize: 15,
++    textShadowColor: 'rgba(0,0,0,0.6)',
++    textShadowRadius: 6,
++    textShadowOffset: { width: 0, height: 1 },
+   },
+   corner: {
+     position: 'absolute',
+     width: CORNER_SIZE,
+     height: CORNER_SIZE,
+-    borderColor: 'rgba(255,255,255,0.8)',
++    borderColor: '#fff',
+   },
+   cornerTL: { top: 16, left: 16, borderTopWidth: 3, borderLeftWidth: 3, borderTopLeftRadius: 12 },
+   cornerTR: { top: 16, right: 16, borderTopWidth: 3, borderRightWidth: 3, borderTopRightRadius: 12 },
+diff --git a/mobile/store/onboardingStore.ts b/mobile/store/onboardingStore.ts
+index fbd8c7a..266172d 100644
+--- a/mobile/store/onboardingStore.ts
++++ b/mobile/store/onboardingStore.ts
+@@ -7,9 +7,12 @@ import {
+   CookingConfidence,
+   CookingTimePreference,
+   DietaryPreference,
++  MacroPreference,
+   SmartPrepPriorities,
+   UserPreferences,
++  WeightGoalDirection,
+ } from '@/types';
++import { computeMacroGoals } from '@/utils/nutrition';
+ 
+ type ListField = 'allergies' | 'favoriteCuisines' | 'dislikedFoods';
+ 
+@@ -22,6 +25,12 @@ interface OnboardingDraft {
+   cookingTime: CookingTimePreference;
+   cookingConfidence: CookingConfidence;
+   priorities: SmartPrepPriorities;
++  weightGoalDirection: WeightGoalDirection;
++  weightGoalTargetLbs: number;
++  weightGoalTargetDate: string;
++  dailyCalories: number;
++  macroPreference: MacroPreference;
++  weeklyGroceryBudget: number;
+ }
+ 
+ const DEFAULT_DRAFT: OnboardingDraft = {
+@@ -40,6 +49,12 @@ const DEFAULT_DRAFT: OnboardingDraft = {
+     cookQuickly: 50,
+     tryNewFoods: 50,
+   },
++  weightGoalDirection: 'maintain',
++  weightGoalTargetLbs: 0,
++  weightGoalTargetDate: new Date(Date.now() + 1000 * 60 * 60 * 24 * 60).toISOString().slice(0, 10),
++  dailyCalories: 2000,
++  macroPreference: 'balanced',
++  weeklyGroceryBudget: 75,
+ };
+ 
+ interface OnboardingState extends OnboardingDraft {
+@@ -49,6 +64,12 @@ interface OnboardingState extends OnboardingDraft {
+   setCookingTime: (value: CookingTimePreference) => void;
+   setCookingConfidence: (value: CookingConfidence) => void;
+   setPriority: (key: keyof SmartPrepPriorities, value: number) => void;
++  setWeightGoalDirection: (value: WeightGoalDirection) => void;
++  setWeightGoalTargetLbs: (value: number) => void;
++  setWeightGoalTargetDate: (value: string) => void;
++  setDailyCalories: (value: number) => void;
++  setMacroPreference: (value: MacroPreference) => void;
++  setWeeklyGroceryBudget: (value: number) => void;
+   reset: () => void;
+   toPreferences: () => UserPreferences;
+ }
+@@ -87,10 +108,18 @@ export const useOnboardingStore = create<OnboardingState>()(
+       setPriority: (key, value) =>
+         set((state) => ({ priorities: { ...state.priorities, [key]: value } })),
+ 
++      setWeightGoalDirection: (value) => set({ weightGoalDirection: value }),
++      setWeightGoalTargetLbs: (value) => set({ weightGoalTargetLbs: value }),
++      setWeightGoalTargetDate: (value) => set({ weightGoalTargetDate: value }),
++      setDailyCalories: (value) => set({ dailyCalories: value }),
++      setMacroPreference: (value) => set({ macroPreference: value }),
++      setWeeklyGroceryBudget: (value) => set({ weeklyGroceryBudget: value }),
++
+       reset: () => set(DEFAULT_DRAFT),
+ 
+       toPreferences: () => {
+         const state = get();
++        const macros = computeMacroGoals(state.dailyCalories, state.macroPreference);
+         return {
+           dietary: state.dietary,
+           allergies: state.allergies,
+@@ -99,6 +128,17 @@ export const useOnboardingStore = create<OnboardingState>()(
+           cookingTime: state.cookingTime,
+           cookingConfidence: state.cookingConfidence,
+           priorities: state.priorities,
++          nutritionGoals: {
++            dailyCalories: state.dailyCalories,
++            macroPreference: state.macroPreference,
++            ...macros,
++          },
++          weightGoal: {
++            direction: state.weightGoalDirection,
++            targetLbs: state.weightGoalTargetLbs,
++            targetDate: state.weightGoalTargetDate,
++          },
++          weeklyGroceryBudget: state.weeklyGroceryBudget,
+         };
+       },
+     }),
+diff --git a/mobile/types/grocery.ts b/mobile/types/grocery.ts
+index 77c6141..25d1c04 100644
+--- a/mobile/types/grocery.ts
++++ b/mobile/types/grocery.ts
+@@ -11,6 +11,11 @@ export interface GroceryListItem {
+   isChecked: boolean;
+   sourceRecipeIds?: string[];
+   isManuallyAdded?: boolean;
++  estimatedPrice?: number;
++  /** e.g. "Swap: Cucumber" - a lower-waste substitution suggestion. */
++  swapSuggestion?: string;
++  /** e.g. "Use stems in soup" - a tip to reduce waste from this item. */
++  wasteNote?: string;
+ }
+ 
+ export interface GroceryList {
+diff --git a/mobile/types/impact.ts b/mobile/types/impact.ts
+index 5af2c10..23e279f 100644
+--- a/mobile/types/impact.ts
++++ b/mobile/types/impact.ts
+@@ -5,4 +5,7 @@ export interface KitchenImpact {
+   estimatedFoodValueUtilized: number;
+   pantryUtilizationPercent: number;
+   itemsDiscarded: number;
++  /** Estimated, not measured - phrased as an estimate everywhere it's shown. */
++  estimatedFoodSavedLbs: number;
++  cookingStreakDays: number;
+ }
+diff --git a/mobile/types/index.ts b/mobile/types/index.ts
+index 674c2d2..22c37d3 100644
+--- a/mobile/types/index.ts
++++ b/mobile/types/index.ts
+@@ -1,5 +1,6 @@
+ export * from './common';
+ export * from './freshness';
++export * from './nutrition';
+ export * from './ingredient';
+ export * from './pantry';
+ export * from './scan';
+diff --git a/mobile/types/ingredient.ts b/mobile/types/ingredient.ts
+index ea65fdd..e1d3a47 100644
+--- a/mobile/types/ingredient.ts
++++ b/mobile/types/ingredient.ts
+@@ -1,4 +1,5 @@
+ import { IngredientCategory, QuantityUnit } from './common';
++import { NutritionFacts } from './nutrition';
+ 
+ /**
+  * Canonical catalog entry for an ingredient - the "what is this" record.
+@@ -13,4 +14,8 @@ export interface Ingredient {
+   /** Real photo URL representing this ingredient. */
+   imageUri: string;
+   defaultUnit: QuantityUnit;
++  /** Nutrition for one fixed reference serving (see `servingDescription`) - not scaled by pantry quantity. */
++  nutritionPerServing: NutritionFacts;
++  /** e.g. "1/2 cup", "1 egg" - the serving `nutritionPerServing` describes. */
++  servingDescription: string;
+ }
+diff --git a/mobile/types/nutrition.ts b/mobile/types/nutrition.ts
+new file mode 100644
+index 0000000..1c2c6f5
+--- /dev/null
++++ b/mobile/types/nutrition.ts
+@@ -0,0 +1,7 @@
++export interface NutritionFacts {
++  calories: number;
++  proteinG: number;
++  carbsG: number;
++  fatG: number;
++  fiberG: number;
++}
+diff --git a/mobile/types/recipe.ts b/mobile/types/recipe.ts
+index a50cf5d..353d96a 100644
+--- a/mobile/types/recipe.ts
++++ b/mobile/types/recipe.ts
+@@ -1,4 +1,5 @@
+ import { QuantityUnit } from './common';
++import { NutritionFacts } from './nutrition';
+ 
+ export type RecipeDifficulty = 'easy' | 'medium' | 'hard';
+ 
+@@ -43,6 +44,7 @@ export interface Recipe {
+   additionalCostEstimate: number;
+   /** 0-100 SmartPrep Match score. Hydrated by recipeService alongside `reasons`. */
+   smartMatchScore: number;
++  nutritionPerServing: NutritionFacts;
+   reasons: RecommendationReason[];
+   ingredients: RecipeIngredient[];
+   steps: string[];
+diff --git a/mobile/types/user.ts b/mobile/types/user.ts
+index 2724b28..9a0e933 100644
+--- a/mobile/types/user.ts
++++ b/mobile/types/user.ts
+@@ -22,6 +22,26 @@ export interface SmartPrepPriorities {
+   tryNewFoods: number;
+ }
+ 
++export type MacroPreference = 'balanced' | 'low_carb' | 'high_protein';
++
++export interface NutritionGoals {
++  dailyCalories: number;
++  macroPreference: MacroPreference;
++  proteinG: number;
++  carbsG: number;
++  fatG: number;
++  fiberG: number;
++}
++
++export type WeightGoalDirection = 'lose' | 'maintain' | 'gain';
++
++export interface WeightGoal {
++  direction: WeightGoalDirection;
++  targetLbs: number;
++  /** ISO date. */
++  targetDate: string;
++}
++
+ export interface UserPreferences {
+   dietary: DietaryPreference[];
+   allergies: string[];
+@@ -30,6 +50,9 @@ export interface UserPreferences {
+   cookingTime: CookingTimePreference;
+   cookingConfidence: CookingConfidence;
+   priorities: SmartPrepPriorities;
++  nutritionGoals: NutritionGoals;
++  weightGoal: WeightGoal;
++  weeklyGroceryBudget: number;
+ }
+ 
+ export type AuthProvider = 'apple' | 'google' | 'email' | null;
+diff --git a/mobile/utils/nutrition.ts b/mobile/utils/nutrition.ts
+new file mode 100644
+index 0000000..6d5fb48
+--- /dev/null
++++ b/mobile/utils/nutrition.ts
+@@ -0,0 +1,48 @@
++import { IngredientCategory, MacroPreference, NutritionFacts } from '@/types';
++
++const EMPTY: NutritionFacts = { calories: 0, proteinG: 0, carbsG: 0, fatG: 0, fiberG: 0 };
++
++export function sumNutrition(list: NutritionFacts[]): NutritionFacts {
++  return list.reduce(
++    (total, item) => ({
++      calories: total.calories + item.calories,
++      proteinG: total.proteinG + item.proteinG,
++      carbsG: total.carbsG + item.carbsG,
++      fatG: total.fatG + item.fatG,
++      fiberG: total.fiberG + item.fiberG,
++    }),
++    EMPTY,
++  );
++}
++
++export function macroPercent(value: number, goal: number): number {
++  if (goal <= 0) return 0;
++  return Math.round((value / goal) * 100);
++}
++
++const MACRO_SPLITS: Record<MacroPreference, { protein: number; carbs: number; fat: number }> = {
++  balanced: { protein: 0.3, carbs: 0.45, fat: 0.25 },
++  low_carb: { protein: 0.35, carbs: 0.2, fat: 0.45 },
++  high_protein: { protein: 0.4, carbs: 0.35, fat: 0.25 },
++};
++
++/** Derives macro gram targets from a daily-calorie goal using standard percentage splits. */
++export function computeMacroGoals(dailyCalories: number, macroPreference: MacroPreference) {
++  const split = MACRO_SPLITS[macroPreference];
++  return {
++    proteinG: Math.round((dailyCalories * split.protein) / 4),
++    carbsG: Math.round((dailyCalories * split.carbs) / 4),
++    fatG: Math.round((dailyCalories * split.fat) / 9),
++    fiberG: Math.round((dailyCalories / 1000) * 14),
++  };
++}
++
++/** Category-level (not per-item) storage guidance - a reasonable general tip, not a personalized AI claim. */
++export const STORAGE_TIPS: Record<IngredientCategory, string> = {
++  produce: 'Keep loosely wrapped in the crisper drawer; wash just before using to help it last longer.',
++  protein: 'Keep in the coldest part of the fridge and use within a few days, or freeze if not using soon.',
++  dairy: 'Store toward the back of the fridge where it stays coldest, not in the door.',
++  pantry: 'Keep in a cool, dry, airtight container away from direct sunlight.',
++  frozen: "Keep at 0°F (-18°C) or below; once thawed, don't refreeze.",
++  other: 'Store according to the package instructions in a cool, dry place.',
++};

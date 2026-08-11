@@ -2,11 +2,15 @@ import { router, useLocalSearchParams } from 'expo-router';
 import React from 'react';
 import { Alert, ScrollView, Text, View } from 'react-native';
 
-import { Button, Chip, EmptyState, FreshnessTag, IngredientAvatar, LoadingState, Screen, Stepper } from '@/components';
-import { usePantryItem, useRemovePantryItem, useUpdatePantryItem, useUpdatePantryItemFreshness, useUseSomePantryItem } from '@/hooks';
+import { Button, Chip, EmptyState, FreshnessTag, IngredientAvatar, LoadingState, NutritionFactsRow, Screen, Stepper } from '@/components';
+import { INGREDIENTS_BY_ID } from '@/data';
+import { usePantryItem, useRecipes, useRemovePantryItem, useUpdatePantryItem, useUpdatePantryItemFreshness, useUseSomePantryItem } from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
 import { IngredientCategory, QuantityUnit } from '@/types';
 import { FRESHNESS_LABELS, FRESHNESS_META, FRESHNESS_OVERRIDE_VALUES } from '@/utils/freshness';
+import { FreshnessTimeline } from '../components/FreshnessTimeline';
+import { RecipesUsingIngredient } from '../components/RecipesUsingIngredient';
+import { StorageTipCard } from '../components/StorageTipCard';
 
 const CATEGORY_OPTIONS: { value: IngredientCategory; label: string }[] = [
   { value: 'produce', label: 'Produce' },
@@ -25,6 +29,7 @@ export function PantryItemDetailScreen() {
   const theme = useTheme();
   const { id } = useLocalSearchParams<{ id: string }>();
   const itemQuery = usePantryItem(id);
+  const recipesQuery = useRecipes();
   const updateItem = useUpdatePantryItem();
   const updateFreshness = useUpdatePantryItemFreshness();
   const useSome = useUseSomePantryItem();
@@ -47,6 +52,11 @@ export function PantryItemDetailScreen() {
   }
 
   const item = itemQuery.data;
+  /** Manually-added items don't have a catalog entry, so nutrition facts are unavailable for them. */
+  const catalogIngredient = INGREDIENTS_BY_ID[item.ingredientId];
+  const recipesUsingIngredient = (recipesQuery.data ?? []).filter((recipe) =>
+    recipe.ingredients.some((i) => i.ingredientId === item.ingredientId),
+  );
 
   const confirmAndRemove = (title: string, message: string, reason: 'finished' | 'discarded' | 'removed') => {
     Alert.alert(title, message, [
@@ -71,6 +81,8 @@ export function PantryItemDetailScreen() {
           </Text>
         ) : null}
       </View>
+
+      <FreshnessTimeline item={item} />
 
       <View style={{ gap: theme.spacing.sm }}>
         <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Quantity</Text>
@@ -131,6 +143,17 @@ export function PantryItemDetailScreen() {
           ))}
         </View>
       </View>
+
+      {catalogIngredient ? (
+        <NutritionFactsRow facts={catalogIngredient.nutritionPerServing} servingLabel={catalogIngredient.servingDescription} />
+      ) : null}
+
+      <StorageTipCard category={item.category} />
+
+      <RecipesUsingIngredient
+        recipes={recipesUsingIngredient}
+        onPressRecipe={(recipeId) => router.push(`/recipes/${recipeId}`)}
+      />
 
       <View style={{ gap: theme.spacing.sm }}>
         <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Actions</Text>

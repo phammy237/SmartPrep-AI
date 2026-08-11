@@ -2,7 +2,7 @@ import { router } from 'expo-router';
 import React from 'react';
 import { Text, View } from 'react-native';
 
-import { Button, Screen } from '@/components';
+import { Button, Screen, SmartPrepLogo } from '@/components';
 import { useTheme } from '@/hooks/useTheme';
 
 export function WelcomeScreen() {
@@ -11,18 +11,8 @@ export function WelcomeScreen() {
   return (
     <Screen contentContainerStyle={{ padding: theme.spacing.xl, justifyContent: 'space-between' }}>
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: theme.spacing.lg }}>
-        <View
-          style={{
-            width: 88,
-            height: 88,
-            borderRadius: 44,
-            backgroundColor: theme.colors.accentMuted,
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          <Text style={{ fontSize: 44 }}>🥗</Text>
-        </View>
+        <SmartPrepLogo size={80} />
+        <Text style={[theme.typography.title2, { color: theme.colors.textPrimary }]}>SmartPrep AI</Text>
         <Text
           style={[
             theme.typography.largeTitle,

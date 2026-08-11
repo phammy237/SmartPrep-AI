@@ -149,7 +149,7 @@ export const GUIDED_SCAN_SECTIONS: Record<'fridge' | 'freezer' | 'pantry', ScanD
     },
     {
       ingredientId: 'ing-ice-cream',
-      detectionConfidence: 0.72,
+      detectionConfidence: 0.62,
       quantity: quantityOf(1, 'container', 0.55),
       freshness: freshnessOf(50, 0.5),
     },

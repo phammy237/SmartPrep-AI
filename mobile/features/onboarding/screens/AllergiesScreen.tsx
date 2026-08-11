@@ -31,7 +31,7 @@ export function AllergiesScreen() {
 
   return (
     <Screen scroll>
-      <OnboardingProgress step={3} total={6} onBack={() => router.back()} />
+      <OnboardingProgress step={3} total={7} onBack={() => router.back()} />
       <View style={{ padding: theme.spacing.xl, gap: theme.spacing.xl }}>
         <View style={{ gap: theme.spacing.xs }}>
           <Text style={[theme.typography.title1, { color: theme.colors.textPrimary }]}>
