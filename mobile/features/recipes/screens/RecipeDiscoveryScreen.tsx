@@ -71,7 +71,6 @@ export function RecipeDiscoveryScreen() {
         <LoadingState message="Finding recipes for you..." />
       ) : collectionsQuery.isError || recipesQuery.isError ? (
         <EmptyState
-          icon="⚠️"
           title="Couldn't load recipes"
           actionLabel="Retry"
           onActionPress={() => {
@@ -81,7 +80,7 @@ export function RecipeDiscoveryScreen() {
         />
       ) : isFiltering ? (
         filteredRecipes.length === 0 ? (
-          <EmptyState icon="🔍" title="No recipes match" message="Try a different search or filter." />
+          <EmptyState title="No recipes match" message="Try a different search or filter." />
         ) : (
           <View style={{ gap: theme.spacing.sm }}>
             <SectionHeader title="Results" subtitle={`${filteredRecipes.length} recipe${filteredRecipes.length === 1 ? '' : 's'}`} />

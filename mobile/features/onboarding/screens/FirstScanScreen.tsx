@@ -24,18 +24,6 @@ export function FirstScanScreen() {
   return (
     <Screen contentContainerStyle={{ padding: theme.spacing.xl, justifyContent: 'space-between' }}>
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: theme.spacing.lg }}>
-        <View
-          style={{
-            width: 88,
-            height: 88,
-            borderRadius: 44,
-            backgroundColor: theme.colors.accentMuted,
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          <Text style={{ fontSize: 44 }}>📷</Text>
-        </View>
         <Text style={[theme.typography.largeTitle, { color: theme.colors.textPrimary, textAlign: 'center' }]}>
           Let's see what's in your kitchen.
         </Text>

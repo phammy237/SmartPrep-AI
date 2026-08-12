@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Alert, ScrollView, Text, View } from 'react-native';
 
 import { Button, Chip, EmptyState, FreshnessTag, IngredientAvatar, LoadingState, NutritionFactsRow, Screen, Stepper } from '@/components';
@@ -35,6 +35,14 @@ export function PantryItemDetailScreen() {
   const useSome = useUseSomePantryItem();
   const removeItem = useRemovePantryItem();
 
+  const recipesUsingIngredient = useMemo(
+    () =>
+      (recipesQuery.data ?? []).filter((recipe) =>
+        recipe.ingredients.some((i) => i.ingredientId === itemQuery.data?.ingredientId),
+      ),
+    [recipesQuery.data, itemQuery.data?.ingredientId],
+  );
+
   if (itemQuery.isLoading) {
     return (
       <Screen>
@@ -46,7 +54,7 @@ export function PantryItemDetailScreen() {
   if (!itemQuery.data) {
     return (
       <Screen>
-        <EmptyState icon="🔍" title="Item not found" message="This item may have already been removed." />
+        <EmptyState title="Item not found" message="This item may have already been removed." />
       </Screen>
     );
   }
@@ -54,9 +62,6 @@ export function PantryItemDetailScreen() {
   const item = itemQuery.data;
   /** Manually-added items don't have a catalog entry, so nutrition facts are unavailable for them. */
   const catalogIngredient = INGREDIENTS_BY_ID[item.ingredientId];
-  const recipesUsingIngredient = (recipesQuery.data ?? []).filter((recipe) =>
-    recipe.ingredients.some((i) => i.ingredientId === item.ingredientId),
-  );
 
   const confirmAndRemove = (title: string, message: string, reason: 'finished' | 'discarded' | 'removed') => {
     Alert.alert(title, message, [

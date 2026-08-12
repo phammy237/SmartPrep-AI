@@ -77,10 +77,9 @@ export function GroceryScreen() {
       {listQuery.isLoading ? (
         <LoadingState message="Loading your list..." />
       ) : listQuery.isError ? (
-        <EmptyState icon="⚠️" title="Couldn't load your list" actionLabel="Retry" onActionPress={() => listQuery.refetch()} />
+        <EmptyState title="Couldn't load your list" actionLabel="Retry" onActionPress={() => listQuery.refetch()} />
       ) : !listQuery.data || listQuery.data.items.length === 0 ? (
         <EmptyState
-          icon="🛒"
           title="Your list is empty"
           message="Add items from a recipe or manually below."
         />

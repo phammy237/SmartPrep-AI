@@ -51,7 +51,6 @@ export function PantryScreen() {
         <LoadingState fullscreen message="Loading your pantry..." />
       ) : pantryQuery.isError ? (
         <EmptyState
-          icon="⚠️"
           title="Couldn't load pantry"
           message="Something went wrong. Please try again."
           actionLabel="Retry"
@@ -59,7 +58,6 @@ export function PantryScreen() {
         />
       ) : filtered.length === 0 ? (
         <EmptyState
-          icon="🧺"
           title={pantryQuery.data && pantryQuery.data.length > 0 ? 'No items in this filter' : 'Your pantry is empty'}
           message={
             pantryQuery.data && pantryQuery.data.length > 0

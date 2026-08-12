@@ -37,7 +37,7 @@ export function CookingModeScreen() {
   if (!recipeQuery.data) {
     return (
       <Screen>
-        <EmptyState icon="🔍" title="Recipe not found" />
+        <EmptyState title="Recipe not found" />
       </Screen>
     );
   }

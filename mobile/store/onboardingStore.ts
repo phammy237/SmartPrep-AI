@@ -12,7 +12,7 @@ import {
   UserPreferences,
   WeightGoalDirection,
 } from '@/types';
-import { computeMacroGoals } from '@/utils/nutrition';
+import { computeMacroGoals, daysFromToday } from '@/utils/nutrition';
 
 type ListField = 'allergies' | 'favoriteCuisines' | 'dislikedFoods';
 
@@ -51,7 +51,7 @@ const DEFAULT_DRAFT: OnboardingDraft = {
   },
   weightGoalDirection: 'maintain',
   weightGoalTargetLbs: 0,
-  weightGoalTargetDate: new Date(Date.now() + 1000 * 60 * 60 * 24 * 60).toISOString().slice(0, 10),
+  weightGoalTargetDate: daysFromToday(60),
   dailyCalories: 2000,
   macroPreference: 'balanced',
   weeklyGroceryBudget: 75,

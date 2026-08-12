@@ -5,7 +5,11 @@ import { Card, Chip, ChipGroup, ConfidenceSelector, EmptyState, ListRow, Loading
 import { useKitchenImpact, useUpdatePreferences, useUser } from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
 import { CookingTimePreference, DietaryPreference, MacroPreference, SmartPrepPriorities, WeightGoalDirection } from '@/types';
-import { computeMacroGoals } from '@/utils/nutrition';
+import {
+  computeMacroGoals,
+  MACRO_PREFERENCE_OPTIONS as MACRO_OPTIONS,
+  WEIGHT_GOAL_DIRECTION_OPTIONS as DIRECTION_OPTIONS,
+} from '@/utils/nutrition';
 import { KitchenImpactSection } from '../components/KitchenImpactSection';
 import { ProfileHeader } from '../components/ProfileHeader';
 
@@ -25,18 +29,6 @@ const TIME_OPTIONS: { value: CookingTimePreference; label: string }[] = [
   { value: '15_30', label: '15-30 min' },
   { value: '30_60', label: '30-60 min' },
   { value: 'no_preference', label: "Doesn't matter" },
-];
-
-const DIRECTION_OPTIONS: { value: WeightGoalDirection; label: string }[] = [
-  { value: 'lose', label: 'Lose weight' },
-  { value: 'maintain', label: 'Maintain' },
-  { value: 'gain', label: 'Gain weight' },
-];
-
-const MACRO_OPTIONS: { value: MacroPreference; label: string }[] = [
-  { value: 'balanced', label: 'Balanced' },
-  { value: 'low_carb', label: 'Low Carb' },
-  { value: 'high_protein', label: 'High Protein' },
 ];
 
 const PRIORITY_FIELDS: { key: keyof SmartPrepPriorities; label: string }[] = [
@@ -76,7 +68,7 @@ export function ProfileScreen() {
   if (!userQuery.data) {
     return (
       <Screen>
-        <EmptyState icon="⚠️" title="Couldn't load profile" actionLabel="Retry" onActionPress={() => userQuery.refetch()} />
+        <EmptyState title="Couldn't load profile" actionLabel="Retry" onActionPress={() => userQuery.refetch()} />
       </Screen>
     );
   }

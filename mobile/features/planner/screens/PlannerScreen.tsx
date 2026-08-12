@@ -68,7 +68,6 @@ export function PlannerScreen() {
     return (
       <Screen>
         <EmptyState
-          icon="⚠️"
           title="Couldn't load your plan"
           actionLabel="Retry"
           onActionPress={() => mealPlanQuery.refetch()}

@@ -7,6 +7,7 @@ import { RecipeCarousel } from '@/features/recipes/components/RecipeCarousel';
 import { useKitchenImpact, useMealPlan, usePantry, useRecipeCollections, useRecipes, useUser } from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
 import { countIngredientsNeedingAttention, getRecipeAvailability } from '@/services';
+import { currentWeekday } from '@/utils/date';
 import { freshnessSortWeight } from '@/utils/freshness';
 import { sumNutrition } from '@/utils/nutrition';
 import { GreetingHeader } from '../components/GreetingHeader';
@@ -52,10 +53,10 @@ export function HomeScreen() {
     [mealPlanQuery.data],
   );
 
-  /** Always Monday's plan (not the real device date) so the card stays populated whenever this is demoed. */
   const todaysNutrition = useMemo(() => {
-    const mondayItems = (mealPlanQuery.data?.items ?? []).filter((item) => item.day === 'mon');
-    const facts = mondayItems
+    const today = currentWeekday();
+    const todaysItems = (mealPlanQuery.data?.items ?? []).filter((item) => item.day === today);
+    const facts = todaysItems
       .map((item) => recipesById[item.recipeId]?.nutritionPerServing)
       .filter((f): f is NonNullable<typeof f> => !!f);
     return sumNutrition(facts);
@@ -78,7 +79,6 @@ export function HomeScreen() {
     return (
       <Screen>
         <EmptyState
-          icon="⚠️"
           title="Couldn't load Home"
           message="Something went wrong loading your kitchen. Please try again."
           actionLabel="Retry"

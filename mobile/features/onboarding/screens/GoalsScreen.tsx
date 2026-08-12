@@ -5,15 +5,13 @@ import { Text, View } from 'react-native';
 import { Button, Chip, Screen, Stepper } from '@/components';
 import { useTheme } from '@/hooks/useTheme';
 import { useOnboardingStore } from '@/store';
-import { WeightGoalDirection } from '@/types';
-import { computeMacroGoals } from '@/utils/nutrition';
+import {
+  computeMacroGoals,
+  daysFromToday,
+  MACRO_PREFERENCE_OPTIONS as MACRO_OPTIONS,
+  WEIGHT_GOAL_DIRECTION_OPTIONS as DIRECTION_OPTIONS,
+} from '@/utils/nutrition';
 import { OnboardingProgress } from '../components/OnboardingProgress';
-
-const DIRECTION_OPTIONS: { value: WeightGoalDirection; label: string }[] = [
-  { value: 'lose', label: 'Lose weight' },
-  { value: 'maintain', label: 'Maintain' },
-  { value: 'gain', label: 'Gain weight' },
-];
 
 const TIMEFRAME_OPTIONS = [
   { label: '4 weeks', weeks: 4 },
@@ -21,16 +19,8 @@ const TIMEFRAME_OPTIONS = [
   { label: '12 weeks', weeks: 12 },
 ];
 
-const MACRO_OPTIONS: { value: 'balanced' | 'low_carb' | 'high_protein'; label: string }[] = [
-  { value: 'balanced', label: 'Balanced' },
-  { value: 'low_carb', label: 'Low Carb' },
-  { value: 'high_protein', label: 'High Protein' },
-];
-
 function weeksFromToday(weeks: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + weeks * 7);
-  return d.toISOString().slice(0, 10);
+  return daysFromToday(weeks * 7);
 }
 
 export function GoalsScreen() {

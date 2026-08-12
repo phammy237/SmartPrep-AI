@@ -7,7 +7,7 @@ import { Button, Screen } from '@/components';
 import { useTheme } from '@/hooks/useTheme';
 import { useScanSessionStore } from '@/store';
 import { ScanSection } from '@/types';
-import { GUIDED_SECTIONS, SECTION_ICONS, SECTION_LABELS } from '../constants';
+import { GUIDED_SECTIONS, SECTION_LABELS } from '../constants';
 
 export function GuidedSectionsScreen() {
   const theme = useTheme();
@@ -53,18 +53,6 @@ export function GuidedSectionsScreen() {
                 padding: theme.spacing.lg,
               }}
             >
-              <View
-                style={{
-                  width: 48,
-                  height: 48,
-                  borderRadius: 24,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  backgroundColor: status === 'captured' ? theme.colors.accentMuted : theme.colors.surfaceMuted,
-                }}
-              >
-                <Text style={{ fontSize: 22 }}>{SECTION_ICONS[section]}</Text>
-              </View>
               <View style={{ flex: 1, gap: 2 }}>
                 <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>
                   {SECTION_LABELS[section]}

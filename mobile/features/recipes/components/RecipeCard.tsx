@@ -17,34 +17,30 @@ interface RecipeCardProps {
 export function RecipeCard({ recipe, onPress, subtitle, width = 190 }: RecipeCardProps) {
   const theme = useTheme();
   const [saved, setSaved] = useState(false);
-  const defaultSubtitle = `${formatMinutes(recipe.prepTimeMinutes + recipe.cookTimeMinutes)} · ${Math.round(recipe.nutritionPerServing.calories)} kcal`;
+  const defaultSubtitle = subtitle
+    ? undefined
+    : `${formatMinutes(recipe.prepTimeMinutes + recipe.cookTimeMinutes)} · ${Math.round(recipe.nutritionPerServing.calories)} kcal`;
 
   return (
-    <Pressable
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={recipe.title}
-      style={({ pressed }) => [{ width }, pressed && styles.pressed]}
-    >
-      <View
-        style={[
+    // The save-heart below is a sibling, not a descendant, of this Pressable: nesting two
+    // interactive elements renders as a `<button>` inside a `<button>` on web, which is invalid
+    // HTML and breaks click handling. Stacking them as absolutely-positioned siblings keeps the
+    // whole card tappable while letting the heart remain an independent, correctly nested control.
+    <View style={{ width }}>
+      <Pressable
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={recipe.title}
+        style={({ pressed }) => [
           styles.imageWrap,
           { height: width * 1.05, backgroundColor: theme.colors.surfaceMuted, borderRadius: theme.radius.lg },
+          pressed && styles.pressed,
         ]}
       >
         <Image source={{ uri: recipe.imageUri }} style={StyleSheet.absoluteFillObject} contentFit="cover" transition={150} />
         <View style={[styles.matchBadge, { backgroundColor: 'rgba(255,255,255,0.92)' }]}>
           <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>{recipe.smartMatchScore}% match</Text>
         </View>
-        <Pressable
-          onPress={() => setSaved((s) => !s)}
-          accessibilityRole="button"
-          accessibilityLabel={saved ? 'Remove from saved' : 'Save recipe'}
-          hitSlop={8}
-          style={[styles.saveButton, { backgroundColor: 'rgba(255,255,255,0.92)' }]}
-        >
-          <Ionicons name={saved ? 'heart' : 'heart-outline'} size={15} color={saved ? theme.colors.freshness.prioritize : theme.colors.textPrimary} />
-        </Pressable>
         <View style={[styles.labelPanel, { backgroundColor: theme.colors.backgroundElevated, borderRadius: theme.radius.md }]}>
           <Text numberOfLines={1} style={[theme.typography.subhead, { color: theme.colors.textPrimary }]}>
             {recipe.title}
@@ -53,8 +49,17 @@ export function RecipeCard({ recipe, onPress, subtitle, width = 190 }: RecipeCar
             {subtitle ?? defaultSubtitle}
           </Text>
         </View>
-      </View>
-    </Pressable>
+      </Pressable>
+      <Pressable
+        onPress={() => setSaved((s) => !s)}
+        accessibilityRole="button"
+        accessibilityLabel={saved ? 'Remove from saved' : 'Save recipe'}
+        hitSlop={8}
+        style={[styles.saveButton, { backgroundColor: 'rgba(255,255,255,0.92)' }]}
+      >
+        <Ionicons name={saved ? 'heart' : 'heart-outline'} size={15} color={saved ? theme.colors.freshness.prioritize : theme.colors.textPrimary} />
+      </Pressable>
+    </View>
   );
 }
 

@@ -8,10 +8,3 @@ export const SECTION_LABELS: Record<ScanSection, string> = {
   freezer: 'Freezer',
   pantry: 'Pantry',
 };
-
-export const SECTION_ICONS: Record<ScanSection, string> = {
-  quick: '📷',
-  fridge: '🧊',
-  freezer: '❄️',
-  pantry: '🥫',
-};

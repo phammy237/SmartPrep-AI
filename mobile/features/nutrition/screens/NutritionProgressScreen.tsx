@@ -8,26 +8,15 @@ import { DAY_LABELS, DAY_ORDER } from '@/features/planner/constants';
 import { useKitchenImpact, useMealPlan, useRecipes, useUser } from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
 import { DayOfWeek, NutritionFacts } from '@/types';
+import { currentWeekday } from '@/utils/date';
 import { formatNumber } from '@/utils/format';
-import { macroPercent, sumNutrition } from '@/utils/nutrition';
-
-type Period = 'today' | 'week' | 'month';
+import { macroPercent, NutritionPeriod as Period, scopeNutritionForPeriod, sumNutrition } from '@/utils/nutrition';
 
 const PERIODS: { value: Period; label: string }[] = [
   { value: 'today', label: 'Today' },
   { value: 'week', label: 'Week' },
   { value: 'month', label: 'Month' },
 ];
-
-function scale(facts: NutritionFacts, factor: number): NutritionFacts {
-  return {
-    calories: facts.calories * factor,
-    proteinG: facts.proteinG * factor,
-    carbsG: facts.carbsG * factor,
-    fatG: facts.fatG * factor,
-    fiberG: facts.fiberG * factor,
-  };
-}
 
 export function NutritionProgressScreen() {
   const theme = useTheme();
@@ -43,15 +32,37 @@ export function NutritionProgressScreen() {
   );
 
   const dayTotals = useMemo(() => {
-    const totals = {} as Record<DayOfWeek, NutritionFacts>;
-    for (const day of DAY_ORDER) {
-      const items = (mealPlanQuery.data?.items ?? []).filter((i) => i.day === day);
-      totals[day] = sumNutrition(
-        items.map((i) => recipesById[i.recipeId]?.nutritionPerServing).filter((f): f is NutritionFacts => !!f),
-      );
+    const itemsByDay = {} as Record<DayOfWeek, NutritionFacts[]>;
+    for (const day of DAY_ORDER) itemsByDay[day] = [];
+    for (const item of mealPlanQuery.data?.items ?? []) {
+      const facts = recipesById[item.recipeId]?.nutritionPerServing;
+      if (facts) itemsByDay[item.day].push(facts);
     }
+    const totals = {} as Record<DayOfWeek, NutritionFacts>;
+    for (const day of DAY_ORDER) totals[day] = sumNutrition(itemsByDay[day]);
     return totals;
   }, [mealPlanQuery.data, recipesById]);
+
+  const weeklyTotals = useMemo(() => sumNutrition(DAY_ORDER.map((day) => dayTotals[day])), [dayTotals]);
+
+  const today = currentWeekday();
+
+  const chartData = useMemo(
+    () =>
+      DAY_ORDER.map((day) => ({
+        label: DAY_LABELS[day].slice(0, 3),
+        value: dayTotals[day].calories,
+        highlighted: day === today,
+      })),
+    [dayTotals, today],
+  );
+
+  const goals = userQuery.data?.preferences.nutritionGoals;
+
+  const scoped = useMemo(() => {
+    if (!goals) return null;
+    return scopeNutritionForPeriod(period, dayTotals[today], weeklyTotals, goals);
+  }, [dayTotals, today, weeklyTotals, goals, period]);
 
   const isLoading = userQuery.isLoading || mealPlanQuery.isLoading || recipesQuery.isLoading;
 
@@ -63,37 +74,15 @@ export function NutritionProgressScreen() {
     );
   }
 
-  if (!userQuery.data) {
+  if (!userQuery.data || !goals || !scoped) {
     return (
       <Screen>
-        <EmptyState icon="⚠️" title="Couldn't load nutrition" actionLabel="Retry" onActionPress={() => userQuery.refetch()} />
+        <EmptyState title="Couldn't load nutrition" actionLabel="Retry" onActionPress={() => userQuery.refetch()} />
       </Screen>
     );
   }
 
-  const goals = userQuery.data.preferences.nutritionGoals;
-  const weeklyTotals = sumNutrition(DAY_ORDER.map((day) => dayTotals[day]));
-
-  const scoped =
-    period === 'today'
-      ? { consumed: dayTotals.mon, goal: goals }
-      : period === 'week'
-        ? {
-            consumed: weeklyTotals,
-            goal: { dailyCalories: goals.dailyCalories * 7, proteinG: goals.proteinG * 7, carbsG: goals.carbsG * 7, fatG: goals.fatG * 7 },
-          }
-        : {
-            consumed: scale(weeklyTotals, 4.345),
-            goal: { dailyCalories: goals.dailyCalories * 30, proteinG: goals.proteinG * 30, carbsG: goals.carbsG * 30, fatG: goals.fatG * 30 },
-          };
-
   const percent = Math.min(100, macroPercent(scoped.consumed.calories, scoped.goal.dailyCalories));
-
-  const chartData = DAY_ORDER.map((day) => ({
-    label: DAY_LABELS[day].slice(0, 3),
-    value: dayTotals[day].calories,
-    highlighted: day === 'mon',
-  }));
 
   return (
     <Screen scroll edges={['top', 'left', 'right']} contentContainerStyle={{ padding: theme.spacing.lg, gap: theme.spacing.xl }}>
