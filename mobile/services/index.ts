@@ -1,3 +1,4 @@
+export * from './authService';
 export * from './pantryService';
 export * from './recipeService';
 export * from './plannerService';

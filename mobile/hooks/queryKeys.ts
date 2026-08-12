@@ -9,5 +9,6 @@ export const queryKeys = {
   groceryList: ['groceryList'] as const,
   scanHistory: ['scans', 'history'] as const,
   user: ['user'] as const,
+  profileSetupStatus: ['user', 'profile-setup-status'] as const,
   kitchenImpact: ['kitchenImpact'] as const,
 };

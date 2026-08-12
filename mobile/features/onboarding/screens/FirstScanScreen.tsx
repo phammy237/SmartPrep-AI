@@ -9,14 +9,13 @@ import { useOnboardingStore, useSessionStore } from '@/store';
 
 export function FirstScanScreen() {
   const theme = useTheme();
-  const authProvider = useOnboardingStore((s) => s.authProvider);
   const toPreferences = useOnboardingStore((s) => s.toPreferences);
   const resetOnboardingDraft = useOnboardingStore((s) => s.reset);
   const completeOnboarding = useSessionStore((s) => s.completeOnboarding);
   const { mutateAsync, isPending } = useCompleteOnboarding();
 
   const finishOnboarding = async () => {
-    await mutateAsync({ preferences: toPreferences(), authProvider });
+    await mutateAsync(toPreferences());
     completeOnboarding();
     resetOnboardingDraft();
   };

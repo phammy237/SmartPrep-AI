@@ -1,8 +1,9 @@
+import { router } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { Alert, Text, View } from 'react-native';
 
 import { Card, Chip, ChipGroup, ConfidenceSelector, EmptyState, ListRow, LoadingState, PrioritySlider, Screen, SectionHeader, Stepper, TagInput } from '@/components';
-import { useKitchenImpact, useUpdatePreferences, useUser } from '@/hooks';
+import { useKitchenImpact, useSignOut, useUpdatePreferences, useUser } from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
 import { CookingTimePreference, DietaryPreference, MacroPreference, SmartPrepPriorities, WeightGoalDirection } from '@/types';
 import {
@@ -49,6 +50,21 @@ export function ProfileScreen() {
   const userQuery = useUser();
   const impactQuery = useKitchenImpact();
   const updatePreferences = useUpdatePreferences();
+  const signOut = useSignOut();
+
+  const handleSignOut = () => {
+    Alert.alert('Sign out', 'Are you sure you want to sign out?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Sign out',
+        style: 'destructive',
+        onPress: async () => {
+          await signOut.mutateAsync();
+          router.replace('/onboarding/signin');
+        },
+      },
+    ]);
+  };
 
   const [localPriorities, setLocalPriorities] = useState<SmartPrepPriorities | null>(null);
   useEffect(() => {
@@ -277,9 +293,9 @@ export function ProfileScreen() {
             title="Data & Privacy"
             subtitle="Export data, delete account"
             showChevron
-            isLast
             onPress={() => comingSoon('Data & Privacy')}
           />
+          <ListRow title="Sign Out" isLast onPress={handleSignOut} />
         </Card>
       </View>
 

@@ -4,6 +4,7 @@ export * from './Card';
 export * from './Button';
 export * from './Chip';
 export * from './ChipGroup';
+export * from './TextField';
 export * from './ConfidenceSelector';
 export * from './FilterBar';
 export * from './TagInput';

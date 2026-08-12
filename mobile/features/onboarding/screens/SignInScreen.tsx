@@ -1,33 +1,34 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Screen } from '@/components';
 import { useTheme } from '@/hooks/useTheme';
-import { useOnboardingStore } from '@/store';
-import { AuthProvider } from '@/types';
 import { OnboardingProgress } from '../components/OnboardingProgress';
 
 interface SignInOption {
-  provider: Exclude<AuthProvider, null>;
+  key: 'apple' | 'google' | 'email';
   label: string;
   icon: keyof typeof Ionicons.glyphMap;
+  available: boolean;
 }
 
 const OPTIONS: SignInOption[] = [
-  { provider: 'apple', label: 'Continue with Apple', icon: 'logo-apple' },
-  { provider: 'google', label: 'Continue with Google', icon: 'logo-google' },
-  { provider: 'email', label: 'Continue with Email', icon: 'mail-outline' },
+  { key: 'apple', label: 'Continue with Apple', icon: 'logo-apple', available: false },
+  { key: 'google', label: 'Continue with Google', icon: 'logo-google', available: false },
+  { key: 'email', label: 'Continue with Email', icon: 'mail-outline', available: true },
 ];
 
 export function SignInScreen() {
   const theme = useTheme();
-  const setAuthProvider = useOnboardingStore((s) => s.setAuthProvider);
 
-  const handleSelect = (provider: Exclude<AuthProvider, null>) => {
-    setAuthProvider(provider);
-    router.push('/onboarding/dietary');
+  const handleSelect = (option: SignInOption) => {
+    if (!option.available) {
+      Alert.alert('Coming soon', `${option.label} isn't set up yet - use email for now.`);
+      return;
+    }
+    router.push('/onboarding/email');
   };
 
   return (
@@ -37,24 +38,42 @@ export function SignInScreen() {
         <View style={{ gap: theme.spacing.xs }}>
           <Text style={[theme.typography.title1, { color: theme.colors.textPrimary }]}>Create your account</Text>
           <Text style={[theme.typography.body, { color: theme.colors.textSecondary }]}>
-            This is a prototype - no account is actually created yet.
+            Your pantry, meal plans, and nutrition goals stay saved to this account.
           </Text>
         </View>
         <View style={{ gap: theme.spacing.md }}>
           {OPTIONS.map((option) => (
             <Pressable
-              key={option.provider}
-              onPress={() => handleSelect(option.provider)}
+              key={option.key}
+              onPress={() => handleSelect(option)}
               accessibilityRole="button"
-              accessibilityLabel={option.label}
+              accessibilityLabel={option.available ? option.label : `${option.label} (coming soon)`}
+              accessibilityState={{ disabled: !option.available }}
               style={({ pressed }) => [
                 styles.option,
                 { backgroundColor: theme.colors.backgroundElevated, borderColor: theme.colors.border },
-                pressed && { opacity: 0.85 },
+                !option.available && styles.unavailable,
+                pressed && option.available && { opacity: 0.85 },
               ]}
             >
-              <Ionicons name={option.icon} size={20} color={theme.colors.textPrimary} />
-              <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>{option.label}</Text>
+              <Ionicons
+                name={option.icon}
+                size={20}
+                color={option.available ? theme.colors.textPrimary : theme.colors.textTertiary}
+              />
+              <Text
+                style={[
+                  theme.typography.headline,
+                  { color: option.available ? theme.colors.textPrimary : theme.colors.textTertiary },
+                ]}
+              >
+                {option.label}
+              </Text>
+              {!option.available ? (
+                <Text style={[theme.typography.footnote, { color: theme.colors.textTertiary, marginLeft: 'auto' }]}>
+                  Coming soon
+                </Text>
+              ) : null}
             </Pressable>
           ))}
         </View>
@@ -73,5 +92,8 @@ const styles = StyleSheet.create({
     paddingVertical: 15,
     paddingHorizontal: 18,
     minHeight: 52,
+  },
+  unavailable: {
+    opacity: 0.55,
   },
 });

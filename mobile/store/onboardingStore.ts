@@ -3,7 +3,6 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
 import {
-  AuthProvider,
   CookingConfidence,
   CookingTimePreference,
   DietaryPreference,
@@ -17,7 +16,6 @@ import { computeMacroGoals, daysFromToday } from '@/utils/nutrition';
 type ListField = 'allergies' | 'favoriteCuisines' | 'dislikedFoods';
 
 interface OnboardingDraft {
-  authProvider: AuthProvider;
   dietary: DietaryPreference[];
   allergies: string[];
   favoriteCuisines: string[];
@@ -34,7 +32,6 @@ interface OnboardingDraft {
 }
 
 const DEFAULT_DRAFT: OnboardingDraft = {
-  authProvider: null,
   dietary: [],
   allergies: [],
   favoriteCuisines: [],
@@ -58,7 +55,6 @@ const DEFAULT_DRAFT: OnboardingDraft = {
 };
 
 interface OnboardingState extends OnboardingDraft {
-  setAuthProvider: (provider: AuthProvider) => void;
   toggleDietary: (value: DietaryPreference) => void;
   toggleListValue: (field: ListField, value: string) => void;
   setCookingTime: (value: CookingTimePreference) => void;
@@ -78,8 +74,6 @@ export const useOnboardingStore = create<OnboardingState>()(
   persist(
     (set, get) => ({
       ...DEFAULT_DRAFT,
-
-      setAuthProvider: (provider) => set({ authProvider: provider }),
 
       toggleDietary: (value) =>
         set((state) => {
