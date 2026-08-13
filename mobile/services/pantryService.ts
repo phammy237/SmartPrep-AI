@@ -1,143 +1,141 @@
-import { getIngredient } from '@/data';
-import { FreshnessState, IngredientCategory, PantryItem, QuantityUnit } from '@/types';
-import { deriveFreshnessLabel } from '@/utils/freshness';
+import {
+  UpdatePantryItemMetadataParams,
+  adjustPantryQuantity,
+  confirmPantryItem,
+  createPantryItem,
+  depletePantryItem,
+  fetchPantryItem,
+  fetchPantryItems,
+  restorePantryItem,
+  updatePantryItemMetadata,
+} from '@/lib/supabase/repositories';
+import { supabase } from '@/lib/supabase/client';
+import { CreatePantryItemInput, EditPantryItemMetadataInput } from '@/lib/validation/pantrySchemas';
+import { PantryItem } from '@/types';
+import { estimateExpiration } from '@/utils/expiration';
 import { generateId } from '@/utils/id';
 import { ingredientPhotoUri } from '@/utils/ingredientPhoto';
-import { clone, delay } from './apiSimulation';
-import { db } from './mockDb';
 
-export type PantryRemovalReason = 'finished' | 'discarded' | 'removed';
-
-export interface AddPantryItemInput {
-  ingredientId: string;
-  quantity: number;
-  unit: QuantityUnit;
-  freshness: FreshnessState;
-  source: PantryItem['source'];
-}
-
-export interface ManualPantryItemInput {
-  name: string;
-  category: IngredientCategory;
-  quantity: number;
-  unit: QuantityUnit;
-}
-
-async function getPantry(): Promise<PantryItem[]> {
-  await delay();
-  return clone(db.pantry);
-}
-
-async function getPantryItem(id: string): Promise<PantryItem | null> {
-  await delay(250);
-  const item = db.pantry.find((p) => p.id === id);
-  return item ? clone(item) : null;
-}
-
-async function updatePantryItem(
-  id: string,
-  patch: Partial<Pick<PantryItem, 'quantity' | 'unit' | 'category' | 'notes'>>,
-): Promise<PantryItem> {
-  await delay(350);
-  const item = db.pantry.find((p) => p.id === id);
-  if (!item) throw new Error(`Pantry item ${id} not found`);
-  Object.assign(item, patch, { updatedAt: new Date().toISOString() });
-  return clone(item);
-}
-
-async function updatePantryItemFreshness(
-  id: string,
-  patch: { score?: number; confidence?: number; label?: FreshnessState['label']; estimatedUseBy?: string },
-): Promise<PantryItem> {
-  await delay(350);
-  const item = db.pantry.find((p) => p.id === id);
-  if (!item) throw new Error(`Pantry item ${id} not found`);
-
-  const score = patch.score ?? item.freshness.score;
-  const confidence = patch.confidence ?? item.freshness.confidence;
-  item.freshness = {
-    score,
-    confidence,
-    label: patch.label ?? deriveFreshnessLabel(score, confidence),
-    isManualOverride: true,
-    estimatedUseBy: patch.estimatedUseBy ?? item.freshness.estimatedUseBy,
-  };
-  item.updatedAt = new Date().toISOString();
-  return clone(item);
-}
-
-async function useSomePantryItem(id: string, amountUsed: number): Promise<PantryItem | null> {
-  await delay(350);
-  const index = db.pantry.findIndex((p) => p.id === id);
-  if (index === -1) throw new Error(`Pantry item ${id} not found`);
-
-  const item = db.pantry[index];
-  const remaining = Math.max(0, Math.round((item.quantity - amountUsed) * 100) / 100);
-  if (remaining <= 0) {
-    db.pantry.splice(index, 1);
-    return null;
+async function requireUserId(): Promise<string> {
+  const { data, error } = await supabase.auth.getUser();
+  if (error || !data.user) {
+    throw new Error('Not signed in');
   }
-  item.quantity = remaining;
-  item.updatedAt = new Date().toISOString();
-  return clone(item);
+  return data.user.id;
 }
 
-async function removePantryItem(id: string, _reason: PantryRemovalReason = 'removed'): Promise<void> {
-  await delay(300);
-  db.pantry = db.pantry.filter((p) => p.id !== id);
+async function getPantry(timeZone: string): Promise<PantryItem[]> {
+  const userId = await requireUserId();
+  return fetchPantryItems(userId, timeZone);
 }
 
-async function addPantryItemsFromScan(inputs: AddPantryItemInput[]): Promise<PantryItem[]> {
-  await delay(300);
-  const now = new Date().toISOString();
-  const added = inputs.map((input): PantryItem => {
-    const ingredient = getIngredient(input.ingredientId);
-    return {
-      id: generateId('pantry'),
-      ingredientId: ingredient.id,
-      name: ingredient.name,
-      imageUri: ingredient.imageUri,
-      category: ingredient.category,
+async function getPantryItem(id: string, timeZone: string): Promise<PantryItem | null> {
+  return fetchPantryItem(id, timeZone);
+}
+
+async function addManualPantryItem(input: CreatePantryItemInput, timeZone: string): Promise<PantryItem> {
+  const ingredientId = generateId('ing-manual');
+  const estimate = estimateExpiration({
+    category: input.category,
+    purchaseDate: input.purchaseDate,
+    userProvidedDate: input.userProvidedDate,
+  });
+
+  return createPantryItem(
+    {
+      ingredientId,
+      imageUri: ingredientPhotoUri(ingredientId, input.displayName),
+      displayName: input.displayName,
+      category: input.category,
       quantity: input.quantity,
       unit: input.unit,
-      freshness: input.freshness,
-      addedAt: now,
-      updatedAt: now,
-      source: input.source,
-    };
-  });
-  db.pantry = [...db.pantry, ...added];
-  return clone(added);
+      storageLocation: input.storageLocation,
+      notes: input.notes,
+      purchaseDate: input.purchaseDate,
+      openedDate: input.openedDate,
+      userProvidedDate: input.userProvidedDate,
+      userProvidedDateType: input.userProvidedDateType,
+      estimatedExpirationDate: estimate.estimatedExpirationDate,
+      expirationConfidence: estimate.confidence,
+      source: 'manual',
+    },
+    timeZone,
+  );
 }
 
-async function addManualPantryItem(input: ManualPantryItemInput): Promise<PantryItem> {
-  await delay(300);
-  const now = new Date().toISOString();
-  const ingredientId = generateId('ing-manual');
-  const item: PantryItem = {
-    id: generateId('pantry'),
-    ingredientId,
-    name: input.name,
-    imageUri: ingredientPhotoUri(ingredientId, input.name),
-    category: input.category,
-    quantity: input.quantity,
-    unit: input.unit,
-    freshness: { score: 80, confidence: 0.9, label: 'fresh' },
-    addedAt: now,
-    updatedAt: now,
-    source: 'manual',
-  };
-  db.pantry = [...db.pantry, item];
-  return clone(item);
+/**
+ * Recomputes the derived expiration estimate whenever a date or category
+ * input actually changes, so estimated_expiration_date/expiration_confidence
+ * never go stale relative to what's stored. A metadata edit that doesn't
+ * touch any date field (renaming, changing storage location, etc.) skips
+ * the extra read entirely.
+ */
+async function updateItemMetadata(id: string, patch: EditPantryItemMetadataInput, timeZone: string): Promise<PantryItem> {
+  const touchesDates = patch.purchaseDate !== undefined || patch.userProvidedDate !== undefined || patch.category !== undefined;
+
+  let estimatePatch: Pick<UpdatePantryItemMetadataParams, 'estimatedExpirationDate' | 'expirationConfidence'> = {};
+
+  if (touchesDates) {
+    const current = await fetchPantryItem(id, timeZone);
+    if (current) {
+      const estimate = estimateExpiration({
+        category: patch.category ?? current.category,
+        purchaseDate: patch.purchaseDate ?? current.purchaseDate,
+        userProvidedDate: patch.userProvidedDate ?? current.userProvidedDate,
+      });
+      estimatePatch = {
+        estimatedExpirationDate: estimate.estimatedExpirationDate ?? null,
+        expirationConfidence: estimate.confidence,
+      };
+    }
+  }
+
+  return updatePantryItemMetadata(id, { ...patch, ...estimatePatch }, timeZone);
+}
+
+async function adjustQuantity(
+  itemId: string,
+  delta: number,
+  eventType: 'adjusted' | 'consumed' | 'deducted_by_cooking',
+  reason: string | undefined,
+  timeZone: string,
+): Promise<PantryItem> {
+  return adjustPantryQuantity(itemId, delta, eventType, reason, timeZone);
+}
+
+/** Applies several deductions at once (e.g. after cooking, one per ingredient actually used), all tagged as 'deducted_by_cooking'. */
+async function deductManyForCooking(
+  items: { id: string; amountUsed: number }[],
+  timeZone: string,
+): Promise<PantryItem[]> {
+  return Promise.all(items.map((item) => adjustPantryQuantity(item.id, -item.amountUsed, 'deducted_by_cooking', undefined, timeZone)));
+}
+
+async function depleteItem(
+  itemId: string,
+  eventType: 'depleted' | 'discarded' | 'corrected',
+  reason: string | undefined,
+  timeZone: string,
+): Promise<PantryItem> {
+  return depletePantryItem(itemId, eventType, reason, timeZone);
+}
+
+async function restoreItem(itemId: string, reason: string | undefined, timeZone: string): Promise<PantryItem> {
+  return restorePantryItem(itemId, reason, timeZone);
+}
+
+async function confirmStillHave(itemId: string, timeZone: string): Promise<PantryItem> {
+  return confirmPantryItem(itemId, timeZone);
 }
 
 export const pantryService = {
   getPantry,
   getPantryItem,
-  updatePantryItem,
-  updatePantryItemFreshness,
-  useSomePantryItem,
-  removePantryItem,
-  addPantryItemsFromScan,
   addManualPantryItem,
+  updateItemMetadata,
+  adjustQuantity,
+  deductManyForCooking,
+  depleteItem,
+  restoreItem,
+  confirmStillHave,
 };

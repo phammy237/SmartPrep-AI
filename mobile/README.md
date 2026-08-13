@@ -37,9 +37,34 @@ Screens should stay declarative: data comes from `hooks/`, mutations go through 
 
 ### Data layer
 
-**Identity and preferences (`authService.ts`, `userService.ts`) are backed by a real Supabase project** - see [Backend (Supabase)](#backend-supabase) below.
+**Identity/preferences (`authService.ts`, `userService.ts`) and pantry (`pantryService.ts`) are backed by a real Supabase project** - see [Backend (Supabase)](#backend-supabase) below.
 
-Everything else - pantry, recipes, planner, grocery, scan, kitchen impact - is still mock: `services/` reads and writes an in-memory mock database (`services/mockDb.ts`, seeded from `data/`) through `services/apiSimulation.ts`, which adds artificial latency to mimic real network calls. `hooks/` wraps each service in [TanStack Query](https://tanstack.com/query). Swapping in a real backend means reimplementing the service, following the pattern `userService.ts` now uses; the hooks and screens above it shouldn't need to change.
+Everything else - recipes, planner, grocery, scan (vision/OCR itself), kitchen impact - is still mock: `services/` reads and writes an in-memory mock database (`services/mockDb.ts`, seeded from `data/`) through `services/apiSimulation.ts`, which adds artificial latency to mimic real network calls. `hooks/` wraps each service in [TanStack Query](https://tanstack.com/query). Swapping in a real backend means reimplementing the service, following the pattern `userService.ts`/`pantryService.ts` now use; the hooks and screens above it shouldn't need to change.
+
+**Scan confirming into the pantry is still mock-only.** `scanService.confirmScan` still writes into the mock `db.pantry` array (unchanged from before Phase 2) - it does not write to the real `pantry_items` table. Scan (vision/OCR) itself is out of scope until a later phase; connecting its confirm step to real persistence is part of that work, not Phase 2. Until then, items added via the Scan flow will not appear in the real pantry list.
+
+### Pantry (Phase 2)
+
+**Quantity invariant:** `pantry_items.quantity` is always the current on-hand amount and can never be negative (DB `check (quantity >= 0)`). Reaching exactly zero always means `status = 'depleted'`; moving back above zero always means `status = 'active'`. Quantity and status can only change through five Postgres RPCs (`create_pantry_item`, `adjust_pantry_quantity`, `deplete_pantry_item`, `restore_pantry_item`, `confirm_pantry_item`) - see `supabase/migrations/0002_pantry.sql` for why these are `security definer` (the one deliberate exception to "prefer security invoker" elsewhere in this codebase) and column-level grants block plain client `.update()` calls from touching those two columns directly. Everything else (name, category, unit, notes, storage location, dates) is a plain RLS-protected client `.update()`, since those edits don't need a matching ledger entry.
+
+**Event ledger:** `pantry_events` is an append-only history of everything that has happened to an item (`added`, `adjusted`, `consumed`, `depleted`, `discarded`, `corrected`, `restored` are actively written by Phase 2; `deducted_by_cooking` is written by the existing `useUseSomeManyPantryItems` hook used from `CookingModeScreen` - kept wired to real data since it's an existing pantry-deduction call site, not new cooking functionality; `donated`/`traded` are reserved, unwritten until the community-exchange phase). No role has an UPDATE or DELETE grant on `pantry_events` at all, not even the owning user - history is immutable by construction, not just by convention.
+
+**Expiration semantics** (`utils/expiration.ts`) - three distinct concepts, never conflated:
+- `purchaseDate` / `openedDate` - user-provided, informational only.
+- `userProvidedDate` (+ `best_by`/`use_by`/`sell_by` type) - exactly the date printed on the package, as the user typed it. Never a food-safety deadline, always shown as guidance ("Best by ...").
+- `estimatedExpirationDate` - a system estimate: the user-provided date if there is one (confidence `high`), else `purchaseDate` + a generic per-category shelf-life heuristic (confidence `medium`), else nothing at all (confidence `unknown` - never fabricated).
+
+Urgency shown in the UI (`FreshnessTag`/`FreshnessTimeline`, unchanged components) is derived deterministically from that estimate + confidence: ≤2 days out (or already past) = Prioritize, 3-5 days = Use Soon, further out = Fresh, and unknown confidence always renders as "Can't Tell" regardless of any date - the app never asserts urgency it isn't confident about.
+
+**Timezone:** "today," for expiration-urgency purposes, is computed in the user's stored `profiles.timezone` (IANA name, e.g. `America/New_York`), not device-local time - so the same item shows the same urgency regardless of which device you're on. Falls back to UTC if the profile hasn't loaded yet or the stored value isn't a recognized IANA zone.
+
+**Supported units:** `item`, `container`, `bag`, `bottle`, `can`, `package`, `serving`, `g`, `kg`, `oz`, `lb`, `ml`, `L` - the same set the UI already offered. There is no unit-to-grams conversion in Phase 2; `estimated_grams`/`fdc_id`/`usda_match_confidence`/`barcode`/`brand` columns exist and are reserved for the USDA-matching phase, but nothing populates them yet, and nothing pretends a "3 items" quantity has a known mass.
+
+**Known Phase 2 limitations:**
+- Dates are entered as plain `YYYY-MM-DD` text (no native date picker dependency was added).
+- Once a date is set, the detail screen can change it but can't clear it back to empty - clearing requires setting a new date instead.
+- Notes can only be set when adding an item, not edited afterward, from the current UI.
+- `supabase/tests/rls_verification.sql` has not been executed against a live project (none is linked in this environment) - see [Backend (Supabase)](#backend-supabase).
 
 `lib/` holds backend-adjacent, cross-feature infrastructure that isn't tied to one product area:
 

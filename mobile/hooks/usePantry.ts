@@ -1,17 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
+import { EditPantryItemMetadataInput } from '@/lib/validation/pantrySchemas';
 import { pantryService } from '@/services';
-import { FreshnessState, PantryItem } from '@/types';
 import { queryKeys } from './queryKeys';
+import { useUser } from './useUser';
+
+/** Pantry expiration math is timezone-aware; this is the single place that resolves which timezone to use, falling back to UTC until the profile has loaded. */
+function useTimeZone(): string {
+  const userQuery = useUser();
+  return userQuery.data?.timezone ?? 'UTC';
+}
 
 export function usePantry() {
-  return useQuery({ queryKey: queryKeys.pantry, queryFn: pantryService.getPantry });
+  const timeZone = useTimeZone();
+  return useQuery({ queryKey: queryKeys.pantry, queryFn: () => pantryService.getPantry(timeZone) });
 }
 
 export function usePantryItem(id: string | undefined) {
+  const timeZone = useTimeZone();
   return useQuery({
     queryKey: queryKeys.pantryItem(id ?? ''),
-    queryFn: () => pantryService.getPantryItem(id as string),
+    queryFn: () => pantryService.getPantryItem(id as string, timeZone),
     enabled: !!id,
   });
 }
@@ -26,61 +35,87 @@ function useInvalidatePantry() {
   };
 }
 
-export function useUpdatePantryItem() {
+export function useAddManualPantryItem() {
+  const timeZone = useTimeZone();
   const invalidate = useInvalidatePantry();
   return useMutation({
-    mutationFn: ({ id, patch }: { id: string; patch: Partial<Pick<PantryItem, 'quantity' | 'unit' | 'category' | 'notes'>> }) =>
-      pantryService.updatePantryItem(id, patch),
+    mutationFn: (input: Parameters<typeof pantryService.addManualPantryItem>[0]) =>
+      pantryService.addManualPantryItem(input, timeZone),
     onSuccess: invalidate,
   });
 }
 
-export function useUpdatePantryItemFreshness() {
+export function useUpdatePantryItemMetadata() {
+  const timeZone = useTimeZone();
+  const invalidate = useInvalidatePantry();
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: EditPantryItemMetadataInput }) =>
+      pantryService.updateItemMetadata(id, patch, timeZone),
+    onSuccess: invalidate,
+  });
+}
+
+export function useAdjustPantryQuantity() {
+  const timeZone = useTimeZone();
   const invalidate = useInvalidatePantry();
   return useMutation({
     mutationFn: ({
-      id,
-      patch,
+      itemId,
+      delta,
+      eventType,
+      reason,
     }: {
-      id: string;
-      patch: { score?: number; confidence?: number; label?: FreshnessState['label']; estimatedUseBy?: string };
-    }) => pantryService.updatePantryItemFreshness(id, patch),
+      itemId: string;
+      delta: number;
+      eventType: 'adjusted' | 'consumed' | 'deducted_by_cooking';
+      reason?: string;
+    }) => pantryService.adjustQuantity(itemId, delta, eventType, reason, timeZone),
     onSuccess: invalidate,
   });
 }
 
-export function useUseSomePantryItem() {
-  const invalidate = useInvalidatePantry();
-  return useMutation({
-    mutationFn: ({ id, amountUsed }: { id: string; amountUsed: number }) =>
-      pantryService.useSomePantryItem(id, amountUsed),
-    onSuccess: invalidate,
-  });
-}
-
-/** Applies several "used some" decrements at once (e.g. after cooking), in parallel with a single cache invalidation. */
+/** Applies several "used for cooking" deductions at once, with a single cache invalidation. Preserved for CookingModeScreen (Phase 3 territory) - this only keeps an existing pantry-deduction call site correctly wired to real data, it does not add any cooking functionality. */
 export function useUseSomeManyPantryItems() {
+  const timeZone = useTimeZone();
   const invalidate = useInvalidatePantry();
   return useMutation({
-    mutationFn: (items: { id: string; amountUsed: number }[]) =>
-      Promise.all(items.map((item) => pantryService.useSomePantryItem(item.id, item.amountUsed))),
+    mutationFn: (items: { id: string; amountUsed: number }[]) => pantryService.deductManyForCooking(items, timeZone),
     onSuccess: invalidate,
   });
 }
 
-export function useRemovePantryItem() {
+export function useDepletePantryItem() {
+  const timeZone = useTimeZone();
   const invalidate = useInvalidatePantry();
   return useMutation({
-    mutationFn: ({ id, reason }: { id: string; reason: 'finished' | 'discarded' | 'removed' }) =>
-      pantryService.removePantryItem(id, reason),
+    mutationFn: ({
+      itemId,
+      eventType,
+      reason,
+    }: {
+      itemId: string;
+      eventType: 'depleted' | 'discarded' | 'corrected';
+      reason?: string;
+    }) => pantryService.depleteItem(itemId, eventType, reason, timeZone),
     onSuccess: invalidate,
   });
 }
 
-export function useAddManualPantryItem() {
+export function useRestorePantryItem() {
+  const timeZone = useTimeZone();
   const invalidate = useInvalidatePantry();
   return useMutation({
-    mutationFn: pantryService.addManualPantryItem,
+    mutationFn: ({ itemId, reason }: { itemId: string; reason?: string }) =>
+      pantryService.restoreItem(itemId, reason, timeZone),
+    onSuccess: invalidate,
+  });
+}
+
+export function useConfirmPantryItem() {
+  const timeZone = useTimeZone();
+  const invalidate = useInvalidatePantry();
+  return useMutation({
+    mutationFn: (itemId: string) => pantryService.confirmStillHave(itemId, timeZone),
     onSuccess: invalidate,
   });
 }

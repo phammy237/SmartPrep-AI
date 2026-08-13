@@ -53,6 +53,7 @@ function toUser(profile: ProfileRecord, dietary: DietaryPreferencesRecord, goals
     email: profile.email,
     avatarInitials: initialsFromName(profile.displayName || profile.email),
     authProvider: profile.authProvider,
+    timezone: profile.timezone,
     createdAt: profile.createdAt,
     preferences: {
       dietary: dietary.dietary,

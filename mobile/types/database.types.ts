@@ -12,6 +12,21 @@
 
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
+type PantryQuantityUnit =
+  | 'item'
+  | 'container'
+  | 'bag'
+  | 'bottle'
+  | 'can'
+  | 'package'
+  | 'serving'
+  | 'g'
+  | 'kg'
+  | 'oz'
+  | 'lb'
+  | 'ml'
+  | 'L';
+
 export interface Database {
   public: {
     Tables: {
@@ -122,6 +137,90 @@ export interface Database {
         };
         Relationships: [];
       };
+      pantry_items: {
+        Row: {
+          id: string;
+          user_id: string;
+          ingredient_id: string;
+          image_uri: string;
+          normalized_name: string;
+          display_name: string;
+          category: 'produce' | 'protein' | 'dairy' | 'pantry' | 'frozen' | 'other';
+          quantity: number;
+          unit: PantryQuantityUnit;
+          quantity_confidence: 'exact' | 'estimated';
+          estimated_grams: number | null;
+          fdc_id: string | null;
+          usda_match_confidence: string | null;
+          barcode: string | null;
+          brand: string | null;
+          purchase_date: string | null;
+          opened_date: string | null;
+          user_provided_date: string | null;
+          user_provided_date_type: 'best_by' | 'use_by' | 'sell_by' | null;
+          estimated_expiration_date: string | null;
+          expiration_confidence: 'high' | 'medium' | 'low' | 'unknown';
+          storage_location: 'fridge' | 'freezer' | 'pantry' | 'counter' | 'other' | null;
+          scan_source: 'manual' | 'scan' | 'grocery';
+          notes: string | null;
+          status: 'active' | 'depleted';
+          last_confirmed_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        // No client Insert - rows are created exclusively via the
+        // create_pantry_item RPC (security definer). See migration 0002.
+        Insert: never;
+        Update: {
+          display_name?: string;
+          category?: 'produce' | 'protein' | 'dairy' | 'pantry' | 'frozen' | 'other';
+          unit?: PantryQuantityUnit;
+          notes?: string | null;
+          storage_location?: 'fridge' | 'freezer' | 'pantry' | 'counter' | 'other' | null;
+          quantity_confidence?: 'exact' | 'estimated';
+          purchase_date?: string | null;
+          opened_date?: string | null;
+          user_provided_date?: string | null;
+          user_provided_date_type?: 'best_by' | 'use_by' | 'sell_by' | null;
+          estimated_expiration_date?: string | null;
+          expiration_confidence?: 'high' | 'medium' | 'low' | 'unknown';
+        };
+        Relationships: [];
+      };
+      pantry_events: {
+        Row: {
+          id: string;
+          user_id: string;
+          pantry_item_id: string;
+          event_type:
+            | 'added'
+            | 'adjusted'
+            | 'consumed'
+            | 'deducted_by_cooking'
+            | 'depleted'
+            | 'discarded'
+            | 'donated'
+            | 'traded'
+            | 'corrected'
+            | 'restored';
+          quantity_delta: number;
+          unit: string | null;
+          estimated_gram_delta: number | null;
+          quantity_before: number | null;
+          quantity_after: number | null;
+          source_entity_type: string | null;
+          source_entity_id: string | null;
+          confidence: string | null;
+          reason: string | null;
+          occurred_at: string;
+          created_at: string;
+        };
+        // No client Insert/Update - append-only, written only by the
+        // security-definer RPCs. See migration 0002.
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {
@@ -138,6 +237,56 @@ export interface Database {
           p_weight_goal_target_date: string | null;
         };
         Returns: Database['public']['Tables']['nutrition_goals']['Row'];
+      };
+      create_pantry_item: {
+        Args: {
+          p_ingredient_id: string;
+          p_display_name: string;
+          p_image_uri: string;
+          p_category: string;
+          p_quantity: number;
+          p_unit: string;
+          p_storage_location: string | null;
+          p_notes: string | null;
+          p_purchase_date: string | null;
+          p_opened_date: string | null;
+          p_user_provided_date: string | null;
+          p_user_provided_date_type: string | null;
+          p_estimated_expiration_date: string | null;
+          p_expiration_confidence: string | null;
+          p_source: string | null;
+        };
+        Returns: Database['public']['Tables']['pantry_items']['Row'];
+      };
+      adjust_pantry_quantity: {
+        Args: {
+          p_item_id: string;
+          p_delta: number;
+          p_event_type: string;
+          p_reason: string | null;
+        };
+        Returns: Database['public']['Tables']['pantry_items']['Row'];
+      };
+      deplete_pantry_item: {
+        Args: {
+          p_item_id: string;
+          p_event_type: string;
+          p_reason: string | null;
+        };
+        Returns: Database['public']['Tables']['pantry_items']['Row'];
+      };
+      restore_pantry_item: {
+        Args: {
+          p_item_id: string;
+          p_reason: string | null;
+        };
+        Returns: Database['public']['Tables']['pantry_items']['Row'];
+      };
+      confirm_pantry_item: {
+        Args: {
+          p_item_id: string;
+        };
+        Returns: Database['public']['Tables']['pantry_items']['Row'];
       };
     };
     Enums: Record<string, never>;

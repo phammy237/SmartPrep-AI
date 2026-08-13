@@ -6,6 +6,7 @@ export const MOCK_USER: User = {
   email: 'alex.rivera@smartprep.app',
   avatarInitials: 'AR',
   authProvider: 'apple',
+  timezone: 'America/New_York',
   createdAt: '2026-06-15T09:00:00.000Z',
   preferences: {
     dietary: ['none'],

@@ -63,6 +63,8 @@ export interface User {
   email: string;
   avatarInitials: string;
   authProvider: AuthProvider;
+  /** IANA timezone (e.g. "America/New_York"), defaults to 'UTC' server-side. Used for timezone-aware pantry expiration math. */
+  timezone: string;
   preferences: UserPreferences;
   createdAt: string;
 }
