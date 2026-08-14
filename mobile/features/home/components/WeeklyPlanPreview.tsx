@@ -2,11 +2,11 @@ import { router } from 'expo-router';
 import React from 'react';
 
 import { Card, IngredientAvatar, ListRow, SectionHeader } from '@/components';
-import { MealPlanItem, Recipe } from '@/types';
+import { MealPlanEntry, Recipe } from '@/types';
 import { formatRelativeDay } from '@/utils/format';
 
 interface WeeklyPlanPreviewProps {
-  items: MealPlanItem[];
+  items: MealPlanEntry[];
   recipesById: Record<string, Recipe>;
 }
 
@@ -22,14 +22,14 @@ export function WeeklyPlanPreview({ items, recipesById }: WeeklyPlanPreviewProps
       <SectionHeader title="This Week" actionLabel="View Plan" onActionPress={() => router.push('/(tabs)/plan')} />
       <Card padded={false} style={{ paddingHorizontal: 16 }}>
         {items.map((item, index) => {
-          const recipe = recipesById[item.recipeId];
+          const recipe = recipesById[item.recipeVersionId];
           if (!recipe) return null;
           return (
             <ListRow
               key={item.id}
               icon={<IngredientAvatar imageUri={recipe.imageUri} variant="compact" />}
               title={recipe.title}
-              subtitle={`${formatRelativeDay(item.date)} · ${capitalize(item.mealType)}`}
+              subtitle={`${formatRelativeDay(item.scheduledDate)} · ${capitalize(item.mealSlot)}`}
               isLast={index === items.length - 1}
             />
           );

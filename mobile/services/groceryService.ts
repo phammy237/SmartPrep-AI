@@ -1,10 +1,9 @@
-import { getIngredient } from '@/data';
-import { GroceryList, GroceryListItem, IngredientCategory, QuantityUnit } from '@/types';
+import { INGREDIENTS_BY_ID } from '@/data';
+import { GroceryList, GroceryListItem, IngredientCategory, QuantityUnit, RecipeIngredient } from '@/types';
 import { generateId } from '@/utils/id';
 import { ingredientPhotoUri } from '@/utils/ingredientPhoto';
 import { clone, delay } from './apiSimulation';
 import { db } from './mockDb';
-import { getMissingIngredients } from './recipeService';
 
 export interface ManualGroceryItemInput {
   name: string;
@@ -48,31 +47,32 @@ async function removeGroceryItem(id: string): Promise<void> {
   db.groceryList.items = db.groceryList.items.filter((i) => i.id !== id);
 }
 
-/** Adds a recipe's missing (non-staple) ingredients to the grocery list, skipping ones already listed. */
-async function addMissingIngredientsForRecipe(recipeId: string): Promise<GroceryListItem[]> {
+/**
+ * Adds the given (already-hydrated, already-filtered-to-missing) recipe
+ * ingredients to the grocery list, skipping ones already listed.
+ *
+ * Takes the ingredient list directly from the caller - RecipeDetailScreen
+ * already computes it via recipeService.getMissingIngredients - instead of
+ * looking a recipe up by id in the mock db.recipes array. Real (Phase 3)
+ * recipes live in a different id space than the legacy mock catalog, so a
+ * lookup here would silently fail for every real recipe; grocery itself
+ * stays fully mock (out of Phase 3 scope), this is the minimal decoupling
+ * needed to avoid that regression.
+ */
+async function addMissingIngredientsForRecipe(recipeId: string, missingIngredients: RecipeIngredient[]): Promise<GroceryListItem[]> {
   await delay(400);
-  const recipe = db.recipes.find((r) => r.id === recipeId);
-  if (!recipe) throw new Error(`Recipe ${recipeId} not found`);
-
-  // Recompute ownership the same way recipeService does, without a circular import.
-  const pantryIngredientIds = new Set(db.pantry.map((item) => item.ingredientId));
-  const hydrated = {
-    ...recipe,
-    ingredients: recipe.ingredients.map((i) => ({
-      ...i,
-      isOwned: i.isPantryStaple ? true : pantryIngredientIds.has(i.ingredientId),
-    })),
-  };
 
   const existingIds = new Set(db.groceryList.items.map((i) => i.ingredientId).filter(Boolean));
-  const missing = getMissingIngredients(hydrated).filter((i) => !existingIds.has(i.ingredientId));
+  const missing = missingIngredients.filter((i) => !existingIds.has(i.ingredientId));
 
   const added: GroceryListItem[] = missing.map((ingredient) => ({
     id: generateId('grocery-item'),
     ingredientId: ingredient.ingredientId,
     name: ingredient.name,
     imageUri: ingredient.imageUri,
-    category: getIngredient(ingredient.ingredientId).category,
+    // Falls back to 'other' for an ingredient with no catalog match (every
+    // Phase 3 seeded ingredient has one, so this only guards a future gap).
+    category: INGREDIENTS_BY_ID[ingredient.ingredientId]?.category ?? 'other',
     quantity: ingredient.quantity,
     unit: ingredient.unit,
     isChecked: false,

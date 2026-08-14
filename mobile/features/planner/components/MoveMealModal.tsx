@@ -1,32 +1,36 @@
 import { Ionicons } from '@expo/vector-icons';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal, Pressable, Text, View } from 'react-native';
 
 import { Button, Chip, Screen } from '@/components';
 import { useTheme } from '@/hooks/useTheme';
-import { DayOfWeek, MealPlanItem, MealType } from '@/types';
-import { DAY_LABELS, DAY_ORDER, MEAL_TYPE_LABELS, MEAL_TYPES } from '../constants';
+import { DayOfWeek, MealType } from '@/types';
+import { DAY_LABELS, MEAL_TYPE_LABELS, MEAL_TYPES } from '../constants';
 
 interface MoveMealModalProps {
-  item: MealPlanItem | null;
+  visible: boolean;
+  currentDate?: string;
+  currentMealSlot?: MealType;
+  /** The currently-displayed week's dates, in day order - real dates, not the mock week-relative model. */
+  weekDates: { day: DayOfWeek; date: string }[];
   onClose: () => void;
-  onMove: (day: DayOfWeek, mealType: MealType) => void;
+  onMove: (scheduledDate: string, mealSlot: MealType) => void;
 }
 
-export function MoveMealModal({ item, onClose, onMove }: MoveMealModalProps) {
+export function MoveMealModal({ visible, currentDate, currentMealSlot, weekDates, onClose, onMove }: MoveMealModalProps) {
   const theme = useTheme();
-  const [day, setDay] = useState<DayOfWeek>(item?.day ?? 'mon');
-  const [mealType, setMealType] = useState<MealType>(item?.mealType ?? 'dinner');
+  const [date, setDate] = useState(currentDate ?? weekDates[0]?.date ?? '');
+  const [mealSlot, setMealSlot] = useState<MealType>(currentMealSlot ?? 'dinner');
 
-  React.useEffect(() => {
-    if (item) {
-      setDay(item.day);
-      setMealType(item.mealType);
+  useEffect(() => {
+    if (visible) {
+      setDate(currentDate ?? weekDates[0]?.date ?? '');
+      setMealSlot(currentMealSlot ?? 'dinner');
     }
-  }, [item]);
+  }, [visible, currentDate, currentMealSlot, weekDates]);
 
   return (
-    <Modal visible={!!item} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <Screen edges={['top', 'left', 'right']} contentContainerStyle={{ padding: theme.spacing.lg, gap: theme.spacing.xl }}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
           <Text style={[theme.typography.title2, { color: theme.colors.textPrimary }]}>Move Meal</Text>
@@ -38,17 +42,17 @@ export function MoveMealModal({ item, onClose, onMove }: MoveMealModalProps) {
         <View style={{ gap: theme.spacing.sm }}>
           <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Day</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-            {DAY_ORDER.map((d) => (
-              <Chip key={d} label={DAY_LABELS[d]} selected={day === d} onPress={() => setDay(d)} />
+            {weekDates.map(({ day, date: d }) => (
+              <Chip key={d} label={DAY_LABELS[day]} selected={date === d} onPress={() => setDate(d)} />
             ))}
           </View>
         </View>
 
         <View style={{ gap: theme.spacing.sm }}>
           <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Meal</Text>
-          <View style={{ flexDirection: 'row', gap: 8 }}>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
             {MEAL_TYPES.map((m) => (
-              <Chip key={m} label={MEAL_TYPE_LABELS[m]} selected={mealType === m} onPress={() => setMealType(m)} />
+              <Chip key={m} label={MEAL_TYPE_LABELS[m]} selected={mealSlot === m} onPress={() => setMealSlot(m)} />
             ))}
           </View>
         </View>
@@ -57,7 +61,8 @@ export function MoveMealModal({ item, onClose, onMove }: MoveMealModalProps) {
         <Button
           label="Move Meal"
           onPress={() => {
-            onMove(day, mealType);
+            if (!date) return;
+            onMove(date, mealSlot);
             onClose();
           }}
           fullWidth

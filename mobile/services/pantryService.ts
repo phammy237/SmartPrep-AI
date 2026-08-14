@@ -103,14 +103,6 @@ async function adjustQuantity(
   return adjustPantryQuantity(itemId, delta, eventType, reason, timeZone);
 }
 
-/** Applies several deductions at once (e.g. after cooking, one per ingredient actually used), all tagged as 'deducted_by_cooking'. */
-async function deductManyForCooking(
-  items: { id: string; amountUsed: number }[],
-  timeZone: string,
-): Promise<PantryItem[]> {
-  return Promise.all(items.map((item) => adjustPantryQuantity(item.id, -item.amountUsed, 'deducted_by_cooking', undefined, timeZone)));
-}
-
 async function depleteItem(
   itemId: string,
   eventType: 'depleted' | 'discarded' | 'corrected',
@@ -134,7 +126,6 @@ export const pantryService = {
   addManualPantryItem,
   updateItemMetadata,
   adjustQuantity,
-  deductManyForCooking,
   depleteItem,
   restoreItem,
   confirmStillHave,

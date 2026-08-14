@@ -1,8 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import React, { useState } from 'react';
+import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { useSaveRecipe, useSavedRecipes, useUnsaveRecipe } from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
 import { Recipe } from '@/types';
 import { formatMinutes } from '@/utils/format';
@@ -16,7 +17,22 @@ interface RecipeCardProps {
 
 export function RecipeCard({ recipe, onPress, subtitle, width = 190 }: RecipeCardProps) {
   const theme = useTheme();
-  const [saved, setSaved] = useState(false);
+  const recipeVersionId = recipe.recipeVersionId ?? recipe.id;
+  const savedQuery = useSavedRecipes();
+  const saveMutation = useSaveRecipe();
+  const unsaveMutation = useUnsaveRecipe();
+  const saved = savedQuery.data?.some((s) => s.recipeVersionId === recipeVersionId) ?? false;
+  const toggling = saveMutation.isPending || unsaveMutation.isPending;
+
+  const handleToggleSave = () => {
+    if (toggling) return;
+    if (saved) {
+      unsaveMutation.mutate(recipeVersionId);
+    } else {
+      saveMutation.mutate({ recipeVersionId });
+    }
+  };
+
   const defaultSubtitle = subtitle
     ? undefined
     : `${formatMinutes(recipe.prepTimeMinutes + recipe.cookTimeMinutes)} · ${Math.round(recipe.nutritionPerServing.calories)} kcal`;
@@ -51,11 +67,12 @@ export function RecipeCard({ recipe, onPress, subtitle, width = 190 }: RecipeCar
         </View>
       </Pressable>
       <Pressable
-        onPress={() => setSaved((s) => !s)}
+        onPress={handleToggleSave}
+        disabled={toggling}
         accessibilityRole="button"
         accessibilityLabel={saved ? 'Remove from saved' : 'Save recipe'}
         hitSlop={8}
-        style={[styles.saveButton, { backgroundColor: 'rgba(255,255,255,0.92)' }]}
+        style={[styles.saveButton, { backgroundColor: 'rgba(255,255,255,0.92)', opacity: toggling ? 0.6 : 1 }]}
       >
         <Ionicons name={saved ? 'heart' : 'heart-outline'} size={15} color={saved ? theme.colors.freshness.prioritize : theme.colors.textPrimary} />
       </Pressable>

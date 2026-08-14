@@ -2,3 +2,8 @@ export * from './profileRepository';
 export * from './dietaryPreferencesRepository';
 export * from './nutritionGoalsRepository';
 export * from './pantryRepository';
+export * from './recipeRepository';
+export * from './plannerRepository';
+export * from './cookingRepository';
+export * from './preparedMealRepository';
+export * from './mealLogRepository';

@@ -541,7 +541,7 @@ end $$;
 commit;
 
 -- ----------------------------------------------------------------------------
--- Cleanup: remove the rows this script created so re-running it is safe.
+-- Cleanup (Phase 2 rows only - Phase 3 cleanup is its own block below).
 -- Comment this block out if you want to inspect the rows afterward.
 -- ----------------------------------------------------------------------------
 begin;
@@ -551,6 +551,972 @@ delete from public.nutrition_goals where user_id in ('TEST_USER_A_ID'::uuid, 'TE
 delete from public.dietary_preferences where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid);
 update public.profiles set household_size = 1 where id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid);
 drop table if exists rls_test_scratch;
+commit;
+
+-- ============================================================================
+-- Phase 3: recipes / recipe_versions / recipe_ingredients / saved_recipes /
+-- meal_plan_items / cooking_events / cooking_event_ingredients /
+-- prepared_meals / meal_logs.
+--
+-- recipes/recipe_versions/recipe_ingredients are seeded once, globally, by
+-- migration 0004 (the demo catalog) - not per-user data, so there is
+-- nothing to create for those three; the checks below just read the
+-- already-seeded rows. Run 0004 before this file.
+--
+-- Same pattern as Phase 2 throughout: every "should fail" check uses a
+-- `succeeded` flag set inside its own begin/exception block and asserted
+-- *outside* that block, so a real failure can never be swallowed by the
+-- exception handler that's supposed to be catching it.
+-- ============================================================================
+
+create temporary table if not exists rls_test_scratch_p3 (key text primary key, value uuid);
+
+-- ----------------------------------------------------------------------------
+-- Setup: locate the seeded "Creamy Spinach Pasta" demo recipe and its Pasta
+-- ingredient (200 g), and have user_a create a matching real pantry item.
+-- ----------------------------------------------------------------------------
+begin;
+set local role postgres;
+insert into rls_test_scratch_p3 (key, value)
+select 'recipe_version_id', rv.id
+from public.recipe_versions rv
+join public.recipes r on r.id = rv.recipe_id
+where r.legacy_mock_id = 'recipe-creamy-spinach-pasta'
+on conflict (key) do update set value = excluded.value;
+
+insert into rls_test_scratch_p3 (key, value)
+select 'pasta_ingredient_id', ri.id
+from public.recipe_ingredients ri
+where ri.recipe_version_id = (select value from rls_test_scratch_p3 where key = 'recipe_version_id')
+  and ri.catalog_ingredient_id = 'ing-pasta'
+on conflict (key) do update set value = excluded.value;
+
+insert into rls_test_scratch_p3 (key, value)
+select 'salt_ingredient_id', ri.id
+from public.recipe_ingredients ri
+where ri.recipe_version_id = (select value from rls_test_scratch_p3 where key = 'recipe_version_id')
+  and ri.catalog_ingredient_id = 'ing-salt'
+on conflict (key) do update set value = excluded.value;
+commit;
+
+do $$
+begin
+  if not exists (select 1 from rls_test_scratch_p3 where key = 'recipe_version_id')
+    or not exists (select 1 from rls_test_scratch_p3 where key = 'pasta_ingredient_id') then
+    raise exception 'FAIL: setup - demo recipe "Creamy Spinach Pasta" not found; run migration 0004 first';
+  end if;
+  raise notice 'PASS: setup - found the seeded demo recipe and its Pasta/Salt ingredients';
+end $$;
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+select public.create_pantry_item(
+  'ing-manual-rls-pasta', 'https://example.com/pasta.jpg', 'RLS Test Pasta', 'pantry', 500, 'g',
+  null, null, null, null, null, null, null, 'unknown', 'manual'
+);
+commit;
+
+begin;
+set local role postgres;
+insert into rls_test_scratch_p3 (key, value)
+select 'pantry_item_id', id from public.pantry_items where display_name = 'RLS Test Pasta'
+on conflict (key) do update set value = excluded.value;
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Check: demo recipes are visible to any authenticated user (public
+-- visibility) and expose no private ownership data (owner_id null for demo rows).
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  visible_count int;
+  owner uuid;
+begin
+  select count(*) into visible_count from public.recipe_versions
+  where id = (select value from rls_test_scratch_p3 where key = 'recipe_version_id');
+  if visible_count <> 1 then
+    raise exception 'FAIL: user_b (who created nothing) cannot see the public demo recipe_versions row';
+  end if;
+
+  select r.owner_id into owner from public.recipes r
+  join public.recipe_versions rv on rv.recipe_id = r.id
+  where rv.id = (select value from rls_test_scratch_p3 where key = 'recipe_version_id');
+  if owner is not null then
+    raise exception 'FAIL: a seeded demo recipe unexpectedly has a non-null owner_id (would leak an identity)';
+  end if;
+
+  raise notice 'PASS: demo recipe_versions are visible to any authenticated user and expose no owner identity';
+end $$;
+
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Check: recipes/recipe_versions are immutable - no client insert/update.
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  succeeded boolean := false;
+begin
+  begin
+    update public.recipe_versions set title = 'Tampered'
+    where id = (select value from rls_test_scratch_p3 where key = 'recipe_version_id');
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: a client updated an immutable recipe_versions row'; end if;
+
+  succeeded := false;
+  begin
+    insert into public.recipes (owner_id, source_type, visibility, trust_label)
+    values (auth.uid(), 'user_created', 'private', 'user_created');
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: a client inserted a recipes row directly (no insert grant should exist)'; end if;
+
+  raise notice 'PASS: recipe_versions cannot be updated and recipes cannot be inserted directly by a client';
+end $$;
+
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Check: saved_recipes is owner-only, idempotent, and invisible cross-user.
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+insert into public.saved_recipes (user_id, recipe_version_id)
+values ('TEST_USER_A_ID'::uuid, (select value from rls_test_scratch_p3 where key = 'recipe_version_id'))
+on conflict (user_id, recipe_version_id) do nothing;
+
+-- Idempotent repeat save.
+insert into public.saved_recipes (user_id, recipe_version_id)
+values ('TEST_USER_A_ID'::uuid, (select value from rls_test_scratch_p3 where key = 'recipe_version_id'))
+on conflict (user_id, recipe_version_id) do nothing;
+
+do $$
+declare
+  own_count int;
+begin
+  select count(*) into own_count from public.saved_recipes
+  where user_id = 'TEST_USER_A_ID'::uuid
+    and recipe_version_id = (select value from rls_test_scratch_p3 where key = 'recipe_version_id');
+  if own_count <> 1 then
+    raise exception 'FAIL: saving the same recipe version twice produced % rows instead of exactly 1', own_count;
+  end if;
+  raise notice 'PASS: saved_recipes save is idempotent (repeated save = 1 row)';
+end $$;
+
+commit;
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  leaked_count int;
+  affected int;
+begin
+  select count(*) into leaked_count from public.saved_recipes where user_id = 'TEST_USER_A_ID'::uuid;
+  if leaked_count <> 0 then raise exception 'FAIL: user_b can see user_a''s saved_recipes row'; end if;
+
+  delete from public.saved_recipes where user_id = 'TEST_USER_A_ID'::uuid;
+  get diagnostics affected = row_count;
+  if affected <> 0 then raise exception 'FAIL: user_b deleted user_a''s saved_recipes row'; end if;
+
+  raise notice 'PASS: user_b cannot see or delete user_a''s saved_recipes row';
+end $$;
+
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Check: meal_plan_items is owner-only; marking an entry completed never
+-- creates a meal_logs row (planning vs. consumption stay separate).
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+with inserted as (
+  insert into public.meal_plan_items (user_id, scheduled_date, timezone, meal_slot, recipe_version_id, planned_servings)
+  values (
+    'TEST_USER_A_ID'::uuid, current_date + 1, 'UTC', 'dinner',
+    (select value from rls_test_scratch_p3 where key = 'recipe_version_id'), 2
+  )
+  returning id
+)
+insert into rls_test_scratch_p3 (key, value)
+select 'plan_item_id', id from inserted
+on conflict (key) do update set value = excluded.value;
+
+do $$
+declare
+  logs_before int;
+  logs_after int;
+begin
+  select count(*) into logs_before from public.meal_logs where user_id = 'TEST_USER_A_ID'::uuid;
+
+  update public.meal_plan_items
+  set status = 'completed'
+  where id = (select value from rls_test_scratch_p3 where key = 'plan_item_id') and user_id = auth.uid();
+
+  select count(*) into logs_after from public.meal_logs where user_id = 'TEST_USER_A_ID'::uuid;
+
+  if logs_after <> logs_before then
+    raise exception 'FAIL: marking a meal_plan_items row completed created a meal_logs row (% -> %)', logs_before, logs_after;
+  end if;
+  raise notice 'PASS: marking a plan entry completed creates no meal_logs row';
+end $$;
+
+commit;
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  leaked_count int;
+begin
+  select count(*) into leaked_count from public.meal_plan_items where user_id = 'TEST_USER_A_ID'::uuid;
+  if leaked_count <> 0 then raise exception 'FAIL: user_b can see user_a''s meal_plan_items row'; end if;
+  raise notice 'PASS: user_b cannot see user_a''s meal_plan_items row';
+end $$;
+
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Check: full cooking lifecycle for user_a - start (idempotent), complete
+-- with a real deduction, pantry/prepared-meal/meal-log side effects, and
+-- duplicate completion rejected without duplicate side effects.
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  event1 public.cooking_events;
+  event1_retry public.cooking_events;
+  pantry_before numeric;
+  pantry_after numeric;
+  complete_result jsonb;
+  prepared_meal_id uuid;
+  meal_log_id uuid;
+  event_count int;
+  deduction_count int;
+  pantry_event_count int;
+  succeeded boolean := false;
+begin
+  event1 := public.start_cooking_event(
+    (select value from rls_test_scratch_p3 where key = 'recipe_version_id'),
+    null, 2, 'rls-test-cooking-a-1'
+  );
+  if event1.status <> 'started' then raise exception 'FAIL: start_cooking_event did not return a started event'; end if;
+
+  -- Idempotent retry with the same key must return the SAME row, not a new one.
+  event1_retry := public.start_cooking_event(
+    (select value from rls_test_scratch_p3 where key = 'recipe_version_id'),
+    null, 2, 'rls-test-cooking-a-1'
+  );
+  if event1_retry.id <> event1.id then
+    raise exception 'FAIL: retrying start_cooking_event with the same idempotency key created a second row';
+  end if;
+
+  select count(*) into event_count from public.cooking_events
+  where user_id = 'TEST_USER_A_ID'::uuid and idempotency_key = 'rls-test-cooking-a-1';
+  if event_count <> 1 then raise exception 'FAIL: expected exactly 1 cooking_events row for this idempotency key, found %', event_count; end if;
+
+  select quantity into pantry_before from public.pantry_items
+  where id = (select value from rls_test_scratch_p3 where key = 'pantry_item_id');
+
+  complete_result := public.complete_cooking_event(
+    event1.id, 2,
+    jsonb_build_array(
+      jsonb_build_object(
+        'recipeIngredientId', (select value from rls_test_scratch_p3 where key = 'pasta_ingredient_id'),
+        'pantryItemId', (select value from rls_test_scratch_p3 where key = 'pantry_item_id'),
+        'requestedQuantity', 200, 'requestedUnit', 'g',
+        'deductedQuantity', 200, 'deductedUnit', 'g',
+        'matchConfidence', 'exact', 'userConfirmed', true, 'wasSkipped', false
+      ),
+      -- The Salt ingredient is a pantry staple with no matching pantry item
+      -- in this test - skipped, must deduct nothing.
+      jsonb_build_object(
+        'recipeIngredientId', (select value from rls_test_scratch_p3 where key = 'salt_ingredient_id'),
+        'pantryItemId', null, 'requestedQuantity', 1, 'requestedUnit', 'container',
+        'deductedQuantity', 0, 'userConfirmed', false, 'wasSkipped', true
+      )
+    ),
+    null, 1, 'dinner', 'rls test'
+  );
+
+  prepared_meal_id := (complete_result -> 'preparedMeal' ->> 'id')::uuid;
+  meal_log_id := (complete_result -> 'mealLog' ->> 'id')::uuid;
+  if prepared_meal_id is null or meal_log_id is null then
+    raise exception 'FAIL: complete_cooking_event did not return both a prepared meal and a meal log';
+  end if;
+
+  select quantity into pantry_after from public.pantry_items
+  where id = (select value from rls_test_scratch_p3 where key = 'pantry_item_id');
+  if pantry_after <> pantry_before - 200 then
+    raise exception 'FAIL: pantry quantity after cooking is % (expected %)', pantry_after, pantry_before - 200;
+  end if;
+
+  select count(*) into pantry_event_count from public.pantry_events
+  where pantry_item_id = (select value from rls_test_scratch_p3 where key = 'pantry_item_id')
+    and event_type = 'deducted_by_cooking' and source_entity_id = event1.id;
+  if pantry_event_count <> 1 then raise exception 'FAIL: expected exactly 1 deducted_by_cooking pantry_events row, found %', pantry_event_count; end if;
+
+  select count(*) into deduction_count from public.cooking_event_ingredients where cooking_event_id = event1.id;
+  if deduction_count <> 2 then raise exception 'FAIL: expected 2 cooking_event_ingredients rows (pasta + skipped salt), found %', deduction_count; end if;
+
+  if (select servings_remaining from public.prepared_meals where id = prepared_meal_id) <> 1 then
+    raise exception 'FAIL: prepared_meals.servings_remaining should be 1 (2 prepared - 1 consumed now)';
+  end if;
+
+  if (select servings_consumed from public.meal_logs where id = meal_log_id) <> 1 then
+    raise exception 'FAIL: the cooking-flow meal_logs row should record exactly 1 serving consumed, not the whole batch';
+  end if;
+
+  insert into rls_test_scratch_p3 (key, value) values ('cooking_event_1_id', event1.id) on conflict (key) do update set value = excluded.value;
+  insert into rls_test_scratch_p3 (key, value) values ('prepared_meal_1_id', prepared_meal_id) on conflict (key) do update set value = excluded.value;
+  insert into rls_test_scratch_p3 (key, value) values ('meal_log_1_id', meal_log_id) on conflict (key) do update set value = excluded.value;
+
+  raise notice 'PASS: complete_cooking_event deducts exactly the confirmed amount, skips the unconfirmed ingredient, and logs only the servings consumed now (not the whole batch)';
+
+  -- Duplicate completion must be rejected, not silently re-applied.
+  begin
+    perform public.complete_cooking_event(event1.id, 2, '[]'::jsonb, null, 0, null, null);
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: completing an already-completed cooking event succeeded'; end if;
+
+  select quantity into pantry_after from public.pantry_items
+  where id = (select value from rls_test_scratch_p3 where key = 'pantry_item_id');
+  if pantry_after <> pantry_before - 200 then
+    raise exception 'FAIL: a rejected duplicate completion still changed the pantry quantity (double-deduction)';
+  end if;
+
+  raise notice 'PASS: duplicate completion is rejected and does not double-deduct';
+end $$;
+
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Check: insufficient pantry stock rejects the ENTIRE completion (a second,
+-- separate cooking event - the whole transaction rolls back, including any
+-- earlier valid-looking deductions in the same call).
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  event2 public.cooking_events;
+  pantry_before numeric;
+  pantry_after numeric;
+  succeeded boolean := false;
+begin
+  event2 := public.start_cooking_event(
+    (select value from rls_test_scratch_p3 where key = 'recipe_version_id'),
+    null, 2, 'rls-test-cooking-a-2'
+  );
+
+  select quantity into pantry_before from public.pantry_items
+  where id = (select value from rls_test_scratch_p3 where key = 'pantry_item_id');
+
+  begin
+    perform public.complete_cooking_event(
+      event2.id, 2,
+      jsonb_build_array(
+        jsonb_build_object(
+          'recipeIngredientId', (select value from rls_test_scratch_p3 where key = 'pasta_ingredient_id'),
+          'pantryItemId', (select value from rls_test_scratch_p3 where key = 'pantry_item_id'),
+          'requestedQuantity', 100000, 'requestedUnit', 'g',
+          'deductedQuantity', 100000, 'deductedUnit', 'g',
+          'matchConfidence', 'exact', 'userConfirmed', true, 'wasSkipped', false
+        )
+      ),
+      null, 0, null, null
+    );
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: completing with a deduction exceeding pantry stock succeeded'; end if;
+
+  select quantity into pantry_after from public.pantry_items
+  where id = (select value from rls_test_scratch_p3 where key = 'pantry_item_id');
+  if pantry_after <> pantry_before then
+    raise exception 'FAIL: pantry quantity changed despite the completion being rejected';
+  end if;
+
+  if exists (select 1 from public.cooking_events where id = event2.id and status = 'completed') then
+    raise exception 'FAIL: cooking event was marked completed despite the rejected deduction';
+  end if;
+
+  -- Clean up this event via cancellation so it does not interfere with later checks.
+  perform public.cancel_cooking_event(event2.id, 'rls test cleanup');
+
+  raise notice 'PASS: a single insufficient-stock deduction rejects the entire completion with no partial effects';
+end $$;
+
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Check: a user cannot deduct from another user's pantry item by passing its
+-- real id directly into complete_cooking_event (the pantry-remapping picker
+-- in the UI can never even show a foreign item, since it only lists the
+-- caller's own pantry via RLS - this checks the server-side trust boundary
+-- an adversarial client could otherwise try to bypass).
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
+
+select public.create_pantry_item(
+  'ing-manual-rls-pasta-b', 'https://example.com/pasta-b.jpg', 'RLS Test Pasta B', 'pantry', 500, 'g',
+  null, null, null, null, null, null, null, 'unknown', 'manual'
+);
+commit;
+
+begin;
+set local role postgres;
+insert into rls_test_scratch_p3 (key, value)
+select 'pantry_item_b_id', id from public.pantry_items where display_name = 'RLS Test Pasta B'
+on conflict (key) do update set value = excluded.value;
+commit;
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  event_foreign public.cooking_events;
+  succeeded boolean := false;
+  b_quantity_before numeric;
+  b_quantity_after numeric;
+begin
+  select quantity into b_quantity_before from public.pantry_items
+  where id = (select value from rls_test_scratch_p3 where key = 'pantry_item_b_id');
+
+  event_foreign := public.start_cooking_event(
+    (select value from rls_test_scratch_p3 where key = 'recipe_version_id'),
+    null, 2, 'rls-test-cooking-a-foreign'
+  );
+
+  begin
+    perform public.complete_cooking_event(
+      event_foreign.id, 2,
+      jsonb_build_array(
+        jsonb_build_object(
+          'recipeIngredientId', (select value from rls_test_scratch_p3 where key = 'pasta_ingredient_id'),
+          'pantryItemId', (select value from rls_test_scratch_p3 where key = 'pantry_item_b_id'),
+          'requestedQuantity', 200, 'requestedUnit', 'g',
+          'deductedQuantity', 200, 'deductedUnit', 'g',
+          'matchConfidence', 'exact', 'userConfirmed', true, 'wasSkipped', false
+        )
+      ),
+      null, 0, null, null
+    );
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: user_a deducted from user_b''s pantry item by passing its id directly to complete_cooking_event'; end if;
+
+  select quantity into b_quantity_after from public.pantry_items
+  where id = (select value from rls_test_scratch_p3 where key = 'pantry_item_b_id');
+  if b_quantity_after <> b_quantity_before then
+    raise exception 'FAIL: user_b''s pantry quantity changed despite the cross-user deduction being rejected';
+  end if;
+
+  if exists (select 1 from public.cooking_events where id = event_foreign.id and status = 'completed') then
+    raise exception 'FAIL: the cooking event was marked completed despite the cross-user deduction being rejected';
+  end if;
+
+  perform public.cancel_cooking_event(event_foreign.id, 'rls test cleanup');
+
+  raise notice 'PASS: a user cannot deduct from another user''s pantry item via complete_cooking_event, even with a real foreign pantry_item_id';
+end $$;
+
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Check: a cancelled cooking event creates no deductions and cannot later be completed.
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  event3 public.cooking_events;
+  succeeded boolean := false;
+  deduction_count int;
+begin
+  event3 := public.start_cooking_event(
+    (select value from rls_test_scratch_p3 where key = 'recipe_version_id'),
+    null, 2, 'rls-test-cooking-a-3'
+  );
+  event3 := public.cancel_cooking_event(event3.id, 'changed my mind');
+  if event3.status <> 'cancelled' then raise exception 'FAIL: cancel_cooking_event did not mark the event cancelled'; end if;
+
+  select count(*) into deduction_count from public.cooking_event_ingredients where cooking_event_id = event3.id;
+  if deduction_count <> 0 then raise exception 'FAIL: a cancelled cooking event has % deduction rows (expected 0)', deduction_count; end if;
+
+  begin
+    perform public.complete_cooking_event(event3.id, 2, '[]'::jsonb, null, 0, null, null);
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: a cancelled cooking event was completed'; end if;
+
+  raise notice 'PASS: a cancelled cooking event has no deductions and cannot be completed';
+end $$;
+
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Check: user_b cannot see, complete, or cancel user_a's cooking event, and
+-- cannot see user_a's prepared meal, meal log, or deduction rows.
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  leaked_count int;
+  succeeded boolean;
+  a_event_id uuid;
+begin
+  a_event_id := (select value from rls_test_scratch_p3 where key = 'cooking_event_1_id');
+
+  select count(*) into leaked_count from public.cooking_events where id = a_event_id;
+  if leaked_count <> 0 then raise exception 'FAIL: user_b can see user_a''s cooking_events row'; end if;
+
+  select count(*) into leaked_count from public.prepared_meals where id = (select value from rls_test_scratch_p3 where key = 'prepared_meal_1_id');
+  if leaked_count <> 0 then raise exception 'FAIL: user_b can see user_a''s prepared_meals row'; end if;
+
+  select count(*) into leaked_count from public.meal_logs where id = (select value from rls_test_scratch_p3 where key = 'meal_log_1_id');
+  if leaked_count <> 0 then raise exception 'FAIL: user_b can see user_a''s meal_logs row'; end if;
+
+  select count(*) into leaked_count from public.cooking_event_ingredients where cooking_event_id = a_event_id;
+  if leaked_count <> 0 then raise exception 'FAIL: user_b can see user_a''s cooking_event_ingredients rows'; end if;
+
+  succeeded := false;
+  begin
+    perform public.cancel_cooking_event(a_event_id, 'hijack attempt');
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: user_b cancelled user_a''s cooking event'; end if;
+
+  succeeded := false;
+  begin
+    perform public.complete_cooking_event(a_event_id, 1, '[]'::jsonb, null, 0, null, null);
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: user_b completed user_a''s cooking event'; end if;
+
+  succeeded := false;
+  begin
+    perform public.log_prepared_meal_consumption(
+      (select value from rls_test_scratch_p3 where key = 'prepared_meal_1_id'), 1, 'dinner', null, null
+    );
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: user_b logged consumption from user_a''s prepared meal'; end if;
+
+  raise notice 'PASS: user_b cannot see or act on any of user_a''s cooking/prepared-meal/meal-log data';
+end $$;
+
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Check: cooking_event_ingredients and pantry_events cannot be forged
+-- directly by a client (no insert grant on either table for authenticated).
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  succeeded boolean := false;
+begin
+  begin
+    insert into public.cooking_event_ingredients (
+      user_id, cooking_event_id, recipe_ingredient_id, requested_quantity, deducted_quantity
+    ) values (
+      'TEST_USER_A_ID'::uuid, (select value from rls_test_scratch_p3 where key = 'cooking_event_1_id'),
+      (select value from rls_test_scratch_p3 where key = 'pasta_ingredient_id'), 999, 999
+    );
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: a client inserted a cooking_event_ingredients row directly'; end if;
+
+  succeeded := false;
+  begin
+    insert into public.pantry_events (
+      user_id, pantry_item_id, event_type, quantity_delta, quantity_before, quantity_after
+    ) values (
+      'TEST_USER_A_ID'::uuid, (select value from rls_test_scratch_p3 where key = 'pantry_item_id'),
+      'deducted_by_cooking', -9999, 9999, 0
+    );
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: a client forged a deducted_by_cooking pantry_events row directly'; end if;
+
+  raise notice 'PASS: cooking_event_ingredients and pantry_events cannot be inserted directly by a client';
+end $$;
+
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Check: prepared-meal consumption - logging exactly the last serving marks
+-- it consumed; logging beyond what remains is rejected.
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  meal_id uuid;
+  result jsonb;
+  remaining numeric;
+  status text;
+  succeeded boolean := false;
+begin
+  meal_id := (select value from rls_test_scratch_p3 where key = 'prepared_meal_1_id');
+
+  begin
+    perform public.log_prepared_meal_consumption(meal_id, 5, 'dinner', 'too much', null);
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: logging more servings than remain succeeded'; end if;
+
+  result := public.log_prepared_meal_consumption(meal_id, 1, 'dinner', 'the last of it', 'rls-test-prepared-log-1');
+  remaining := (result -> 'preparedMeal' ->> 'servingsRemaining')::numeric;
+  status := result -> 'preparedMeal' ->> 'status';
+  if remaining <> 0 or status <> 'consumed' then
+    raise exception 'FAIL: consuming the last serving left remaining=% status=% (expected 0 / consumed)', remaining, status;
+  end if;
+
+  -- Retrying the exact same idempotency key must not double-log.
+  perform public.log_prepared_meal_consumption(meal_id, 1, 'dinner', 'retry', 'rls-test-prepared-log-1');
+  if (select count(*) from public.meal_logs where idempotency_key = 'rls-test-prepared-log-1') <> 1 then
+    raise exception 'FAIL: retrying log_prepared_meal_consumption with the same idempotency key created a duplicate log';
+  end if;
+
+  raise notice 'PASS: prepared-meal consumption rejects over-consumption, marks consumed at zero, and is idempotent on retry';
+end $$;
+
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Check: meal_logs immutability - the nutrition snapshot/quantities/source
+-- references cannot be edited directly; voiding (and only voiding) works
+-- through the restricted column grant; a voided row cannot be re-voided;
+-- replaced_by_log_id cannot be set by a plain client update.
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  log_id uuid;
+  succeeded boolean := false;
+  other_log_id uuid;
+begin
+  log_id := (select value from rls_test_scratch_p3 where key = 'meal_log_1_id');
+
+  begin
+    update public.meal_logs set nutrition_snapshot = jsonb_build_object('status', 'verified', 'calories', 1) where id = log_id;
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: a client edited a meal_logs nutrition_snapshot directly'; end if;
+
+  succeeded := false;
+  begin
+    update public.meal_logs set servings_consumed = 999 where id = log_id;
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: a client edited meal_logs.servings_consumed directly'; end if;
+
+  select id into other_log_id from public.meal_logs where user_id = 'TEST_USER_A_ID'::uuid and id <> log_id limit 1;
+  if other_log_id is not null then
+    succeeded := false;
+    begin
+      update public.meal_logs set replaced_by_log_id = other_log_id where id = log_id;
+      succeeded := true;
+    exception when others then succeeded := false;
+    end;
+    if succeeded then raise exception 'FAIL: a client set meal_logs.replaced_by_log_id directly (no column grant should exist)'; end if;
+  end if;
+
+  -- The one thing a plain client update MAY do: void it.
+  update public.meal_logs set voided_at = now(), void_reason = 'rls test void' where id = log_id;
+  if (select voided_at from public.meal_logs where id = log_id) is null then
+    raise exception 'FAIL: a client could not void their own meal_logs row through the restricted column grant';
+  end if;
+
+  -- Re-voiding (or un-voiding) must fail.
+  succeeded := false;
+  begin
+    update public.meal_logs set voided_at = now() where id = log_id;
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: a voided meal_logs row was re-voided'; end if;
+
+  succeeded := false;
+  begin
+    update public.meal_logs set voided_at = null where id = log_id;
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: a voided meal_logs row was un-voided'; end if;
+
+  raise notice 'PASS: meal_logs snapshot/quantities/replacement-link cannot be edited directly; voiding works once and only once, through the restricted column grant';
+end $$;
+
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Check: no meal_logs row can ever be hard-deleted by a client (no delete
+-- policy exists for the authenticated role on this table at all).
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  affected int;
+begin
+  delete from public.meal_logs where id = (select value from rls_test_scratch_p3 where key = 'meal_log_1_id');
+  get diagnostics affected = row_count;
+  if affected <> 0 then raise exception 'FAIL: a meal_logs row was hard-deleted by a client'; end if;
+  raise notice 'PASS: meal_logs rows cannot be hard-deleted through normal client access';
+end $$;
+
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Check: correct_meal_log - a normal correction voids the original without
+-- mutating its nutrition_snapshot (historical immutability), links
+-- replaced_by_log_id, and produces a correct, non-double-counted replacement;
+-- correcting the same (now-voided) log again is rejected (no duplicate
+-- correction); and a different user cannot correct this user's log.
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  original_log public.meal_logs;
+  correct_result jsonb;
+  voided_row_id uuid;
+  replacement_row_id uuid;
+  original_snapshot_before jsonb;
+  original_snapshot_after jsonb;
+  succeeded boolean := false;
+begin
+  original_log := public.quick_add_meal_log(
+    'snack', jsonb_build_object('status', 'estimated', 'calories', 999, 'proteinG', 1, 'carbsG', 1, 'fatG', 1),
+    'rls-test-log-to-correct', 'wrong entry', null
+  );
+  original_snapshot_before := original_log.nutrition_snapshot;
+
+  insert into rls_test_scratch_p3 (key, value) values ('log_to_correct_id', original_log.id) on conflict (key) do update set value = excluded.value;
+
+  correct_result := public.correct_meal_log(
+    original_log.id, 'entered the wrong calories', 'snack',
+    jsonb_build_object('status', 'estimated', 'calories', 450, 'proteinG', 20, 'carbsG', 40, 'fatG', 15),
+    null, null, 'fixed calories', 'rls-test-correction-1', null
+  );
+
+  voided_row_id := (correct_result -> 'voided' ->> 'id')::uuid;
+  replacement_row_id := (correct_result -> 'replacement' ->> 'id')::uuid;
+  if voided_row_id <> original_log.id then raise exception 'FAIL: correct_meal_log voided a different row than the one requested'; end if;
+
+  select nutrition_snapshot into original_snapshot_after from public.meal_logs where id = voided_row_id;
+  if original_snapshot_after <> original_snapshot_before then
+    raise exception 'FAIL: correcting a meal log mutated the ORIGINAL row''s nutrition_snapshot - historical records must stay immutable';
+  end if;
+
+  if (select replaced_by_log_id from public.meal_logs where id = voided_row_id) <> replacement_row_id then
+    raise exception 'FAIL: the voided original''s replaced_by_log_id does not point at the new replacement row';
+  end if;
+
+  if (select voided_at from public.meal_logs where id = voided_row_id) is null then
+    raise exception 'FAIL: the original row was not marked voided by correct_meal_log';
+  end if;
+
+  if (select (nutrition_snapshot ->> 'calories')::numeric from public.meal_logs where id = replacement_row_id) <> 450 then
+    raise exception 'FAIL: the replacement row does not have the corrected nutrition values';
+  end if;
+
+  if (select count(*) from public.meal_logs where id in (voided_row_id, replacement_row_id) and voided_at is null) <> 1 then
+    raise exception 'FAIL: expected exactly one non-voided row between the original and its replacement (no double-counting)';
+  end if;
+
+  raise notice 'PASS: correct_meal_log voids the original without mutating its snapshot, links replaced_by_log_id, and leaves exactly one non-voided (correct) row';
+
+  -- Duplicate correction: correcting the now-voided original again must fail.
+  begin
+    perform public.correct_meal_log(
+      original_log.id, 'trying again', 'snack',
+      jsonb_build_object('status', 'estimated', 'calories', 1), null, null, null, 'rls-test-correction-2', null
+    );
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: correcting an already-voided/corrected meal log succeeded (should be rejected)'; end if;
+
+  raise notice 'PASS: correcting an already-voided/replaced meal log is rejected';
+end $$;
+
+commit;
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  log_row public.meal_logs;
+begin
+  log_row := public.quick_add_meal_log(
+    'snack', jsonb_build_object('status', 'estimated', 'calories', 300), 'rls-test-log-for-ownership', null, null
+  );
+  insert into rls_test_scratch_p3 (key, value) values ('log_for_ownership_id', log_row.id) on conflict (key) do update set value = excluded.value;
+end $$;
+
+commit;
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  a_log_id uuid;
+  succeeded boolean := false;
+begin
+  a_log_id := (select value from rls_test_scratch_p3 where key = 'log_for_ownership_id');
+
+  begin
+    perform public.correct_meal_log(
+      a_log_id, 'hijack attempt', 'snack',
+      jsonb_build_object('status', 'estimated', 'calories', 1), null, null, null, 'rls-test-correction-hijack', null
+    );
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: user_b corrected user_a''s meal log'; end if;
+
+  if (select voided_at from public.meal_logs where id = a_log_id) is not null then
+    raise exception 'FAIL: user_a''s meal log was voided by user_b''s rejected correction attempt';
+  end if;
+
+  raise notice 'PASS: a different user cannot correct this user''s meal log';
+end $$;
+
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Check: anonymous requests cannot read any Phase 3 table and cannot call
+-- any of the six security-definer RPCs (all reject a null auth.uid()).
+-- ----------------------------------------------------------------------------
+begin;
+set local role anon;
+select set_config('request.jwt.claims', '', true);
+
+do $$
+declare
+  total_count int;
+  succeeded boolean;
+begin
+  select count(*) into total_count from public.recipes; if total_count <> 0 then raise exception 'FAIL: anon read % recipes rows (only public ones should ever be readable, and only by authenticated users)', total_count; end if;
+  select count(*) into total_count from public.recipe_versions; if total_count <> 0 then raise exception 'FAIL: anon read % recipe_versions rows', total_count; end if;
+  select count(*) into total_count from public.saved_recipes; if total_count <> 0 then raise exception 'FAIL: anon read % saved_recipes rows', total_count; end if;
+  select count(*) into total_count from public.meal_plan_items; if total_count <> 0 then raise exception 'FAIL: anon read % meal_plan_items rows', total_count; end if;
+  select count(*) into total_count from public.cooking_events; if total_count <> 0 then raise exception 'FAIL: anon read % cooking_events rows', total_count; end if;
+  select count(*) into total_count from public.prepared_meals; if total_count <> 0 then raise exception 'FAIL: anon read % prepared_meals rows', total_count; end if;
+  select count(*) into total_count from public.meal_logs; if total_count <> 0 then raise exception 'FAIL: anon read % meal_logs rows', total_count; end if;
+
+  succeeded := false;
+  begin
+    perform public.start_cooking_event((select value from rls_test_scratch_p3 where key = 'recipe_version_id'), null, null, 'anon-attempt');
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: anon called start_cooking_event'; end if;
+
+  succeeded := false;
+  begin
+    perform public.quick_add_meal_log('snack', jsonb_build_object('status', 'estimated', 'calories', 100), 'anon-attempt', null, null);
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: anon called quick_add_meal_log'; end if;
+
+  succeeded := false;
+  begin
+    perform public.correct_meal_log(
+      (select value from rls_test_scratch_p3 where key = 'log_for_ownership_id'),
+      'anon attempt', 'snack', jsonb_build_object('status', 'estimated', 'calories', 1), null, null, null, 'anon-correct-attempt', null
+    );
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: anon called correct_meal_log'; end if;
+
+  raise notice 'PASS: anonymous role cannot read any Phase 3 table or call any Phase 3 RPC';
+end $$;
+
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Phase 3 cleanup.
+-- ----------------------------------------------------------------------------
+begin;
+set local role postgres;
+delete from public.meal_logs where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid);
+delete from public.prepared_meals where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid);
+delete from public.cooking_event_ingredients where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid);
+delete from public.cooking_events where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid);
+delete from public.meal_plan_items where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid);
+delete from public.saved_recipes where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid);
+delete from public.pantry_items where display_name in ('RLS Test Pasta', 'RLS Test Pasta B');
+drop table if exists rls_test_scratch_p3;
 commit;
 
 do $$

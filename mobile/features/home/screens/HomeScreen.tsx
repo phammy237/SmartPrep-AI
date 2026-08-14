@@ -4,12 +4,12 @@ import { Text, View } from 'react-native';
 
 import { EmptyState, LoadingState, Screen, SectionHeader } from '@/components';
 import { RecipeCarousel } from '@/features/recipes/components/RecipeCarousel';
-import { useKitchenImpact, useMealPlan, usePantry, useRecipeCollections, useRecipes, useUser } from '@/hooks';
+import { useKitchenImpact, useMealLogs, useMealPlanWeek, usePantry, useRecipeCollections, useRecipes, useUser } from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
 import { countIngredientsNeedingAttention, getRecipeAvailability } from '@/services';
-import { currentWeekday } from '@/utils/date';
+import { todayIsoDateInTimeZone } from '@/utils/expiration';
 import { freshnessSortWeight } from '@/utils/freshness';
-import { sumNutrition } from '@/utils/nutrition';
+import { dailyNutritionTotal } from '@/utils/nutritionSnapshot';
 import { GreetingHeader } from '../components/GreetingHeader';
 import { ImpactSummaryCard } from '../components/ImpactSummaryCard';
 import { NutritionCard } from '../components/NutritionCard';
@@ -24,8 +24,11 @@ export function HomeScreen() {
   const pantryQuery = usePantry();
   const collectionsQuery = useRecipeCollections();
   const recipesQuery = useRecipes();
-  const mealPlanQuery = useMealPlan();
+  const mealPlanQuery = useMealPlanWeek();
   const impactQuery = useKitchenImpact();
+  const timeZone = userQuery.data?.timezone ?? 'UTC';
+  const today = todayIsoDateInTimeZone(timeZone);
+  const mealLogsQuery = useMealLogs(today, today);
 
   const pantry = pantryQuery.data;
   const collections = collectionsQuery.data;
@@ -49,18 +52,35 @@ export function HomeScreen() {
   }, [collections, recipes]);
 
   const upcomingPlanItems = useMemo(
-    () => (mealPlanQuery.data?.items ?? []).filter((item) => item.mealType === 'dinner').slice(0, 4),
+    () => (mealPlanQuery.data ?? []).filter((item) => item.mealSlot === 'dinner').slice(0, 4),
     [mealPlanQuery.data],
   );
 
-  const todaysNutrition = useMemo(() => {
-    const today = currentWeekday();
-    const todaysItems = (mealPlanQuery.data?.items ?? []).filter((item) => item.day === today);
-    const facts = todaysItems
-      .map((item) => recipesById[item.recipeId]?.nutritionPerServing)
-      .filter((f): f is NonNullable<typeof f> => !!f);
-    return sumNutrition(facts);
-  }, [mealPlanQuery.data, recipesById]);
+  // Real consumed nutrition from today's meal_logs - never the meal plan
+  // (planned meals must never count toward consumed calories/macros).
+  const todaysNutritionTotal = useMemo(
+    () =>
+      dailyNutritionTotal(
+        (mealLogsQuery.data ?? []).map((log) => ({
+          localDate: log.localDate,
+          nutritionSnapshot: log.nutritionSnapshot,
+          voidedAt: log.voidedAt,
+        })),
+        today,
+      ),
+    [mealLogsQuery.data, today],
+  );
+  // NutritionCard expects always-known numbers; coalescing null->0 here is
+  // safe because "no nutrition known yet today" and "0 consumed so far" read
+  // the same on this small summary card - see NutritionProgressScreen for
+  // the honest incomplete-aware rendering.
+  const todaysNutrition = {
+    calories: todaysNutritionTotal.calories ?? 0,
+    proteinG: todaysNutritionTotal.proteinG ?? 0,
+    carbsG: todaysNutritionTotal.carbsG ?? 0,
+    fatG: todaysNutritionTotal.fatG ?? 0,
+    fiberG: todaysNutritionTotal.fiberG ?? 0,
+  };
 
   const isLoading =
     userQuery.isLoading || pantryQuery.isLoading || collectionsQuery.isLoading || recipesQuery.isLoading;

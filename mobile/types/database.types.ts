@@ -27,6 +27,9 @@ type PantryQuantityUnit =
   | 'ml'
   | 'L';
 
+type NutritionStatusDb = 'verified' | 'estimated' | 'incomplete';
+type MealTypeDb = 'breakfast' | 'lunch' | 'dinner' | 'snack';
+
 export interface Database {
   public: {
     Tables: {
@@ -221,6 +224,238 @@ export interface Database {
         Update: never;
         Relationships: [];
       };
+      recipes: {
+        Row: {
+          id: string;
+          owner_id: string | null;
+          source_type: 'demo' | 'user_created' | 'external' | 'ai_generated';
+          source_provider: string | null;
+          external_source_id: string | null;
+          source_url: string | null;
+          attribution: string | null;
+          visibility: 'private' | 'public';
+          trust_label: 'source_tested' | 'community_tested' | 'ai_experimental' | 'user_created' | 'demo';
+          legacy_mock_id: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        // No client Insert/Update - Phase 3 has no recipe-authoring UI; all
+        // rows come from the 0004 seed migration. See migration 0003.
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      recipe_versions: {
+        Row: {
+          id: string;
+          recipe_id: string;
+          parent_version_id: string | null;
+          version_number: number;
+          title: string;
+          description: string | null;
+          servings: number;
+          prep_time_minutes: number | null;
+          cook_time_minutes: number | null;
+          instructions: string[];
+          image_uri: string | null;
+          nutrition_status: NutritionStatusDb;
+          nutrition_snapshot: Json;
+          source_metadata: Json;
+          version_reason: string;
+          difficulty: 'easy' | 'medium' | 'hard' | null;
+          additional_cost_estimate: number | null;
+          tags: string[];
+          cuisines: string[];
+          collections: string[];
+          demo_reasons: Json;
+          created_at: string;
+        };
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      recipe_ingredients: {
+        Row: {
+          id: string;
+          recipe_version_id: string;
+          display_name: string;
+          normalized_name: string;
+          quantity: number | null;
+          unit: PantryQuantityUnit | null;
+          estimated_grams: number | null;
+          preparation: string | null;
+          catalog_ingredient_id: string | null;
+          is_optional: boolean;
+          is_pantry_staple: boolean;
+          sort_order: number;
+          created_at: string;
+        };
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      saved_recipes: {
+        Row: {
+          id: string;
+          user_id: string;
+          recipe_version_id: string;
+          saved_at: string;
+          notes: string | null;
+        };
+        Insert: {
+          user_id: string;
+          recipe_version_id: string;
+          notes?: string | null;
+        };
+        Update: {
+          notes?: string | null;
+        };
+        Relationships: [];
+      };
+      meal_plan_items: {
+        Row: {
+          id: string;
+          user_id: string;
+          scheduled_date: string;
+          scheduled_time: string | null;
+          timezone: string;
+          meal_slot: MealTypeDb;
+          recipe_version_id: string;
+          planned_servings: number;
+          status: 'planned' | 'completed' | 'skipped' | 'cancelled';
+          notes: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          user_id: string;
+          scheduled_date: string;
+          scheduled_time?: string | null;
+          timezone?: string;
+          meal_slot: MealTypeDb;
+          recipe_version_id: string;
+          planned_servings: number;
+          status?: 'planned' | 'completed' | 'skipped' | 'cancelled';
+          notes?: string | null;
+        };
+        Update: {
+          scheduled_date?: string;
+          scheduled_time?: string | null;
+          timezone?: string;
+          meal_slot?: MealTypeDb;
+          recipe_version_id?: string;
+          planned_servings?: number;
+          status?: 'planned' | 'completed' | 'skipped' | 'cancelled';
+          notes?: string | null;
+        };
+        Relationships: [];
+      };
+      cooking_events: {
+        Row: {
+          id: string;
+          user_id: string;
+          recipe_version_id: string;
+          meal_plan_item_id: string | null;
+          status: 'started' | 'completed' | 'cancelled';
+          planned_servings: number;
+          actual_servings_prepared: number | null;
+          final_batch_weight_g: number | null;
+          pantry_deduction_status: 'pending' | 'applied' | 'skipped';
+          idempotency_key: string;
+          started_at: string;
+          completed_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        // No client Insert/Update - see start_cooking_event/cancel_cooking_event/
+        // complete_cooking_event RPCs. See migration 0003.
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      cooking_event_ingredients: {
+        Row: {
+          id: string;
+          user_id: string;
+          cooking_event_id: string;
+          recipe_ingredient_id: string;
+          pantry_item_id: string | null;
+          requested_quantity: number;
+          requested_unit: string | null;
+          deducted_quantity: number;
+          deducted_unit: string | null;
+          estimated_grams: number | null;
+          match_confidence: 'exact' | 'likely' | 'uncertain' | 'none' | null;
+          user_confirmed: boolean;
+          was_skipped: boolean;
+          pantry_event_id: string | null;
+          created_at: string;
+        };
+        // No client Insert/Update - written only by complete_cooking_event.
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      prepared_meals: {
+        Row: {
+          id: string;
+          user_id: string;
+          cooking_event_id: string;
+          recipe_version_id: string;
+          total_servings_prepared: number;
+          servings_remaining: number;
+          total_batch_weight_g: number | null;
+          remaining_batch_weight_g: number | null;
+          nutrition_snapshot: Json;
+          nutrition_per_serving: Json;
+          nutrition_per_gram: Json | null;
+          prepared_at: string;
+          storage_location: 'fridge' | 'freezer' | 'pantry' | 'counter' | 'other' | null;
+          use_by_date: string | null;
+          status: 'available' | 'consumed' | 'discarded';
+          created_at: string;
+          updated_at: string;
+        };
+        // No client Insert/Update - created by complete_cooking_event, updated
+        // only by log_prepared_meal_consumption.
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      meal_logs: {
+        Row: {
+          id: string;
+          user_id: string;
+          consumed_at: string;
+          local_date: string;
+          timezone: string;
+          meal_type: MealTypeDb;
+          recipe_version_id: string | null;
+          cooking_event_id: string | null;
+          prepared_meal_id: string | null;
+          servings_consumed: number | null;
+          grams_consumed: number | null;
+          nutrition_snapshot: Json;
+          nutrition_status: NutritionStatusDb;
+          log_source: 'cooking_flow' | 'prepared_meal' | 'quick_add' | 'manual';
+          notes: string | null;
+          idempotency_key: string | null;
+          voided_at: string | null;
+          void_reason: string | null;
+          replaced_by_log_id: string | null;
+          created_at: string;
+        };
+        // No client Insert - RPC-only (complete_cooking_event/
+        // log_prepared_meal_consumption/quick_add_meal_log/correct_meal_log).
+        Insert: never;
+        // Column-level grant restricts a plain client Update to these two
+        // fields only - see migration 0003.
+        Update: {
+          voided_at?: string;
+          void_reason?: string;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {
@@ -287,6 +522,68 @@ export interface Database {
           p_item_id: string;
         };
         Returns: Database['public']['Tables']['pantry_items']['Row'];
+      };
+      start_cooking_event: {
+        Args: {
+          p_recipe_version_id: string;
+          p_meal_plan_item_id: string | null;
+          p_planned_servings: number | null;
+          p_idempotency_key: string | null;
+        };
+        Returns: Database['public']['Tables']['cooking_events']['Row'];
+      };
+      cancel_cooking_event: {
+        Args: {
+          p_cooking_event_id: string;
+          p_reason: string | null;
+        };
+        Returns: Database['public']['Tables']['cooking_events']['Row'];
+      };
+      complete_cooking_event: {
+        Args: {
+          p_cooking_event_id: string;
+          p_actual_servings_prepared: number;
+          p_deductions: Json;
+          p_final_batch_weight_g: number | null;
+          p_servings_consumed_now: number | null;
+          p_meal_type: string | null;
+          p_notes: string | null;
+        };
+        Returns: Json;
+      };
+      log_prepared_meal_consumption: {
+        Args: {
+          p_prepared_meal_id: string;
+          p_servings_consumed: number;
+          p_meal_type: string;
+          p_notes: string | null;
+          p_idempotency_key: string | null;
+        };
+        Returns: Json;
+      };
+      quick_add_meal_log: {
+        Args: {
+          p_meal_type: string;
+          p_nutrition: Json;
+          p_idempotency_key: string;
+          p_notes: string | null;
+          p_consumed_at: string | null;
+        };
+        Returns: Database['public']['Tables']['meal_logs']['Row'];
+      };
+      correct_meal_log: {
+        Args: {
+          p_meal_log_id: string;
+          p_reason: string;
+          p_new_meal_type: string;
+          p_new_nutrition: Json;
+          p_new_servings_consumed: number | null;
+          p_new_grams_consumed: number | null;
+          p_new_notes: string | null;
+          p_new_idempotency_key: string | null;
+          p_new_consumed_at: string | null;
+        };
+        Returns: Json;
       };
     };
     Enums: Record<string, never>;

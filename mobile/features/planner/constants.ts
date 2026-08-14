@@ -12,10 +12,11 @@ export const DAY_LABELS: Record<DayOfWeek, string> = {
   sun: 'Sunday',
 };
 
-export const MEAL_TYPES: MealType[] = ['breakfast', 'lunch', 'dinner'];
+export const MEAL_TYPES: MealType[] = ['breakfast', 'lunch', 'dinner', 'snack'];
 
 export const MEAL_TYPE_LABELS: Record<MealType, string> = {
   breakfast: 'Breakfast',
   lunch: 'Lunch',
   dinner: 'Dinner',
+  snack: 'Snack',
 };

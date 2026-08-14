@@ -74,16 +74,6 @@ export function useAdjustPantryQuantity() {
   });
 }
 
-/** Applies several "used for cooking" deductions at once, with a single cache invalidation. Preserved for CookingModeScreen (Phase 3 territory) - this only keeps an existing pantry-deduction call site correctly wired to real data, it does not add any cooking functionality. */
-export function useUseSomeManyPantryItems() {
-  const timeZone = useTimeZone();
-  const invalidate = useInvalidatePantry();
-  return useMutation({
-    mutationFn: (items: { id: string; amountUsed: number }[]) => pantryService.deductManyForCooking(items, timeZone),
-    onSuccess: invalidate,
-  });
-}
-
 export function useDepletePantryItem() {
   const timeZone = useTimeZone();
   const invalidate = useInvalidatePantry();
