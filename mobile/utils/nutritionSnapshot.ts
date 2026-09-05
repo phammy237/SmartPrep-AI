@@ -29,78 +29,162 @@ export interface PantryMatchCandidate {
   status: 'active' | 'depleted';
 }
 
-export interface ResolvedPantryMatch {
+/**
+ * 'needs_decision' means there IS a compatible candidate but it does not
+ * have enough stock to cover the required quantity, and the user has not
+ * yet chosen what to do about it - this state is never auto-submittable.
+ * 'full' and 'partial' are the only resolutions that deduct anything;
+ * 'skipped'/'unmatched'/'incompatible' all deduct nothing.
+ */
+export type PantryMatchResolution = 'unmatched' | 'incompatible' | 'needs_decision' | 'full' | 'partial' | 'skipped';
+
+export interface PantryDeductionRowState {
   pantryItemId?: string;
   availableQuantity?: number;
   pantryUnit?: string;
   unitsCompatible: boolean;
+  /** The amount actually needed for the batch actually being cooked - never overwritten by a clamp. */
+  requiredQuantity: number;
+  /** requiredQuantity - availableQuantity when the selected candidate can't fully cover it (0 otherwise) - shown to the user BEFORE they decide anything. */
+  shortfall: number;
+  resolution: PantryMatchResolution;
+  /** What will actually be deducted from the pantry item - 0 until a 'full' or 'partial' resolution is reached. */
   deductedQuantity: number;
+  /** requiredQuantity - deductedQuantity, but ONLY meaningful (nonzero) once resolution === 'partial' - a confirmed admission that this much came from somewhere else. */
+  uncoveredQuantity: number;
   matchConfidence: MatchConfidence;
-  wasSkipped: boolean;
-  notSourcedFromPantry: boolean;
 }
 
-/**
- * Resolves a recipe ingredient's proposed deduction against one specific
- * candidate pantry item (or none, for "skip"/"not sourced from pantry").
- * Used both for the initial auto-suggested match and for a user-initiated
- * remap, so both paths share the exact same safety rules:
- *  - a depleted item (quantity <= 0) or an inactive one is never selectable
- *    - it resolves the same as no candidate at all (skipped).
- *  - an incompatible unit is never silently deducted from - it resolves to
- *    skipped with the mismatch still recorded (never a fabricated conversion).
- *  - the deducted amount is always clamped to the candidate's live stock,
- *    so a remap can never propose deducting more than is actually available.
- *  - confidence is 'exact' when the candidate's own ingredientId matches the
- *    recipe ingredient's (the original auto-suggested case), 'likely' when
- *    the user manually chose a different, unit-compatible item.
- */
-export function resolvePantryMatch(
-  requestedQuantity: number,
-  requestedUnit: string | undefined,
+function matchFacts(
+  requiredQuantity: number,
+  requiredUnit: string | undefined,
   ingredientId: string,
   candidate: PantryMatchCandidate | null | undefined,
-): ResolvedPantryMatch {
+): {
+  pantryItemId?: string;
+  availableQuantity?: number;
+  pantryUnit?: string;
+  unitsCompatible: boolean;
+  shortfall: number;
+  matchConfidence: MatchConfidence;
+  autoResolution: 'unmatched' | 'incompatible' | 'sufficient' | 'insufficient';
+} {
   if (!candidate || candidate.status !== 'active' || candidate.quantity <= 0) {
-    return {
-      pantryItemId: undefined,
-      availableQuantity: undefined,
-      pantryUnit: undefined,
-      unitsCompatible: false,
-      deductedQuantity: 0,
-      matchConfidence: 'none',
-      wasSkipped: true,
-      notSourcedFromPantry: true,
-    };
+    return { pantryItemId: undefined, availableQuantity: undefined, pantryUnit: undefined, unitsCompatible: false, shortfall: 0, matchConfidence: 'none', autoResolution: 'unmatched' };
   }
-
-  const unitsCompatible = !!requestedUnit && candidate.unit === requestedUnit;
+  const unitsCompatible = !!requiredUnit && candidate.unit === requiredUnit;
   if (!unitsCompatible) {
-    return {
-      pantryItemId: candidate.id,
-      availableQuantity: candidate.quantity,
-      pantryUnit: candidate.unit,
-      unitsCompatible: false,
-      deductedQuantity: 0,
-      matchConfidence: 'uncertain',
-      wasSkipped: true,
-      notSourcedFromPantry: false,
-    };
+    return { pantryItemId: candidate.id, availableQuantity: candidate.quantity, pantryUnit: candidate.unit, unitsCompatible: false, shortfall: 0, matchConfidence: 'uncertain', autoResolution: 'incompatible' };
   }
-
+  const shortfall = round2(Math.max(0, requiredQuantity - candidate.quantity));
+  const matchConfidence: MatchConfidence = candidate.ingredientId === ingredientId ? 'exact' : 'likely';
   return {
     pantryItemId: candidate.id,
     availableQuantity: candidate.quantity,
     pantryUnit: candidate.unit,
     unitsCompatible: true,
-    deductedQuantity: Math.min(requestedQuantity, candidate.quantity),
-    matchConfidence: candidate.ingredientId === ingredientId ? 'exact' : 'likely',
-    wasSkipped: false,
-    notSourcedFromPantry: false,
+    shortfall,
+    matchConfidence,
+    autoResolution: shortfall > 0 ? 'insufficient' : 'sufficient',
   };
 }
 
-/** Active, in-stock, unit-compatible pantry items only - the sole set a remap picker may ever offer, so it can never let the user select an incompatible or depleted item. */
+/**
+ * Resolves a recipe ingredient against one specific candidate pantry item
+ * (or none). Enough compatible stock resolves straight to 'full' (matches
+ * "exact same-unit deduction may be automatic after explicit cooking
+ * confirmation" - pressing Finish is that confirmation). Insufficient stock
+ * NEVER auto-clamps to what's available and calls it done - it stops at
+ * 'needs_decision', exposing the exact shortfall, and stays there until the
+ * user explicitly calls confirmPartialDeduction or skipPantryDeduction, or
+ * remaps to a different candidate (a fresh call to this function).
+ */
+export function autoResolvePantryMatch(
+  requiredQuantity: number,
+  requiredUnit: string | undefined,
+  ingredientId: string,
+  candidate: PantryMatchCandidate | null | undefined,
+): PantryDeductionRowState {
+  const match = matchFacts(requiredQuantity, requiredUnit, ingredientId, candidate);
+  const base = {
+    pantryItemId: match.pantryItemId,
+    availableQuantity: match.availableQuantity,
+    pantryUnit: match.pantryUnit,
+    unitsCompatible: match.unitsCompatible,
+    requiredQuantity,
+    matchConfidence: match.matchConfidence,
+    uncoveredQuantity: 0,
+  };
+  switch (match.autoResolution) {
+    case 'unmatched':
+      return { ...base, shortfall: 0, resolution: 'unmatched', deductedQuantity: 0 };
+    case 'incompatible':
+      return { ...base, shortfall: 0, resolution: 'incompatible', deductedQuantity: 0 };
+    case 'sufficient':
+      return { ...base, shortfall: 0, resolution: 'full', deductedQuantity: requiredQuantity };
+    case 'insufficient':
+      return { ...base, shortfall: match.shortfall, resolution: 'needs_decision', deductedQuantity: 0 };
+  }
+}
+
+/**
+ * Explicit user decision: deduct the available amount and acknowledge the
+ * remainder (the shortfall) came from somewhere else. Only meaningful from
+ * 'needs_decision' - a no-op otherwise, so it can never be called
+ * accidentally to "confirm" a state that was never actually short.
+ */
+export function confirmPartialDeduction(state: PantryDeductionRowState): PantryDeductionRowState {
+  if (state.resolution !== 'needs_decision' || state.availableQuantity == null) return state;
+  return {
+    ...state,
+    resolution: 'partial',
+    deductedQuantity: state.availableQuantity,
+    uncoveredQuantity: round2(state.requiredQuantity - state.availableQuantity),
+  };
+}
+
+/** Explicit user decision: don't deduct this ingredient from the pantry at all. */
+export function skipPantryDeduction(state: PantryDeductionRowState): PantryDeductionRowState {
+  return { ...state, resolution: 'skipped', deductedQuantity: 0, uncoveredQuantity: 0 };
+}
+
+/**
+ * Recomputes the required quantity for a new servings-prepared amount and
+ * re-resolves against the SAME candidate the row currently has (preserving
+ * an intentional manual remap - never silently reverting to the auto-match).
+ * A prior 'full' or 'partial' resolution is never carried forward as-is: it
+ * is always recomputed fresh, so a 'partial' confirmation is invalidated and
+ * must be explicitly reconfirmed if the new required quantity still isn't
+ * fully covered (it only survives unprompted if the new amount now happens
+ * to fit, which resolves straight to 'full', not a stale 'partial'). A
+ * 'skipped' choice is deliberate and quantity-independent, so it survives.
+ */
+export function rescalePantryMatch(
+  state: PantryDeductionRowState,
+  newRequiredQuantity: number,
+  requiredUnit: string | undefined,
+  ingredientId: string,
+  candidate: PantryMatchCandidate | null | undefined,
+): PantryDeductionRowState {
+  if (state.resolution === 'skipped') {
+    const match = matchFacts(newRequiredQuantity, requiredUnit, ingredientId, candidate);
+    return {
+      pantryItemId: match.pantryItemId,
+      availableQuantity: match.availableQuantity,
+      pantryUnit: match.pantryUnit,
+      unitsCompatible: match.unitsCompatible,
+      requiredQuantity: newRequiredQuantity,
+      shortfall: match.autoResolution === 'insufficient' ? match.shortfall : 0,
+      resolution: 'skipped',
+      deductedQuantity: 0,
+      uncoveredQuantity: 0,
+      matchConfidence: match.matchConfidence,
+    };
+  }
+  return autoResolvePantryMatch(newRequiredQuantity, requiredUnit, ingredientId, candidate);
+}
+
+/** Active, in-stock, unit-compatible pantry items only - the sole set a remap picker may ever offer, so it can never let the user select an incompatible or depleted item. Note: "in-stock" here means > 0, not >= required - an insufficient-but-nonzero item is still a legitimate, selectable partial source. */
 export function findCompatiblePantryCandidates(
   requestedUnit: string | undefined,
   candidates: PantryMatchCandidate[],

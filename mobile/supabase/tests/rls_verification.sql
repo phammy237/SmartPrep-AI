@@ -1057,6 +1057,85 @@ end $$;
 commit;
 
 -- ----------------------------------------------------------------------------
+-- Check: live stock changing after a deduction was planned. Stock is
+-- sufficient when the cooking event is started; it is then reduced by a
+-- separate action (simulating something else consuming it, or a stale
+-- client-side resolution) before completion is submitted. complete_cooking_event
+-- must re-check LIVE stock at commit time and reject the whole transaction -
+-- never partially apply, never trust what the client believed was available
+-- when it built the deduction payload.
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  event4 public.cooking_events;
+  pantry_id uuid;
+  quantity_before numeric;
+  quantity_after numeric;
+  succeeded boolean := false;
+begin
+  pantry_id := (select value from rls_test_scratch_p3 where key = 'pantry_item_id');
+
+  event4 := public.start_cooking_event(
+    (select value from rls_test_scratch_p3 where key = 'recipe_version_id'),
+    null, 1, 'rls-test-cooking-a-live-stock'
+  );
+
+  select quantity into quantity_before from public.pantry_items where id = pantry_id;
+  if quantity_before < 200 then
+    raise exception 'FAIL: test setup assumption violated - expected at least 200g on hand before this check';
+  end if;
+
+  -- Something else reduces live stock to below what the (already-planned)
+  -- deduction below needs, between start and completion.
+  perform public.adjust_pantry_quantity(pantry_id, -(quantity_before - 50), 'adjusted', 'rls test - simulate stock drop after planning');
+  if (select quantity from public.pantry_items where id = pantry_id) <> 50 then
+    raise exception 'FAIL: test setup - could not reduce pantry_item_id to 50 for this check';
+  end if;
+
+  -- Submits a deduction for 100g, which WAS coverable when the cooking event
+  -- started but is no longer coverable now that live stock is only 50g.
+  begin
+    perform public.complete_cooking_event(
+      event4.id, 1,
+      jsonb_build_array(
+        jsonb_build_object(
+          'recipeIngredientId', (select value from rls_test_scratch_p3 where key = 'pasta_ingredient_id'),
+          'pantryItemId', pantry_id,
+          'requestedQuantity', 100, 'requestedUnit', 'g',
+          'deductedQuantity', 100, 'deductedUnit', 'g',
+          'matchConfidence', 'exact', 'userConfirmed', true, 'wasSkipped', false
+        )
+      ),
+      null, 0, null, null
+    );
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: completion succeeded despite live stock having dropped below the submitted deduction'; end if;
+
+  select quantity into quantity_after from public.pantry_items where id = pantry_id;
+  if quantity_after <> 50 then
+    raise exception 'FAIL: pantry quantity changed as a side effect of the rejected completion (expected to stay at 50, got %)', quantity_after;
+  end if;
+
+  if exists (select 1 from public.cooking_events where id = event4.id and status = 'completed') then
+    raise exception 'FAIL: the cooking event was marked completed despite the rejected, stock-exceeding deduction';
+  end if;
+
+  -- Restore stock and clean up this event so it doesn't interfere with later checks.
+  perform public.adjust_pantry_quantity(pantry_id, quantity_before - 50, 'corrected', 'rls test cleanup - restore stock');
+  perform public.cancel_cooking_event(event4.id, 'rls test cleanup');
+
+  raise notice 'PASS: a deduction that was coverable when planned but no longer is by completion time is rejected atomically, with no partial pantry change';
+end $$;
+
+commit;
+
+-- ----------------------------------------------------------------------------
 -- Check: a cancelled cooking event creates no deductions and cannot later be completed.
 -- ----------------------------------------------------------------------------
 begin;

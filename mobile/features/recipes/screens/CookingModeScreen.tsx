@@ -9,27 +9,27 @@ import { DeductionInput } from '@/lib/validation/cookingSchemas';
 import { CookingEvent, MealType, PantryItem } from '@/types';
 import { haptics } from '@/utils/haptics';
 import { generateId } from '@/utils/id';
-import { PantryMatchCandidate, resolvePantryMatch, scaleRequestedQuantity, validateDeduction } from '@/utils/nutritionSnapshot';
+import {
+  autoResolvePantryMatch,
+  confirmPartialDeduction,
+  PantryDeductionRowState,
+  PantryMatchCandidate,
+  rescalePantryMatch,
+  scaleRequestedQuantity,
+  skipPantryDeduction,
+  validateDeduction,
+} from '@/utils/nutritionSnapshot';
 import { PantryItemPickerModal } from '../components/PantryItemPickerModal';
 
 type ScreenState = 'intro' | 'steps' | 'review';
 
 interface DeductionRow {
   recipeIngredientId: string;
-  /** Catalog ingredient id (or fallback) - used to tell an auto-suggested exact match apart from a manual remap. */
   ingredientId: string;
   ingredientName: string;
   imageUri: string;
-  requestedQuantity: number;
-  requestedUnit?: string;
-  pantryItemId?: string;
-  availableQuantity?: number;
-  pantryUnit?: string;
-  unitsCompatible: boolean;
-  deductedQuantity: number;
-  matchConfidence: DeductionInput['matchConfidence'];
-  wasSkipped: boolean;
-  notSourcedFromPantry: boolean;
+  requiredUnit?: string;
+  match: PantryDeductionRowState;
 }
 
 const MEAL_TYPE_OPTIONS: { value: MealType; label: string }[] = [
@@ -94,17 +94,15 @@ export function CookingModeScreen() {
 
   function buildDeductionRows(servingsPrepared: number): DeductionRow[] {
     return nonStapleIngredients.map((ingredient) => {
-      const requestedQuantity = scaleRequestedQuantity(ingredient.quantity, recipe.servings, servingsPrepared);
+      const requiredQuantity = scaleRequestedQuantity(ingredient.quantity, recipe.servings, servingsPrepared);
       const autoMatch = pantry.find((p) => p.status === 'active' && p.ingredientId === ingredient.ingredientId);
-      const resolved = resolvePantryMatch(requestedQuantity, ingredient.unit, ingredient.ingredientId, autoMatch ? toCandidate(autoMatch) : null);
       return {
         recipeIngredientId: ingredient.recipeIngredientId ?? ingredient.ingredientId,
         ingredientId: ingredient.ingredientId,
         ingredientName: ingredient.name,
         imageUri: ingredient.imageUri,
-        requestedQuantity,
-        requestedUnit: ingredient.unit,
-        ...resolved,
+        requiredUnit: ingredient.unit,
+        match: autoResolvePantryMatch(requiredQuantity, ingredient.unit, ingredient.ingredientId, autoMatch ? toCandidate(autoMatch) : null),
       };
     });
   }
@@ -145,77 +143,96 @@ export function CookingModeScreen() {
     ]);
   };
 
-  // Rescaling preserves each row's current pantry-item selection (including
-  // an explicit skip) and re-resolves it against that item's LIVE stock -
-  // it never rebuilds the whole list from scratch, which would silently
-  // discard a manual remap the user already made.
+  // Recalculates the required quantity for every row and re-resolves each
+  // against the SAME pantry item it currently has (an intentional manual
+  // remap is preserved, never silently reverted) - but a previous 'partial'
+  // confirmation is never carried forward as-is: rescalePantryMatch always
+  // recomputes fresh, so if the new amount is still short, the row drops
+  // back to 'needs_decision' and must be explicitly reconfirmed.
   const updateServingsPrepared = (value: number) => {
     setActualServingsPrepared(value);
     setDeductionRows((rows) =>
       rows.map((row, i) => {
         const ingredient = nonStapleIngredients[i];
-        const requestedQuantity = scaleRequestedQuantity(ingredient.quantity, recipe.servings, value);
-        const selected = row.pantryItemId ? pantry.find((p) => p.id === row.pantryItemId) : undefined;
-        const resolved = resolvePantryMatch(requestedQuantity, row.requestedUnit, row.ingredientId, selected ? toCandidate(selected) : null);
-        return { ...row, requestedQuantity, ...resolved };
+        const requiredQuantity = scaleRequestedQuantity(ingredient.quantity, recipe.servings, value);
+        const selected = row.match.pantryItemId ? pantry.find((p) => p.id === row.match.pantryItemId) : undefined;
+        return { ...row, match: rescalePantryMatch(row.match, requiredQuantity, row.requiredUnit, row.ingredientId, selected ? toCandidate(selected) : null) };
       }),
     );
     setServingsConsumedNow((current) => Math.min(current, value));
   };
 
-  const toggleRowSkipped = (index: number) => {
-    setDeductionRows((rows) =>
-      rows.map((row, i) => {
-        if (i !== index) return row;
-        if (!row.unitsCompatible) return row; // can't include a row with no valid match
-        return { ...row, wasSkipped: !row.wasSkipped };
-      }),
+  const skipRow = (index: number) => {
+    setDeductionRows((rows) => rows.map((row, i) => (i === index ? { ...row, match: skipPantryDeduction(row.match) } : row)));
+  };
+
+  const confirmPartialForRow = (index: number) => {
+    const row = deductionRows[index];
+    if (!row || row.match.resolution !== 'needs_decision') return;
+    Alert.alert(
+      'Use a partial amount?',
+      `Only ${row.match.availableQuantity} ${row.match.pantryUnit} of ${row.ingredientName} is available (need ${row.match.requiredQuantity} ${row.requiredUnit}). ` +
+        `The ${round2(row.match.requiredQuantity - (row.match.availableQuantity ?? 0))} ${row.requiredUnit} shortfall will be recorded as sourced from elsewhere, not deducted from your pantry.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Confirm Partial Amount',
+          onPress: () =>
+            setDeductionRows((rows) => rows.map((r, i) => (i === index ? { ...r, match: confirmPartialDeduction(r.match) } : r))),
+        },
+      ],
     );
   };
 
-  const updateRowQuantity = (index: number, value: number) => {
-    setDeductionRows((rows) => rows.map((row, i) => (i === index ? { ...row, deductedQuantity: value } : row)));
-  };
-
-  // Revalidates compatibility and stock against the newly-selected item -
-  // never trusts the previous row's state. Selecting null explicitly skips.
+  // Revalidates compatibility and live stock against the newly-selected item
+  // from scratch - never trusts the previous row's state.
   const remapRow = (index: number, item: PantryItem | null) => {
     setDeductionRows((rows) =>
-      rows.map((row, i) => {
-        if (i !== index) return row;
-        const resolved = resolvePantryMatch(row.requestedQuantity, row.requestedUnit, row.ingredientId, item ? toCandidate(item) : null);
-        return { ...row, ...resolved };
-      }),
+      rows.map((row, i) => (i === index ? { ...row, match: autoResolvePantryMatch(row.match.requiredQuantity, row.requiredUnit, row.ingredientId, item ? toCandidate(item) : null) } : row)),
     );
   };
 
   const handleFinishCooking = () => {
     if (!cookingEvent) return;
 
-    // Only the final, user-confirmed mapping for each row is sent -
-    // whatever is currently in deductionRows after any remapping.
-    const deductions: DeductionInput[] = deductionRows.map((row) => ({
-      recipeIngredientId: row.recipeIngredientId,
-      pantryItemId: row.pantryItemId,
-      requestedQuantity: row.requestedQuantity,
-      requestedUnit: row.requestedUnit,
-      deductedQuantity: row.wasSkipped ? 0 : row.deductedQuantity,
-      deductedUnit: row.wasSkipped ? undefined : row.pantryUnit,
-      matchConfidence: row.matchConfidence,
-      userConfirmed: !row.wasSkipped,
-      wasSkipped: row.wasSkipped,
-    }));
+    const unresolved = deductionRows.filter((row) => row.match.resolution === 'needs_decision');
+    if (unresolved.length > 0) {
+      Alert.alert(
+        'Pantry amounts need a decision',
+        `${unresolved.map((r) => r.ingredientName).join(', ')}: choose a different pantry item, use the available partial amount, skip it, or reduce servings prepared above before finishing.`,
+      );
+      return;
+    }
+
+    // Only the final, user-confirmed resolution for each row is sent.
+    const deductions: DeductionInput[] = deductionRows.map((row) => {
+      const m = row.match;
+      const wasSkipped = m.resolution === 'skipped' || m.resolution === 'unmatched' || m.resolution === 'incompatible';
+      return {
+        recipeIngredientId: row.recipeIngredientId,
+        pantryItemId: m.pantryItemId,
+        requestedQuantity: m.requiredQuantity,
+        requestedUnit: row.requiredUnit,
+        deductedQuantity: wasSkipped ? 0 : m.deductedQuantity,
+        deductedUnit: wasSkipped ? undefined : m.pantryUnit,
+        matchConfidence: m.matchConfidence,
+        userConfirmed: !wasSkipped,
+        wasSkipped,
+      };
+    });
 
     for (const row of deductionRows) {
+      const m = row.match;
+      const wasSkipped = m.resolution === 'skipped' || m.resolution === 'unmatched' || m.resolution === 'incompatible';
       const result = validateDeduction({
-        wasSkipped: row.wasSkipped,
-        notSourcedFromPantry: row.notSourcedFromPantry,
-        pantryItemId: row.pantryItemId,
-        availableQuantity: row.availableQuantity,
-        pantryUnit: row.pantryUnit,
-        deductedQuantity: row.deductedQuantity,
-        deductedUnit: row.wasSkipped ? undefined : row.pantryUnit,
-        userConfirmed: !row.wasSkipped,
+        wasSkipped,
+        notSourcedFromPantry: m.resolution === 'unmatched',
+        pantryItemId: m.pantryItemId,
+        availableQuantity: m.availableQuantity,
+        pantryUnit: m.pantryUnit,
+        deductedQuantity: m.deductedQuantity,
+        deductedUnit: wasSkipped ? undefined : m.pantryUnit,
+        userConfirmed: !wasSkipped,
       });
       if (!result.ok) {
         Alert.alert('Check pantry amounts', `${row.ingredientName}: ${result.reason}`);
@@ -245,6 +262,11 @@ export function CookingModeScreen() {
             router.replace('/(tabs)/home');
             return;
           }
+          // The server independently re-validates live stock at completion
+          // time and rejects the WHOLE transaction if anything (including a
+          // remapped/partially-confirmed row) now exceeds what's actually on
+          // hand - e.g. it changed after this screen loaded. Surface that
+          // plainly rather than pretending it partially succeeded.
           Alert.alert('Could not finish cooking', message);
         },
       },
@@ -351,57 +373,80 @@ export function CookingModeScreen() {
       <View style={{ gap: theme.spacing.sm }}>
         <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Pantry ingredients used</Text>
         <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>
-          Review before finishing - only confirmed amounts are deducted from your pantry. Tap "Change" to pick a different pantry item.
+          Review before finishing - only confirmed amounts are deducted from your pantry.
         </Text>
         {deductionRows.length === 0 ? (
           <Text style={[theme.typography.body, { color: theme.colors.textSecondary }]}>Nothing from your pantry to update.</Text>
         ) : (
-          deductionRows.map((row, index) => (
-            <View
-              key={row.recipeIngredientId}
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 10,
-                paddingVertical: theme.spacing.sm,
-                borderBottomWidth: 1,
-                borderBottomColor: theme.colors.border,
-                opacity: row.wasSkipped ? 0.55 : 1,
-              }}
-            >
-              <IngredientAvatar imageUri={row.imageUri} variant="row" />
-              <View style={{ flex: 1, gap: 2 }}>
-                <Text style={[theme.typography.body, { color: theme.colors.textPrimary }]}>{row.ingredientName}</Text>
-                <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>
-                  {row.notSourcedFromPantry
-                    ? 'Not sourced from pantry - skipped'
-                    : !row.unitsCompatible
-                      ? `Unit mismatch (have ${row.pantryUnit}, need ${row.requestedUnit}) - skipped`
-                      : `${row.matchConfidence === 'exact' ? 'Matched' : 'Manually matched'} · ${row.availableQuantity} ${row.pantryUnit} available`}
-                </Text>
-                {row.unitsCompatible && !row.wasSkipped ? (
-                  <Stepper
-                    value={row.deductedQuantity}
-                    onChange={(value) => updateRowQuantity(index, value)}
-                    min={0}
-                    max={row.availableQuantity ?? 0}
-                    step={row.pantryUnit === 'item' ? 1 : 0.5}
-                    accessibilityLabel={row.ingredientName}
-                  />
+          deductionRows.map((row, index) => {
+            const m = row.match;
+            const isProblem = m.resolution === 'needs_decision';
+            return (
+              <View
+                key={row.recipeIngredientId}
+                style={{
+                  gap: 8,
+                  paddingVertical: theme.spacing.sm,
+                  borderBottomWidth: 1,
+                  borderBottomColor: theme.colors.border,
+                  opacity: m.resolution === 'skipped' || m.resolution === 'unmatched' || m.resolution === 'incompatible' ? 0.55 : 1,
+                }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <IngredientAvatar imageUri={row.imageUri} variant="row" />
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={[theme.typography.body, { color: theme.colors.textPrimary }]}>{row.ingredientName}</Text>
+                    <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>
+                      Needs {m.requiredQuantity} {row.requiredUnit}
+                    </Text>
+                  </View>
+                </View>
+
+                {m.resolution === 'unmatched' ? (
+                  <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>Not in your pantry - skipped</Text>
                 ) : null}
-              </View>
-              <View style={{ alignItems: 'flex-end', gap: 4 }}>
-                <Pressable onPress={() => setRemapRowIndex(index)} accessibilityRole="button" accessibilityLabel={`Change pantry match for ${row.ingredientName}`}>
-                  <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>Change</Text>
-                </Pressable>
-                {row.unitsCompatible ? (
-                  <Pressable onPress={() => toggleRowSkipped(index)} accessibilityRole="button" accessibilityLabel={`${row.wasSkipped ? 'Include' : 'Skip'} ${row.ingredientName}`}>
-                    <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>{row.wasSkipped ? 'Include' : 'Skip'}</Text>
+                {m.resolution === 'incompatible' ? (
+                  <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>
+                    Unit mismatch (have {m.pantryUnit}) - skipped
+                  </Text>
+                ) : null}
+                {m.resolution === 'skipped' ? (
+                  <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>Skipped - not deducted</Text>
+                ) : null}
+                {m.resolution === 'full' ? (
+                  <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>
+                    Deducting {m.deductedQuantity} {m.pantryUnit} · {m.availableQuantity} {m.pantryUnit} available
+                  </Text>
+                ) : null}
+                {m.resolution === 'partial' ? (
+                  <Text style={[theme.typography.caption, { color: theme.colors.freshness.useSoon }]}>
+                    Partial: deducting {m.deductedQuantity} of {m.requiredQuantity} {row.requiredUnit} · {m.uncoveredQuantity} {row.requiredUnit} from elsewhere
+                  </Text>
+                ) : null}
+                {isProblem ? (
+                  <Text style={[theme.typography.footnote, { color: theme.colors.freshness.prioritize }]}>
+                    Only {m.availableQuantity} {m.pantryUnit} available - short by {m.shortfall} {row.requiredUnit}. Choose an option below.
+                  </Text>
+                ) : null}
+
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
+                  <Pressable onPress={() => setRemapRowIndex(index)} accessibilityRole="button" accessibilityLabel={`Change pantry match for ${row.ingredientName}`}>
+                    <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>Change Item</Text>
                   </Pressable>
-                ) : null}
+                  {isProblem ? (
+                    <Pressable onPress={() => confirmPartialForRow(index)} accessibilityRole="button" accessibilityLabel={`Use available partial amount for ${row.ingredientName}`}>
+                      <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>Use Partial Amount</Text>
+                    </Pressable>
+                  ) : null}
+                  {m.resolution !== 'skipped' ? (
+                    <Pressable onPress={() => skipRow(index)} accessibilityRole="button" accessibilityLabel={`Skip ${row.ingredientName}`}>
+                      <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>Skip</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
               </View>
-            </View>
-          ))
+            );
+          })
         )}
       </View>
 
@@ -440,8 +485,8 @@ export function CookingModeScreen() {
       <PantryItemPickerModal
         visible={remapRowIndex != null}
         ingredientName={remapTarget?.ingredientName ?? ''}
-        requestedQuantity={remapTarget?.requestedQuantity ?? 0}
-        requestedUnit={remapTarget?.requestedUnit}
+        requestedQuantity={remapTarget?.match.requiredQuantity ?? 0}
+        requestedUnit={remapTarget?.requiredUnit}
         pantryItems={pantry}
         onClose={() => setRemapRowIndex(null)}
         onSelect={(item) => {

@@ -1,16 +1,19 @@
 import { NutritionSnapshot } from '@/types';
 import {
+  autoResolvePantryMatch,
   checkMacroCalorieConsistency,
+  confirmPartialDeduction,
   dailyNutritionTotal,
   findCompatiblePantryCandidates,
   isAllowedCookingTransition,
   isAllowedPlanTransition,
   localWeekRange,
   PantryMatchCandidate,
-  resolvePantryMatch,
+  rescalePantryMatch,
   scaleNutritionSnapshot,
   scaleRequestedQuantity,
   selectEffectiveGoal,
+  skipPantryDeduction,
   sumNutritionSnapshots,
   validateDeduction,
   validatePreparedMealConsumption,
@@ -322,49 +325,153 @@ function candidate(overrides: Partial<PantryMatchCandidate> = {}): PantryMatchCa
   return { id: 'pantry-1', ingredientId: 'ing-pasta', quantity: 500, unit: 'g', status: 'active', ...overrides };
 }
 
-describe('resolvePantryMatch', () => {
-  it('matches automatically when the candidate ingredientId matches and units agree (confidence "exact")', () => {
-    const result = resolvePantryMatch(200, 'g', 'ing-pasta', candidate());
-    expect(result).toMatchObject({ pantryItemId: 'pantry-1', unitsCompatible: true, deductedQuantity: 200, matchConfidence: 'exact', wasSkipped: false });
+describe('autoResolvePantryMatch', () => {
+  it('matches automatically to "full" when the candidate ingredientId matches and stock is sufficient (confidence "exact")', () => {
+    const result = autoResolvePantryMatch(200, 'g', 'ing-pasta', candidate());
+    expect(result).toMatchObject({
+      pantryItemId: 'pantry-1',
+      unitsCompatible: true,
+      resolution: 'full',
+      deductedQuantity: 200,
+      uncoveredQuantity: 0,
+      shortfall: 0,
+      matchConfidence: 'exact',
+    });
   });
 
-  it('a user remap to a different ingredientId is confidence "likely", not "exact"', () => {
-    const result = resolvePantryMatch(200, 'g', 'ing-flour', candidate({ ingredientId: 'ing-pasta' }));
+  it('a match to a different ingredientId is confidence "likely", not "exact", but still auto-resolves to "full" when sufficient', () => {
+    const result = autoResolvePantryMatch(200, 'g', 'ing-flour', candidate({ ingredientId: 'ing-pasta' }));
     expect(result.matchConfidence).toBe('likely');
-    expect(result.unitsCompatible).toBe(true);
+    expect(result.resolution).toBe('full');
   });
 
-  it('never silently selects an incompatible unit - resolves to skipped with no deduction', () => {
-    const result = resolvePantryMatch(200, 'g', 'ing-pasta', candidate({ unit: 'oz' }));
+  it('never silently selects an incompatible unit - resolves to "incompatible" with no deduction, not a fabricated conversion', () => {
+    const result = autoResolvePantryMatch(200, 'g', 'ing-pasta', candidate({ unit: 'oz' }));
     expect(result.unitsCompatible).toBe(false);
-    expect(result.wasSkipped).toBe(true);
+    expect(result.resolution).toBe('incompatible');
     expect(result.deductedQuantity).toBe(0);
     // The mismatch is still recorded (pantryItemId/pantryUnit present) so the UI can explain why.
     expect(result.pantryItemId).toBe('pantry-1');
   });
 
-  it('a depleted (zero-quantity) candidate is never selectable - resolves the same as no candidate', () => {
-    const result = resolvePantryMatch(200, 'g', 'ing-pasta', candidate({ quantity: 0, status: 'depleted' }));
-    expect(result.notSourcedFromPantry).toBe(true);
-    expect(result.wasSkipped).toBe(true);
+  it('a depleted (zero-quantity) candidate is never selectable - resolves the same as no candidate ("unmatched")', () => {
+    const result = autoResolvePantryMatch(200, 'g', 'ing-pasta', candidate({ quantity: 0, status: 'depleted' }));
+    expect(result.resolution).toBe('unmatched');
     expect(result.pantryItemId).toBeUndefined();
   });
 
   it('an inactive candidate (status "depleted" but nonzero stale quantity) is never selectable', () => {
-    const result = resolvePantryMatch(200, 'g', 'ing-pasta', candidate({ status: 'depleted', quantity: 50 }));
-    expect(result.notSourcedFromPantry).toBe(true);
-    expect(result.wasSkipped).toBe(true);
+    const result = autoResolvePantryMatch(200, 'g', 'ing-pasta', candidate({ status: 'depleted', quantity: 50 }));
+    expect(result.resolution).toBe('unmatched');
   });
 
-  it('clamps the deduction to available stock - insufficient replacement stock never deducts more than exists', () => {
-    const result = resolvePantryMatch(500, 'g', 'ing-pasta', candidate({ quantity: 120 }));
-    expect(result.deductedQuantity).toBe(120);
-    expect(result.availableQuantity).toBe(120);
+  it('insufficient stock does NOT silently clamp and proceed - it stops at "needs_decision" with the exact shortfall, deducting nothing yet', () => {
+    const result = autoResolvePantryMatch(500, 'g', 'ing-pasta', candidate({ quantity: 120 }));
+    expect(result.resolution).toBe('needs_decision');
+    expect(result.deductedQuantity).toBe(0);
+    expect(result.uncoveredQuantity).toBe(0); // not yet confirmed, so not yet "uncovered"
+    expect(result.requiredQuantity).toBe(500); // required quantity is preserved, untouched
+    expect(result.availableQuantity).toBe(120); // available quantity is preserved, untouched
+    expect(result.shortfall).toBe(380); // exact shortfall shown to the user
   });
 
-  it('no candidate at all (explicit skip / not sourced from pantry) deducts nothing', () => {
-    const result = resolvePantryMatch(200, 'g', 'ing-pasta', null);
-    expect(result).toMatchObject({ pantryItemId: undefined, unitsCompatible: false, deductedQuantity: 0, wasSkipped: true, notSourcedFromPantry: true, matchConfidence: 'none' });
+  it('no candidate at all (explicit skip / not sourced from pantry) resolves to "unmatched", deducting nothing', () => {
+    const result = autoResolvePantryMatch(200, 'g', 'ing-pasta', null);
+    expect(result).toMatchObject({ pantryItemId: undefined, unitsCompatible: false, resolution: 'unmatched', deductedQuantity: 0, uncoveredQuantity: 0, matchConfidence: 'none' });
+  });
+});
+
+describe('confirmPartialDeduction', () => {
+  it('explicit partial deduction: deducts exactly what is available and records the exact uncovered remainder', () => {
+    const needsDecision = autoResolvePantryMatch(500, 'g', 'ing-pasta', candidate({ quantity: 120 }));
+    const confirmed = confirmPartialDeduction(needsDecision);
+    expect(confirmed.resolution).toBe('partial');
+    expect(confirmed.deductedQuantity).toBe(120); // exactly what's available - never more
+    expect(confirmed.uncoveredQuantity).toBe(380); // required (500) - deducted (120)
+    expect(confirmed.requiredQuantity).toBe(500); // required quantity is still preserved separately
+  });
+
+  it('never represents a partial deduction as full coverage', () => {
+    const confirmed = confirmPartialDeduction(autoResolvePantryMatch(500, 'g', 'ing-pasta', candidate({ quantity: 120 })));
+    expect(confirmed.deductedQuantity).not.toBe(confirmed.requiredQuantity);
+    expect(confirmed.resolution).not.toBe('full');
+  });
+
+  it('is a no-op unless the row is actually in "needs_decision" (cannot fabricate a partial confirmation out of nothing)', () => {
+    const sufficient = autoResolvePantryMatch(100, 'g', 'ing-pasta', candidate({ quantity: 500 }));
+    expect(confirmPartialDeduction(sufficient)).toEqual(sufficient);
+    const unmatched = autoResolvePantryMatch(100, 'g', 'ing-pasta', null);
+    expect(confirmPartialDeduction(unmatched)).toEqual(unmatched);
+  });
+});
+
+describe('skipPantryDeduction', () => {
+  it('skip behavior: deducts nothing regardless of prior state', () => {
+    const needsDecision = autoResolvePantryMatch(500, 'g', 'ing-pasta', candidate({ quantity: 120 }));
+    const skipped = skipPantryDeduction(needsDecision);
+    expect(skipped).toMatchObject({ resolution: 'skipped', deductedQuantity: 0, uncoveredQuantity: 0 });
+  });
+});
+
+describe('rescalePantryMatch (servings-prepared changes)', () => {
+  it('recalculates the required quantity while preserving an intentional manual remap (same candidate id)', () => {
+    const original = autoResolvePantryMatch(200, 'g', 'ing-pasta', candidate({ id: 'manually-remapped', ingredientId: 'ing-flour', quantity: 500 }));
+    const rescaled = rescalePantryMatch(original, 400, 'g', 'ing-pasta', candidate({ id: 'manually-remapped', ingredientId: 'ing-flour', quantity: 500 }));
+    expect(rescaled.pantryItemId).toBe('manually-remapped'); // remap preserved, not reverted to auto-match
+    expect(rescaled.requiredQuantity).toBe(400);
+    expect(rescaled.resolution).toBe('full');
+  });
+
+  it('a previous partial confirmation is invalidated and must be reconfirmed if the required quantity changes and is still short', () => {
+    const needsDecision = autoResolvePantryMatch(500, 'g', 'ing-pasta', candidate({ quantity: 120 }));
+    const partiallyConfirmed = confirmPartialDeduction(needsDecision);
+    expect(partiallyConfirmed.resolution).toBe('partial');
+
+    // Servings prepared changed - required quantity is now even higher, still insufficient.
+    const rescaled = rescalePantryMatch(partiallyConfirmed, 600, 'g', 'ing-pasta', candidate({ quantity: 120 }));
+    expect(rescaled.resolution).toBe('needs_decision'); // NOT still "partial" - must be explicitly reconfirmed
+    expect(rescaled.deductedQuantity).toBe(0);
+    expect(rescaled.shortfall).toBe(480);
+  });
+
+  it('a previous partial confirmation resolves straight to "full" (not a stale "partial") if the new required amount now fits', () => {
+    const partiallyConfirmed = confirmPartialDeduction(autoResolvePantryMatch(500, 'g', 'ing-pasta', candidate({ quantity: 120 })));
+    const rescaled = rescalePantryMatch(partiallyConfirmed, 100, 'g', 'ing-pasta', candidate({ quantity: 120 }));
+    expect(rescaled.resolution).toBe('full');
+    expect(rescaled.deductedQuantity).toBe(100);
+  });
+
+  it('a deliberate skip survives a servings change - it is quantity-independent', () => {
+    const skipped = skipPantryDeduction(autoResolvePantryMatch(500, 'g', 'ing-pasta', candidate({ quantity: 120 })));
+    const rescaled = rescalePantryMatch(skipped, 50, 'g', 'ing-pasta', candidate({ quantity: 120 }));
+    expect(rescaled.resolution).toBe('skipped');
+    expect(rescaled.deductedQuantity).toBe(0);
+  });
+});
+
+describe('selecting a replacement pantry item (remap)', () => {
+  it('remapping to a different, sufficient-stock item auto-resolves to "full" via a fresh autoResolvePantryMatch call', () => {
+    // Simulates the UI calling autoResolvePantryMatch again with the newly-selected candidate.
+    const stuck = autoResolvePantryMatch(500, 'g', 'ing-pasta', candidate({ id: 'low-stock', quantity: 120 }));
+    expect(stuck.resolution).toBe('needs_decision');
+
+    const remapped = autoResolvePantryMatch(500, 'g', 'ing-pasta', candidate({ id: 'replacement', ingredientId: 'ing-pasta', quantity: 900 }));
+    expect(remapped.resolution).toBe('full');
+    expect(remapped.pantryItemId).toBe('replacement');
+    expect(remapped.deductedQuantity).toBe(500);
+  });
+});
+
+describe('live stock changing after confirmation', () => {
+  it('re-resolving against the item\'s current (lower) live stock downgrades an existing "full" resolution back to "needs_decision" rather than keeping a stale confirmation', () => {
+    const confirmedFull = autoResolvePantryMatch(200, 'g', 'ing-pasta', candidate({ quantity: 500 }));
+    expect(confirmedFull.resolution).toBe('full');
+
+    // Something else (e.g. another cooking session) reduced live stock before Finish was pressed.
+    const reResolved = autoResolvePantryMatch(200, 'g', 'ing-pasta', candidate({ quantity: 50 }));
+    expect(reResolved.resolution).toBe('needs_decision');
+    expect(reResolved.deductedQuantity).toBe(0);
+    expect(reResolved.shortfall).toBe(150);
   });
 });
 
