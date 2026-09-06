@@ -1,10 +1,12 @@
 import { INGREDIENTS_BY_ID } from '@/data';
 import { shortfallLineFor } from '@/lib/nutrition/pantryCoverage';
+import { PlanWeekGroceryDemand } from '@/lib/nutrition/planDemand';
 import { normalizeUnit } from '@/lib/nutrition/units';
 import {
   InsertGroceryItemParams,
   deleteCheckedGroceryListItems,
   deleteGroceryListItem,
+  deletePlanGeneratedGroceryItems,
   fetchActiveGroceryList,
   fetchGroceryListItems,
   fetchOrCreateActiveGroceryList,
@@ -136,7 +138,10 @@ async function addRecipeShortfallsToGroceryList(
     const match = current.find(
       (item) =>
         !item.isChecked &&
-        (item.source === 'recipe' || item.source === 'meal_plan') &&
+        // Recipe-detail adds merge only into other recipe-detail lines. Plan-
+        // generated ('meal_plan') lines are owned by their planGenerationKey and
+        // reconciled as a set - cross-merging would break "Add Week" idempotency.
+        item.source === 'recipe' &&
         item.quantityBasis === quantityBasis &&
         (toGroceryUnit(normalizeUnit(item.unit) ?? item.unit) ?? item.unit) === storedUnit &&
         (item.ingredientId
@@ -187,6 +192,110 @@ async function addRecipeShortfallsToGroceryList(
   return [...updatedItems, ...inserted];
 }
 
+export interface ApplyPlanGroceryResult {
+  /** Lines inserted for this run. */
+  addedCount: number;
+  /** Stale plan lines from a previous run of the SAME plan key that were replaced. */
+  removedPriorCount: number;
+  /** Inserted lines whose pantry comparison was unresolved (conservative full requirement). */
+  unresolvedCount: number;
+  /** True when the plan needs nothing bought (pantry covers it) and there was nothing stale to clear. */
+  nothingNeeded: boolean;
+  items: GroceryListItem[];
+}
+
+/**
+ * Persists whole-week plan demand (from `plannerService.getPlanGroceryDemand`)
+ * to the active grocery list, reusing the SAME coverage->line mapping
+ * (`shortfallLineFor`) and unit rules as the recipe-detail flow.
+ *
+ * Idempotent by reconciliation: every run first deletes this plan key's own
+ * still-unchecked generated lines, then re-inserts the freshly computed set.
+ * Tapping "Add Week" twice, a screen remount, or a retry after a partial write
+ * all converge to the same lines - never doubled demand. Manual lines, checked
+ * lines, recipe-detail lines, and other weeks' plan lines are never touched.
+ *
+ *   partial coverage  -> `uncovered_shortfall` line for the gap
+ *   missing / unresolved -> conservative `recipe_requirement` line (never a
+ *                           silent subtraction, never "pantry has zero")
+ * Every line carries `source = 'meal_plan'`, all contributing recipe version
+ * ids, and `planGenerationKey` in `source_metadata`.
+ */
+async function applyPlanGroceryDemand(plan: PlanWeekGroceryDemand): Promise<ApplyPlanGroceryResult> {
+  const userId = await requireUserId();
+  const list = await fetchOrCreateActiveGroceryList();
+
+  const metaMap = await nutritionService.getConversionMetaMap(
+    plan.demand.ingredients.map((i) => i.ingredientId),
+  );
+  const removedPriorCount = await deletePlanGeneratedGroceryItems(list.id, plan.planGenerationKey);
+
+  const toInsert: InsertGroceryItemParams[] = [];
+  let unresolvedCount = 0;
+
+  for (const ingredient of plan.demand.ingredients) {
+    const meta = metaMap.get(ingredient.ingredientId);
+    for (const segment of ingredient.segments) {
+      const line = shortfallLineFor(segment.coverage, meta);
+      if (!line) continue; // covered - nothing to buy
+
+      let storedUnit = toGroceryUnit(line.unit);
+      let quantity = line.quantity;
+      let quantityBasis = line.quantityBasis;
+      let metadata: Record<string, unknown> = {
+        planGenerationKey: plan.planGenerationKey,
+        weekStart: plan.weekStart,
+        weekEnd: plan.weekEnd,
+        ...line.metadata,
+      };
+      if (!storedUnit) {
+        storedUnit = toGroceryUnit(segment.requirement.unit) ?? 'item';
+        quantity = segment.requirement.quantity;
+        quantityBasis = 'recipe_requirement';
+        metadata = { ...metadata, unitFallback: line.unit };
+      }
+      if (metadata.coverage === 'unresolved') unresolvedCount += 1;
+
+      // Fold segments that map to the same (ingredient, unit, basis) into one line.
+      const pending = toInsert.find(
+        (p) =>
+          p.catalogIngredientId === ingredient.ingredientId &&
+          p.unit === storedUnit &&
+          p.quantityBasis === quantityBasis,
+      );
+      if (pending) {
+        pending.quantity += quantity;
+        pending.sourceRecipeVersionIds = Array.from(
+          new Set([...(pending.sourceRecipeVersionIds ?? []), ...segment.contributingRecipeVersionIds]),
+        );
+        continue;
+      }
+
+      toInsert.push({
+        catalogIngredientId: ingredient.ingredientId,
+        displayName: ingredient.name,
+        imageUri: ingredient.imageUri,
+        category: INGREDIENTS_BY_ID[ingredient.ingredientId]?.category ?? null,
+        quantity,
+        unit: storedUnit,
+        source: 'meal_plan',
+        sourceRecipeVersionIds: segment.contributingRecipeVersionIds,
+        quantityBasis,
+        sourceMetadata: metadata,
+      });
+    }
+  }
+
+  const items = toInsert.length > 0 ? await insertGroceryListItems(userId, list.id, toInsert) : [];
+  return {
+    addedCount: items.length,
+    removedPriorCount,
+    unresolvedCount,
+    nothingNeeded: items.length === 0 && removedPriorCount === 0,
+    items,
+  };
+}
+
 /**
  * Grocery <-> pantry boundary: checking a grocery item means "acquired /
  * done", NOT "now in my pantry". Nothing in this service reads or writes
@@ -202,4 +311,5 @@ export const groceryService = {
   removeGroceryItem,
   clearCheckedItems,
   addRecipeShortfallsToGroceryList,
+  applyPlanGroceryDemand,
 };

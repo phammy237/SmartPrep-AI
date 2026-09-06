@@ -74,6 +74,8 @@ export function GroceryItemRow({ item, isLast, onToggle, onDelete }: GroceryItem
           <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>Low-waste: {item.wasteNote}</Text>
         ) : item.swapSuggestion ? (
           <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>{item.swapSuggestion}</Text>
+        ) : item.needsQuantityCheck ? (
+          <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>Check quantity</Text>
         ) : null}
       </View>
       <Pressable onPress={onDelete} accessibilityRole="button" accessibilityLabel={`Delete ${item.name}`} hitSlop={8}>

@@ -96,6 +96,19 @@ export function ScanModeSelectScreen() {
           </Pressable>
         ))}
       </View>
+
+      <Pressable
+        onPress={() => router.push('/scan/history')}
+        accessibilityRole="button"
+        accessibilityLabel="View scan history"
+        style={({ pressed }) => [
+          { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.sm, alignSelf: 'center' },
+          pressed && { opacity: 0.7 },
+        ]}
+      >
+        <Ionicons name="time-outline" size={18} color={theme.colors.textSecondary} />
+        <Text style={[theme.typography.callout, { color: theme.colors.textSecondary }]}>View scan history</Text>
+      </Pressable>
     </Screen>
   );
 }

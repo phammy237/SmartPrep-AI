@@ -7,6 +7,7 @@ import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Button, FilterBar, Screen } from '@/components';
 import { useConfirmScan } from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
+import { getBlockingReviewNames } from '@/services';
 import { useScanSessionStore } from '@/store';
 import { ScanDetection, ScanSection } from '@/types';
 import { generateId } from '@/utils/id';
@@ -50,8 +51,11 @@ export function ReviewScreen() {
 
   const detections = section?.detections ?? [];
   const allDetectedIds = (scan.sections ?? []).flatMap((s) => s.detections.map((d) => d.ingredientId));
+  const blockingNames = getBlockingReviewNames(scan);
+  const activeDetections = detections.filter((d) => !d.isRemoved);
 
   const handleConfirm = () => {
+    if (blockingNames.length > 0) return;
     confirmScan.mutate(scan, {
       onSuccess: ({ summary }) => {
         haptics.success();
@@ -132,6 +136,13 @@ export function ReviewScreen() {
         renderItem={({ item }) => (
           <DetectionCard detection={item} isActive={activeDetectionId === item.id} onPress={() => focusDetection(item.id)} />
         )}
+        ListHeaderComponent={
+          activeDetections.length === 0 ? (
+            <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary, marginBottom: theme.spacing.sm }]}>
+              No ingredients detected in this photo. Add them by hand below.
+            </Text>
+          ) : null
+        }
         ListFooterComponent={
           <View style={{ marginTop: theme.spacing.sm }}>
             <AddIngredientPanel
@@ -158,7 +169,18 @@ export function ReviewScreen() {
       />
 
       <View style={[styles.footer, { backgroundColor: theme.colors.background, borderTopColor: theme.colors.border }]}>
-        {confirmScan.isError ? (
+        {blockingNames.length > 0 ? (
+          <Text
+            style={[
+              theme.typography.footnote,
+              { color: theme.colors.freshness.useSoon, marginBottom: theme.spacing.sm, textAlign: 'center' },
+            ]}
+          >
+            {blockingNames.length === 1
+              ? `"${blockingNames[0]}" needs a quantity or unit before saving.`
+              : `${blockingNames.length} items need a quantity or unit before saving.`}
+          </Text>
+        ) : confirmScan.isError ? (
           <Text
             style={[
               theme.typography.footnote,
@@ -170,7 +192,13 @@ export function ReviewScreen() {
               : "Couldn't save your scan. Check your connection and try again."}
           </Text>
         ) : null}
-        <Button label="Confirm Ingredients" onPress={handleConfirm} loading={confirmScan.isPending} fullWidth />
+        <Button
+          label="Confirm Ingredients"
+          onPress={handleConfirm}
+          loading={confirmScan.isPending}
+          disabled={blockingNames.length > 0}
+          fullWidth
+        />
       </View>
     </Screen>
   );

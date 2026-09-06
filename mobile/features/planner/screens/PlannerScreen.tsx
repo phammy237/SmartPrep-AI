@@ -4,7 +4,15 @@ import React, { useMemo, useState } from 'react';
 import { Alert, Pressable, Text, View } from 'react-native';
 
 import { Button, Card, EmptyState, ListRow, LoadingState, Screen } from '@/components';
-import { useAddMealPlanEntry, useGenerateWeek, useMealPlanWeek, useRecipes, useRemoveMealPlanEntry, useUpdateMealPlanEntry } from '@/hooks';
+import {
+  useAddMealPlanEntry,
+  useAddWeekToGroceryList,
+  useGenerateWeek,
+  useMealPlanWeek,
+  useRecipes,
+  useRemoveMealPlanEntry,
+  useUpdateMealPlanEntry,
+} from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
 import { MealPlanEntry, MealType } from '@/types';
 import { addDaysToIsoDate } from '@/utils/expiration';
@@ -28,6 +36,7 @@ export function PlannerScreen() {
   const mealPlanQuery = useMealPlanWeek();
   const recipesQuery = useRecipes();
   const generateWeek = useGenerateWeek();
+  const addWeekToGrocery = useAddWeekToGroceryList();
   const addEntry = useAddMealPlanEntry();
   const updateEntry = useUpdateMealPlanEntry();
   const removeEntry = useRemoveMealPlanEntry();
@@ -71,6 +80,27 @@ export function PlannerScreen() {
     );
   }
 
+  const handleAddWeekToGrocery = () => {
+    addWeekToGrocery.mutate(undefined, {
+      onSuccess: (result) => {
+        if (result.nothingNeeded) {
+          Alert.alert('Nothing to add', 'Your pantry already covers this week’s plan.');
+          return;
+        }
+        const parts: string[] = [];
+        if (result.addedCount > 0) parts.push(`${result.addedCount} item${result.addedCount === 1 ? '' : 's'} added`);
+        if (result.removedPriorCount > 0) {
+          parts.push(`${result.removedPriorCount} earlier plan item${result.removedPriorCount === 1 ? '' : 's'} replaced`);
+        }
+        const unresolved = result.unresolvedCount > 0
+          ? `\n\n${result.unresolvedCount} need a quantity check in your grocery list (units couldn’t be compared to your pantry).`
+          : '';
+        Alert.alert('Grocery list updated', `${parts.join(', ') || 'No changes'}.${unresolved}`);
+      },
+      onError: () => Alert.alert('Couldn’t update grocery list', 'Something went wrong. Please try again.'),
+    });
+  };
+
   const handleRowMenu = (entry: MealPlanEntry) => {
     const recipe = recipesById[entry.recipeVersionId];
     Alert.alert(recipe?.title ?? 'Meal', undefined, [
@@ -95,7 +125,14 @@ export function PlannerScreen() {
 
       <View style={{ gap: theme.spacing.sm }}>
         <Button label="Generate My Week" onPress={() => generateWeek.mutate()} loading={generateWeek.isPending} fullWidth />
-        <Button label="View Grocery List" variant="secondary" onPress={() => router.push('/grocery')} fullWidth />
+        <Button
+          label="Add Week to Grocery List"
+          variant="secondary"
+          onPress={handleAddWeekToGrocery}
+          loading={addWeekToGrocery.isPending}
+          fullWidth
+        />
+        <Button label="View Grocery List" variant="ghost" onPress={() => router.push('/grocery')} fullWidth />
       </View>
 
       {weekDates.map(({ day, date }) => {

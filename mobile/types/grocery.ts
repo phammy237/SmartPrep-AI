@@ -26,6 +26,8 @@ export interface GroceryListItem {
   quantityBasis?: GroceryQuantityBasis;
   sourceRecipeIds?: string[];
   isManuallyAdded?: boolean;
+  /** Generated line whose pantry comparison was unresolved - carries the conservative full requirement. */
+  needsQuantityCheck?: boolean;
   estimatedPrice?: number;
   /** e.g. "Swap: Cucumber" - a lower-waste substitution suggestion. */
   swapSuggestion?: string;

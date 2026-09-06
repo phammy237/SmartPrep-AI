@@ -15,6 +15,7 @@ export const queryKeys = {
   mealLogs: (startDate: string, endDate: string) => ['mealLogs', startDate, endDate] as const,
   groceryList: ['groceryList'] as const,
   scanHistory: ['scans', 'history'] as const,
+  scanDetail: (id: string) => ['scans', 'history', id] as const,
   user: ['user'] as const,
   profileSetupStatus: ['user', 'profile-setup-status'] as const,
   kitchenImpact: (period: string, timeZone: string) => ['kitchenImpact', period, timeZone] as const,

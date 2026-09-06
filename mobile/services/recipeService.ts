@@ -1,6 +1,6 @@
-import { INGREDIENTS_BY_ID, normalizeIngredientName } from '@/data';
 import { IngredientConversionMeta } from '@/lib/nutrition/conversion';
-import { IngredientCoverage, PantryLot, computeIngredientCoverage } from '@/lib/nutrition/pantryCoverage';
+import { IngredientCoverage, computeIngredientCoverage } from '@/lib/nutrition/pantryCoverage';
+import { indexPantryLots, lotsForIngredient } from '@/lib/nutrition/pantryLots';
 import {
   fetchPantryItems,
   fetchRecipeVersionById,
@@ -31,51 +31,6 @@ export interface RecipeCollection {
 function computeMatchScore(covered: number, total: number): number {
   if (total === 0) return 100;
   return Math.round((covered / total) * 100);
-}
-
-interface PantryLotIndex {
-  byId: Map<string, PantryLot[]>;
-  byName: Map<string, PantryLot[]>;
-}
-
-/**
- * Group in-stock pantry lots by canonical ingredient id and (for a
- * conservative fallback) by normalized name. Depleted / zero-quantity lots
- * are excluded - they are not usable stock.
- */
-function indexPantryLots(pantry: PantryItem[]): PantryLotIndex {
-  const byId = new Map<string, PantryLot[]>();
-  const byName = new Map<string, PantryLot[]>();
-  const push = (map: Map<string, PantryLot[]>, key: string, lot: PantryLot) => {
-    const list = map.get(key);
-    if (list) list.push(lot);
-    else map.set(key, [lot]);
-  };
-
-  for (const item of pantry) {
-    if (item.status === 'depleted') continue;
-    if (!(typeof item.quantity === 'number' && item.quantity > 0)) continue;
-    const lot: PantryLot = { quantity: item.quantity, unit: item.unit };
-    push(byId, item.ingredientId, lot);
-    const nn = item.normalizedName ?? normalizeIngredientName(item.name);
-    if (nn) push(byName, nn, lot);
-  }
-  return { byId, byName };
-}
-
-/**
- * Canonical id is the primary match key. A normalized-name fallback is used
- * ONLY when the recipe ingredient has no catalog id (its `ingredientId` is a
- * recipe_ingredients row id, not an `ing-*`) - and even then only on an EXACT
- * normalized-name match. Never fuzzy-matches unrelated ingredients.
- */
-function lotsForIngredient(ingredient: RecipeIngredient, index: PantryLotIndex): PantryLot[] {
-  const byId = index.byId.get(ingredient.ingredientId);
-  if (byId && byId.length > 0) return byId;
-  if (!INGREDIENTS_BY_ID[ingredient.ingredientId]) {
-    return index.byName.get(normalizeIngredientName(ingredient.name)) ?? [];
-  }
-  return [];
 }
 
 /**

@@ -1,5 +1,5 @@
 /**
- * Hand-authored to match supabase/migrations/0001-0007. STILL A STAND-IN -
+ * Hand-authored to match supabase/migrations/0001-0008. STILL A STAND-IN -
  * regenerate from a live project once linked:
  *   npx supabase gen types typescript --linked > types/database.types.ts
  *
@@ -167,6 +167,8 @@ export interface Database {
           expiration_confidence: 'high' | 'medium' | 'low' | 'unknown';
           storage_location: 'fridge' | 'freezer' | 'pantry' | 'counter' | 'other' | null;
           scan_source: 'manual' | 'scan' | 'grocery';
+          // Set only for scan-confirmed items; UNIQUE. See migration 0008.
+          source_scan_detection_id: string | null;
           notes: string | null;
           status: 'active' | 'depleted';
           last_confirmed_at: string | null;
@@ -222,6 +224,60 @@ export interface Database {
         };
         // No client Insert/Update - append-only, written only by the
         // security-definer RPCs. See migration 0002.
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      scans: {
+        Row: {
+          id: string;
+          user_id: string;
+          client_scan_id: string;
+          mode: 'quick' | 'guided';
+          status: 'confirming' | 'confirmed';
+          started_at: string;
+          confirmed_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        // No client Insert/Update/Delete - written only by
+        // begin_scan_confirmation / finalize_scan_confirmation. See migration 0008.
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      scan_sections: {
+        Row: {
+          id: string;
+          scan_id: string;
+          section: 'fridge' | 'freezer' | 'pantry';
+          skipped: boolean;
+          sort_order: number;
+          created_at: string;
+        };
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      scan_detections: {
+        Row: {
+          id: string;
+          scan_id: string;
+          detection_id: string;
+          section: 'fridge' | 'freezer' | 'pantry' | null;
+          display_name: string;
+          canonical_ingredient_id: string | null;
+          quantity: number;
+          unit: PantryQuantityUnit;
+          category: 'produce' | 'protein' | 'dairy' | 'pantry' | 'frozen' | 'other' | null;
+          identity_edited: boolean;
+          quantity_edited: boolean;
+          pantry_item_id: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        // No client Insert/Update - written only by begin_scan_confirmation /
+        // link_scan_detection. See migration 0008.
         Insert: never;
         Update: never;
         Relationships: [];
@@ -646,8 +702,35 @@ export interface Database {
           p_estimated_expiration_date: string | null;
           p_expiration_confidence: string | null;
           p_source: string | null;
+          p_source_scan_detection_id: string | null;
         };
         Returns: Database['public']['Tables']['pantry_items']['Row'];
+      };
+      begin_scan_confirmation: {
+        Args: {
+          p_client_scan_id: string;
+          p_mode: string;
+          p_started_at: string | null;
+          p_sections: Json;
+          p_detections: Json;
+        };
+        // { scanId: string; status: 'confirming' | 'confirmed';
+        //   detections: { detectionId: string; pantryItemId: string | null }[] }
+        Returns: Json;
+      };
+      link_scan_detection: {
+        Args: {
+          p_scan_id: string;
+          p_detection_id: string;
+          p_pantry_item_id: string;
+        };
+        Returns: undefined;
+      };
+      finalize_scan_confirmation: {
+        Args: {
+          p_scan_id: string;
+        };
+        Returns: Database['public']['Tables']['scans']['Row'];
       };
       adjust_pantry_quantity: {
         Args: {

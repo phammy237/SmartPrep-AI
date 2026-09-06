@@ -10,3 +10,5 @@ export * from './mealLogRepository';
 export * from './groceryRepository';
 export * from './impactRepository';
 export * from './nutritionReferenceRepository';
+export * from './scanVisionRepository';
+export * from './scanHistoryRepository';

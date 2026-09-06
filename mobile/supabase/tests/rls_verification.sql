@@ -4,9 +4,11 @@
 -- cooking_event_ingredients, prepared_meals, meal_logs), Phase 4 grocery
 -- (grocery_lists, grocery_list_items), Phase 4 kitchen impact
 -- (get_kitchen_impact_summary, derived from pantry_events / cooking_events),
--- and Phase 4 nutrition normalization (usda_foods,
--- canonical_ingredient_nutrition, user_ingredient_overrides).
--- Run migrations 0001-0007 first.
+-- Phase 4 nutrition normalization (usda_foods,
+-- canonical_ingredient_nutrition, user_ingredient_overrides), and Phase 6
+-- scan history (scans, scan_sections, scan_detections + the idempotent
+-- begin/link/finalize confirmation RPCs and pantry_items.source_scan_detection_id).
+-- Run migrations 0001-0008 first.
 --
 -- Run this in the Supabase SQL editor or via `psql` against your linked
 -- project. It does NOT create test users itself - auth.users rows can only
@@ -2407,6 +2409,188 @@ begin;
 set local role postgres;
 delete from public.user_ingredient_overrides where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid);
 delete from public.usda_foods where fdc_id = 999999001;
+commit;
+
+-- ============================================================================
+-- Phase 6: scan history (scans / scan_sections / scan_detections) + the
+-- idempotent confirmation RPCs + pantry_items.source_scan_detection_id.
+-- ============================================================================
+
+-- --- user_a confirms a small guided scan through the real RPC flow ----------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  v_scan_id uuid;
+  v_item_id uuid;
+  v_item_id_again uuid;
+  v_events_before int;
+  v_events_after int;
+  v_sections int;
+  v_pending int;
+  v_status text;
+begin
+  -- 1. begin: creates the durable scan (status 'confirming') + intent rows.
+  select (public.begin_scan_confirmation(
+    'rls-scan-a', 'guided', now(),
+    '[{"section":"fridge","skipped":false,"sort_order":0},
+      {"section":"freezer","skipped":true,"sort_order":1}]'::jsonb,
+    '[{"detection_id":"det-a-1","section":"fridge","display_name":"Eggs","canonical_ingredient_id":"ing-eggs","quantity":6,"unit":"item","category":"protein","identity_edited":false,"quantity_edited":true}]'::jsonb
+  ) ->> 'scanId')::uuid into v_scan_id;
+
+  if v_scan_id is null then raise exception 'FAIL: begin_scan_confirmation returned no scanId'; end if;
+
+  select count(*) into v_sections from public.scan_sections where scan_id = v_scan_id;
+  if v_sections <> 2 then raise exception 'FAIL: expected 2 scan_sections, got %', v_sections; end if;
+
+  select count(*) into v_pending from public.scan_detections where scan_id = v_scan_id and pantry_item_id is null;
+  if v_pending <> 1 then raise exception 'FAIL: expected 1 pending detection, got %', v_pending; end if;
+
+  -- 2. idempotent begin retry: no second scan, no duplicate detection.
+  perform public.begin_scan_confirmation(
+    'rls-scan-a', 'guided', now(), '[]'::jsonb,
+    '[{"detection_id":"det-a-1","section":"fridge","display_name":"Eggs","canonical_ingredient_id":"ing-eggs","quantity":6,"unit":"item","category":"protein","identity_edited":false,"quantity_edited":true}]'::jsonb
+  );
+  if (select count(*) from public.scans where user_id = 'TEST_USER_A_ID'::uuid and client_scan_id = 'rls-scan-a') <> 1 then
+    raise exception 'FAIL: begin_scan_confirmation retry created a second scan row';
+  end if;
+  if (select count(*) from public.scan_detections where scan_id = v_scan_id) <> 1 then
+    raise exception 'FAIL: begin_scan_confirmation retry duplicated a scan_detection';
+  end if;
+
+  -- 3. create the pantry item keyed by the detection id, then link + finalize.
+  select count(*) into v_events_before from public.pantry_events where user_id = 'TEST_USER_A_ID'::uuid;
+
+  v_item_id := (public.create_pantry_item(
+    p_ingredient_id := 'ing-eggs', p_display_name := 'Eggs', p_image_uri := '', p_category := 'protein',
+    p_quantity := 6, p_unit := 'item', p_source := 'scan', p_source_scan_detection_id := 'det-a-1'
+  )).id;
+
+  perform public.link_scan_detection(v_scan_id, 'det-a-1', v_item_id);
+  select status into v_status from public.finalize_scan_confirmation(v_scan_id);
+  if v_status <> 'confirmed' then raise exception 'FAIL: scan not confirmed after all detections linked (status %)', v_status; end if;
+
+  -- 4. LOST-RESPONSE RECOVERY: calling create_pantry_item again with the same
+  --    source_scan_detection_id returns the SAME row and writes NO new event.
+  v_item_id_again := (public.create_pantry_item(
+    p_ingredient_id := 'ing-eggs', p_display_name := 'Eggs', p_image_uri := '', p_category := 'protein',
+    p_quantity := 6, p_unit := 'item', p_source := 'scan', p_source_scan_detection_id := 'det-a-1'
+  )).id;
+  if v_item_id_again <> v_item_id then
+    raise exception 'FAIL: create_pantry_item created a DUPLICATE item for the same scan detection (% vs %)', v_item_id_again, v_item_id;
+  end if;
+  select count(*) into v_events_after from public.pantry_events where user_id = 'TEST_USER_A_ID'::uuid;
+  if v_events_after <> v_events_before + 1 then
+    raise exception 'FAIL: idempotent create_pantry_item wrote an extra pantry_event (before %, after %)', v_events_before, v_events_after;
+  end if;
+
+  -- 5. the unique partial index also blocks a raw duplicate insert.
+  begin
+    insert into public.pantry_items (
+      user_id, ingredient_id, normalized_name, display_name, image_uri, category, quantity, unit, source_scan_detection_id
+    ) values ('TEST_USER_A_ID'::uuid, 'ing-eggs', 'eggs', 'Eggs', '', 'protein', 6, 'item', 'det-a-1');
+    raise exception 'FAIL: pantry_items_source_scan_detection_uq did not block a duplicate source key';
+  exception
+    when unique_violation then null;
+    when insufficient_privilege then null; -- no client insert grant is also fine
+  end;
+
+  raise notice 'PASS: user_a scan confirmation is durable, idempotent, and lost-response-recoverable';
+end $$;
+commit;
+
+-- Stash user_a's scan id in a session temp table (as postgres, RLS-free) so
+-- the user_b checks below can target the REAL row, not a random uuid. The
+-- temp table lives for the whole session and is dropped in Phase 6 cleanup.
+begin;
+set local role postgres;
+drop table if exists _rls_scan_a;
+create temp table _rls_scan_a as
+  select id from public.scans where client_scan_id = 'rls-scan-a' and user_id = 'TEST_USER_A_ID'::uuid;
+do $$
+begin
+  if (select count(*) from _rls_scan_a) <> 1 then raise exception 'FAIL: could not stash user_a scan id'; end if;
+end $$;
+commit;
+
+-- --- user_b cannot see or touch user_a's scan -------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  v_scan_a uuid;
+  leaked int;
+  succeeded boolean := false;
+begin
+  select id into v_scan_a from _rls_scan_a limit 1;
+
+  -- SELECT isolation on the parent + both child tables.
+  select count(*) into leaked from public.scans where client_scan_id = 'rls-scan-a';
+  if leaked <> 0 then raise exception 'FAIL: user_b can see user_a''s scan row'; end if;
+
+  select count(*) into leaked from public.scan_sections where scan_id = v_scan_a;
+  if leaked <> 0 then raise exception 'FAIL: user_b can see user_a''s scan_sections'; end if;
+
+  select count(*) into leaked from public.scan_detections where scan_id = v_scan_a;
+  if leaked <> 0 then raise exception 'FAIL: user_b can see user_a''s scan_detections'; end if;
+
+  -- link_scan_detection against user_a's scan must be rejected.
+  begin
+    perform public.link_scan_detection(v_scan_a, 'det-a-1', gen_random_uuid());
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: user_b linked a detection on user_a''s scan'; end if;
+
+  -- finalize against user_a's scan must be rejected.
+  succeeded := false;
+  begin
+    perform public.finalize_scan_confirmation(v_scan_a);
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: user_b finalized user_a''s scan'; end if;
+
+  -- A no-grant direct write is impossible too.
+  succeeded := false;
+  begin
+    update public.scans set status = 'confirming' where id = v_scan_a;
+    if (select count(*) from public.scans where id = v_scan_a and status = 'confirming') > 0 then succeeded := true; end if;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: user_b directly updated user_a''s scan row'; end if;
+
+  raise notice 'PASS: user_b cannot read, link, finalize, or write user_a''s scan or its child rows';
+end $$;
+commit;
+
+-- Verify (as postgres) user_a's scan is still 'confirmed' and single-item.
+begin;
+set local role postgres;
+do $$
+declare v_status text; v_items int;
+begin
+  select status into v_status from public.scans where client_scan_id = 'rls-scan-a' and user_id = 'TEST_USER_A_ID'::uuid;
+  if v_status <> 'confirmed' then raise exception 'FAIL: user_a scan status changed to % after user_b attempts', v_status; end if;
+  select count(*) into v_items from public.pantry_items where user_id = 'TEST_USER_A_ID'::uuid and source_scan_detection_id = 'det-a-1';
+  if v_items <> 1 then raise exception 'FAIL: user_a has % pantry items for scan detection det-a-1 (expected exactly 1)', v_items; end if;
+  raise notice 'PASS: user_a scan verified confirmed + exactly one pantry item as postgres';
+end $$;
+commit;
+
+-- --- Phase 6 cleanup -------------------------------------------------------
+begin;
+set local role postgres;
+delete from public.pantry_events where pantry_item_id in (
+  select id from public.pantry_items where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid) and source_scan_detection_id is not null
+);
+delete from public.pantry_items where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid) and source_scan_detection_id is not null;
+delete from public.scans where client_scan_id = 'rls-scan-a';
+drop table if exists _rls_scan_a;
 commit;
 
 do $$

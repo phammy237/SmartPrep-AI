@@ -2,6 +2,7 @@ import { supabase } from '../../client';
 import {
   deleteCheckedGroceryListItems,
   deleteGroceryListItem,
+  deletePlanGeneratedGroceryItems,
   fetchGroceryListItems,
   fetchOrCreateActiveGroceryList,
   insertGroceryListItem,
@@ -20,7 +21,7 @@ type Result = { data: unknown; error: unknown };
  *  awaitable, and `.single()`/`.maybeSingle()` resolve too. */
 function makeChain(result: Result) {
   const chain: Record<string, jest.Mock> & { then?: unknown } = {};
-  for (const m of ['select', 'insert', 'update', 'delete', 'eq', 'order']) {
+  for (const m of ['select', 'insert', 'update', 'delete', 'eq', 'order', 'filter']) {
     chain[m] = jest.fn(() => chain);
   }
   chain.single = jest.fn(() => Promise.resolve(result));
@@ -224,5 +225,53 @@ describe('deleteGroceryListItem / deleteCheckedGroceryListItems', () => {
   it('propagates a delete error', async () => {
     (supabase.from as jest.Mock).mockReturnValue(makeChain({ data: null, error: new Error('nope') }));
     await expect(deleteGroceryListItem('item-1')).rejects.toThrow('nope');
+  });
+});
+
+describe('deletePlanGeneratedGroceryItems', () => {
+  it('scopes the delete to list + meal_plan source + unchecked + the plan key, and returns the count removed', async () => {
+    const chain = makeChain({ data: [{ id: 'x1' }, { id: 'x2' }], error: null });
+    (supabase.from as jest.Mock).mockReturnValue(chain);
+
+    const removed = await deletePlanGeneratedGroceryItems('list-1', 'mealplan_2026-09-07_2026-09-13');
+
+    expect(supabase.from).toHaveBeenCalledWith('grocery_list_items');
+    expect(chain.delete).toHaveBeenCalled();
+    expect(chain.eq.mock.calls).toEqual([
+      ['grocery_list_id', 'list-1'],
+      ['source', 'meal_plan'],
+      ['is_checked', false],
+    ]);
+    expect(chain.filter).toHaveBeenCalledWith('source_metadata->>planGenerationKey', 'eq', 'mealplan_2026-09-07_2026-09-13');
+    expect(removed).toBe(2);
+  });
+
+  it('returns 0 when nothing matched', async () => {
+    (supabase.from as jest.Mock).mockReturnValue(makeChain({ data: [], error: null }));
+    await expect(deletePlanGeneratedGroceryItems('list-1', 'k')).resolves.toBe(0);
+  });
+
+  it('propagates a supabase error', async () => {
+    (supabase.from as jest.Mock).mockReturnValue(makeChain({ data: null, error: new Error('rls') }));
+    await expect(deletePlanGeneratedGroceryItems('list-1', 'k')).rejects.toThrow('rls');
+  });
+});
+
+describe('mapItemRow - needsQuantityCheck from source_metadata', () => {
+  it('flags a generated line whose pantry comparison was unresolved', async () => {
+    const chain = makeChain({
+      data: [{ ...ITEM_ROW, source: 'meal_plan', source_metadata: { coverage: 'unresolved', reason: 'missing_density' } }],
+      error: null,
+    });
+    (supabase.from as jest.Mock).mockReturnValue(chain);
+    const [row] = await fetchGroceryListItems('list-1');
+    expect(row.needsQuantityCheck).toBe(true);
+  });
+
+  it('leaves needsQuantityCheck undefined for ordinary lines', async () => {
+    const chain = makeChain({ data: [{ ...ITEM_ROW, source_metadata: { coverage: 'missing' } }], error: null });
+    (supabase.from as jest.Mock).mockReturnValue(chain);
+    const [row] = await fetchGroceryListItems('list-1');
+    expect(row.needsQuantityCheck).toBeUndefined();
   });
 });

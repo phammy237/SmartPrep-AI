@@ -47,13 +47,15 @@ export function QuantityVerifier({ quantity, onChange }: QuantityVerifierProps) 
     <View style={{ gap: 6 }}>
       {quantity.isLowConfidence ? (
         <Text style={[theme.typography.footnote, { color: theme.colors.freshness.useSoon }]}>
-          We aren't sure how much is here. Please specify the amount.
+          We aren't sure how much is here. Set the amount, then confirm.
         </Text>
       ) : null}
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.spacing.sm }}>
         <Stepper value={quantity.value} onChange={onChange} accessibilityLabel="quantity" />
         <Text style={[theme.typography.body, { color: theme.colors.textSecondary }]}>{quantity.unit}</Text>
       </View>
+      {/* Confirm the current amount without nudging the stepper. */}
+      <Button label="This amount is right" size="md" variant="secondary" onPress={() => onChange(quantity.value)} />
     </View>
   );
 }

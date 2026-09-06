@@ -2,19 +2,43 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { scanService } from '@/services';
 import { useScanSessionStore } from '@/store';
-import { Scan, ScanMode, ScanSection } from '@/types';
+import { Scan, ScanCaptureImage, ScanMode, ScanSection } from '@/types';
 import { queryKeys } from './queryKeys';
 
+/** Confirmed scans, newest first (real Supabase-backed history). */
 export function useScanHistory() {
   return useQuery({ queryKey: queryKeys.scanHistory, queryFn: scanService.getScanHistory });
 }
 
-/** Runs the mock AI processing step and writes the resulting detections into the scan session. */
+/** One confirmed scan with its full confirmed-detection list. */
+export function useScanDetail(scanId: string) {
+  return useQuery({
+    queryKey: queryKeys.scanDetail(scanId),
+    queryFn: () => scanService.getScanDetail(scanId),
+    enabled: !!scanId,
+  });
+}
+
+/**
+ * Runs REAL vision inference (Edge Function -> vision model) for a captured
+ * photo and writes the resulting detections into the scan session. On failure
+ * the mutation rejects with a `ScanInferenceError`; there is no canned
+ * fallback - the Processing screen shows an honest retry / manual-entry path.
+ */
 export function useProcessCapture() {
   const setSectionResult = useScanSessionStore((s) => s.setSectionResult);
   return useMutation({
-    mutationFn: ({ mode, section, imageUri }: { mode: ScanMode; section: ScanSection; imageUri: string }) =>
-      scanService.processCapture(mode, section, imageUri),
+    mutationFn: ({
+      mode,
+      section,
+      image,
+      previewUri,
+    }: {
+      mode: ScanMode;
+      section: ScanSection;
+      image: ScanCaptureImage;
+      previewUri: string;
+    }) => scanService.processCapture(mode, section, image, previewUri),
     onSuccess: (result) => setSectionResult(result),
   });
 }

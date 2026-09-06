@@ -1,6 +1,14 @@
 import { create } from 'zustand';
 
-import { Scan, ScanDetection, ScanMode, ScanSection, ScanSectionResult } from '@/types';
+import { Scan, ScanCaptureImage, ScanDetection, ScanMode, ScanSection, ScanSectionResult } from '@/types';
+
+/** A photo just captured, waiting for the Processing screen to run vision inference. Never persisted. */
+export interface PendingCapture {
+  image: ScanCaptureImage;
+  previewUri: string;
+  mode: ScanMode;
+  section: ScanSection;
+}
 
 /**
  * Ephemeral (non-persisted) state for the scan currently being captured and
@@ -11,6 +19,8 @@ import { Scan, ScanDetection, ScanMode, ScanSection, ScanSectionResult } from '@
 interface ScanSessionState {
   scan: Scan | null;
   activeDetectionId: string | null;
+  /** Set by Capture, consumed + cleared by Processing. Holds the base64 image only in memory. */
+  pendingCapture: PendingCapture | null;
 
   beginScan: (mode: ScanMode) => void;
   setSectionResult: (result: ScanSectionResult) => void;
@@ -20,6 +30,8 @@ interface ScanSessionState {
   restoreDetection: (detectionId: string) => void;
   addManualDetection: (section: ScanSection, detection: ScanDetection) => void;
   setActiveDetectionId: (id: string | null) => void;
+  setPendingCapture: (capture: PendingCapture) => void;
+  clearPendingCapture: () => void;
   reset: () => void;
 }
 
@@ -35,11 +47,13 @@ function upsertSection(scan: Scan, result: ScanSectionResult): Scan {
 export const useScanSessionStore = create<ScanSessionState>()((set) => ({
   scan: null,
   activeDetectionId: null,
+  pendingCapture: null,
 
   beginScan: (mode) =>
     set({
       scan: { id: `scan-draft-${Date.now()}`, mode, status: 'capturing', createdAt: new Date().toISOString(), sections: [] },
       activeDetectionId: null,
+      pendingCapture: null,
     }),
 
   setSectionResult: (result) =>
@@ -97,5 +111,8 @@ export const useScanSessionStore = create<ScanSessionState>()((set) => ({
 
   setActiveDetectionId: (id) => set({ activeDetectionId: id }),
 
-  reset: () => set({ scan: null, activeDetectionId: null }),
+  setPendingCapture: (capture) => set({ pendingCapture: capture }),
+  clearPendingCapture: () => set({ pendingCapture: null }),
+
+  reset: () => set({ scan: null, activeDetectionId: null, pendingCapture: null }),
 }));

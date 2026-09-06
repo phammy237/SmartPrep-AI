@@ -104,6 +104,12 @@ export interface ScanPantryItemInput {
   category: IngredientCategory;
   quantity: number;
   unit: QuantityUnit;
+  /**
+   * The stable confirmed-detection id. Passed straight to create_pantry_item so
+   * the write is idempotent for that detection - a retry after a lost response
+   * returns the already-created item instead of a duplicate.
+   */
+  sourceScanDetectionId?: string;
 }
 
 /**
@@ -124,6 +130,7 @@ async function createScanItem(input: ScanPantryItemInput, timeZone: string): Pro
       // A scan has no printed date to trust.
       expirationConfidence: 'unknown',
       source: 'scan',
+      sourceScanDetectionId: input.sourceScanDetectionId,
     },
     timeZone,
   );

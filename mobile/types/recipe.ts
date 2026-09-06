@@ -39,9 +39,8 @@ export interface RecipeIngredient {
    * engine). Undefined only on a recipe that was never hydrated.
    */
   coverage?: IngredientCoverage;
-  // --- Phase 3 additions - populated for real (Supabase-backed) recipes only,
-  // undefined for the legacy mock catalog (data/mockRecipes.ts, still used
-  // internally by services/mockDb.ts but no longer read by recipeService). ---
+  // --- Phase 3 additions - populated for the real (Supabase-backed) recipe
+  // catalog (seeded by supabase/migrations/0004_recipe_catalog_seed.sql). ---
   /** recipe_ingredients.id - required to reference this ingredient in a cooking-event pantry deduction. */
   recipeIngredientId?: string;
   isOptional?: boolean;

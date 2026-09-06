@@ -24,6 +24,7 @@ function mapListRow(row: GroceryListRow): GroceryListHeader {
 }
 
 function mapItemRow(row: GroceryListItemRow): GroceryListItem {
+  const meta = (row.source_metadata ?? {}) as Record<string, unknown>;
   return {
     id: row.id,
     ingredientId: row.catalog_ingredient_id ?? undefined,
@@ -39,6 +40,9 @@ function mapItemRow(row: GroceryListItemRow): GroceryListItem {
     quantityBasis: row.quantity_basis,
     sourceRecipeIds: row.source_recipe_version_ids.length > 0 ? row.source_recipe_version_ids : undefined,
     isManuallyAdded: row.source === 'manual' ? true : undefined,
+    // A generated line whose pantry comparison couldn't be resolved carries the
+    // conservative full requirement - flag it so Grocery can ask for a check.
+    needsQuantityCheck: meta.coverage === 'unresolved' ? true : undefined,
     estimatedPrice: row.estimated_price ?? undefined,
     swapSuggestion: row.swap_suggestion ?? undefined,
     wasteNote: row.waste_note ?? undefined,
@@ -175,4 +179,26 @@ export async function deleteCheckedGroceryListItems(listId: string): Promise<voi
     .eq('grocery_list_id', listId)
     .eq('is_checked', true);
   if (error) throw error;
+}
+
+/**
+ * Removes the still-UNCHECKED, meal-plan-generated lines for one plan
+ * generation key - the reconciliation step that makes "Add Week to Grocery
+ * List" idempotent. Never touches manual lines, checked lines, recipe-detail
+ * lines, or another week's plan lines. Returns how many rows were removed.
+ */
+export async function deletePlanGeneratedGroceryItems(
+  listId: string,
+  planGenerationKey: string,
+): Promise<number> {
+  const { data, error } = await supabase
+    .from('grocery_list_items')
+    .delete()
+    .eq('grocery_list_id', listId)
+    .eq('source', 'meal_plan')
+    .eq('is_checked', false)
+    .filter('source_metadata->>planGenerationKey', 'eq', planGenerationKey)
+    .select('id');
+  if (error) throw error;
+  return data?.length ?? 0;
 }

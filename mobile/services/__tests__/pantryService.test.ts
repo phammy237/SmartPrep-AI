@@ -88,6 +88,24 @@ describe('shared identity resolution on create', () => {
     const [params] = (repositories.createPantryItem as jest.Mock).mock.calls[0];
     expect(params.ingredientId).toBe('ing-chicken-breast');
   });
+
+  it('createScanItem forwards the detection id as the pantry idempotency key', async () => {
+    await pantryService.createScanItem(
+      { ingredientId: 'ing-spinach', name: 'Spinach', imageUri: 'x', category: 'produce', quantity: 1, unit: 'bag', sourceScanDetectionId: 'det-777' },
+      'UTC',
+    );
+    const [params] = (repositories.createPantryItem as jest.Mock).mock.calls[0];
+    expect(params.sourceScanDetectionId).toBe('det-777');
+  });
+
+  it('createScanItem passes no idempotency key when the caller omits one', async () => {
+    await pantryService.createScanItem(
+      { ingredientId: 'ing-spinach', name: 'Spinach', imageUri: 'x', category: 'produce', quantity: 1, unit: 'bag' },
+      'UTC',
+    );
+    const [params] = (repositories.createPantryItem as jest.Mock).mock.calls[0];
+    expect(params.sourceScanDetectionId).toBeUndefined();
+  });
 });
 
 describe('resolveItemNutrition (read-time, secondary)', () => {

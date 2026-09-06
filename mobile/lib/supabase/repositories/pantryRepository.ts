@@ -81,6 +81,12 @@ export interface CreatePantryItemParams {
   estimatedExpirationDate?: string;
   expirationConfidence?: PantryItem['expirationConfidence'];
   source?: PantryItem['source'];
+  /**
+   * Scan confirmation only: the stable ScanDetection id. Makes create_pantry_item
+   * idempotent for that detection (a repeat call returns the existing row rather
+   * than inserting a duplicate). Always null for manual / grocery adds.
+   */
+  sourceScanDetectionId?: string;
 }
 
 export async function createPantryItem(params: CreatePantryItemParams, timeZone: string): Promise<PantryItem> {
@@ -100,6 +106,7 @@ export async function createPantryItem(params: CreatePantryItemParams, timeZone:
     p_estimated_expiration_date: params.estimatedExpirationDate ?? null,
     p_expiration_confidence: params.expirationConfidence ?? 'unknown',
     p_source: params.source ?? 'manual',
+    p_source_scan_detection_id: params.sourceScanDetectionId ?? null,
   });
   if (error) throw error;
   return mapRow(data, timeZone);

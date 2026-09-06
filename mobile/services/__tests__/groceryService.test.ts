@@ -1,9 +1,9 @@
 import { supabase } from '@/lib/supabase/client';
 import * as repositories from '@/lib/supabase/repositories';
 import { IngredientCoverage } from '@/lib/nutrition/pantryCoverage';
+import { PlanWeekGroceryDemand, computePlanGroceryDemand } from '@/lib/nutrition/planDemand';
 import { GroceryListItem, RecipeIngredient } from '@/types';
 import { groceryService } from '../groceryService';
-import { db } from '../mockDb';
 import { nutritionService } from '../nutritionService';
 import type { RecipeShortfall } from '../recipeService';
 
@@ -25,6 +25,7 @@ jest.mock('@/lib/supabase/repositories', () => ({
   toggleGroceryListItemChecked: jest.fn(),
   deleteGroceryListItem: jest.fn(),
   deleteCheckedGroceryListItems: jest.fn(),
+  deletePlanGeneratedGroceryItems: jest.fn(),
 }));
 
 const repo = repositories as jest.Mocked<typeof repositories>;
@@ -84,8 +85,40 @@ beforeEach(() => {
   repo.insertGroceryListItems.mockImplementation(async (_u, _l, ps) => ps.map((p) => item({ name: p.displayName, quantity: p.quantity, unit: p.unit, source: p.source, quantityBasis: p.quantityBasis })));
   repo.updateGroceryListItem.mockImplementation(async (id, patch) => item({ id, quantity: patch.quantity ?? 1 }));
   repo.toggleGroceryListItemChecked.mockImplementation(async (id) => item({ id, isChecked: true }));
+  repo.deletePlanGeneratedGroceryItems.mockResolvedValue(0);
   getConversionMetaMap.mockResolvedValue(new Map());
 });
+
+/** Build a PlanWeekGroceryDemand from raw contributions using the real aggregator. */
+function planDemand(
+  ingredients: {
+    ingredientId: string;
+    name?: string;
+    contributions: { recipeVersionId: string; quantity: number; unit: string; isPantryStaple?: boolean }[];
+    lots?: { quantity: number; unit: string }[];
+    conversionMeta?: { gramsPerUnit?: Record<string, number>; densityGPerMl?: number };
+  }[],
+  key = 'mealplan_2026-09-07_2026-09-13',
+): PlanWeekGroceryDemand {
+  const demand = computePlanGroceryDemand({
+    ingredients: ingredients.map((i) => ({
+      ingredientId: i.ingredientId,
+      name: i.name ?? i.ingredientId,
+      imageUri: 'x',
+      contributions: i.contributions.map((c) => ({ isPantryStaple: false, ...c })),
+      lots: i.lots ?? [],
+      conversionMeta: i.conversionMeta,
+    })),
+  });
+  return {
+    planGenerationKey: key,
+    weekStart: '2026-09-07',
+    weekEnd: '2026-09-13',
+    plannedRecipeCount: 2,
+    unresolvedRecipeCount: 0,
+    demand,
+  };
+}
 
 describe('getGroceryList (fetch)', () => {
   it('returns the active list for the signed-in user', async () => {
@@ -260,11 +293,6 @@ describe('addRecipeShortfallsToGroceryList - line shape per coverage status', ()
     expect(rows).toEqual([]);
     expect(repo.insertGroceryListItems).not.toHaveBeenCalled();
   });
-
-  it('never writes to the in-memory mock db', async () => {
-    await groceryService.addRecipeShortfallsToGroceryList('rv-1', [shortfall({}, {})]);
-    expect((db as unknown as Record<string, unknown>).groceryList).toBeUndefined();
-  });
 });
 
 describe('addRecipeShortfallsToGroceryList - merge rules', () => {
@@ -330,5 +358,159 @@ describe('addRecipeShortfallsToGroceryList - merge rules', () => {
     const insertedRows = repo.insertGroceryListItems.mock.calls[0][2];
     expect(insertedRows).toHaveLength(1);
     expect(insertedRows[0].quantity).toBe(500);
+  });
+});
+
+describe('applyPlanGroceryDemand - persistence, provenance, reconciliation', () => {
+  const KEY = 'mealplan_2026-09-07_2026-09-13';
+
+  it('writes source = meal_plan lines carrying the planGenerationKey and all contributing recipe ids', async () => {
+    const plan = planDemand([
+      {
+        ingredientId: 'ing-chicken-breast',
+        name: 'Chicken Breast',
+        contributions: [
+          { recipeVersionId: 'rv-A', quantity: 300, unit: 'g' },
+          { recipeVersionId: 'rv-B', quantity: 400, unit: 'g' },
+        ],
+      },
+    ]);
+    await groceryService.applyPlanGroceryDemand(plan);
+
+    const [, , inserted] = repo.insertGroceryListItems.mock.calls[0];
+    expect(inserted).toHaveLength(1);
+    expect(inserted[0]).toMatchObject({
+      catalogIngredientId: 'ing-chicken-breast',
+      quantity: 700,
+      unit: 'g',
+      source: 'meal_plan',
+      quantityBasis: 'recipe_requirement',
+      sourceMetadata: { planGenerationKey: KEY, coverage: 'missing', weekStart: '2026-09-07', weekEnd: '2026-09-13' },
+    });
+    expect(inserted[0].sourceRecipeVersionIds).toEqual(expect.arrayContaining(['rv-A', 'rv-B']));
+  });
+
+  it('partial coverage -> uncovered_shortfall line for just the gap', async () => {
+    const plan = planDemand([
+      {
+        ingredientId: 'ing-chicken-breast',
+        contributions: [
+          { recipeVersionId: 'rv-A', quantity: 300, unit: 'g' },
+          { recipeVersionId: 'rv-B', quantity: 400, unit: 'g' },
+        ],
+        lots: [{ quantity: 250, unit: 'g' }],
+      },
+    ]);
+    await groceryService.applyPlanGroceryDemand(plan);
+    const [, , inserted] = repo.insertGroceryListItems.mock.calls[0];
+    expect(inserted[0]).toMatchObject({ quantity: 450, unit: 'g', quantityBasis: 'uncovered_shortfall' });
+  });
+
+  it('unresolved comparison -> conservative full recipe_requirement line, flagged, never subtracted', async () => {
+    const plan = planDemand([
+      {
+        ingredientId: 'ing-heavy-cream',
+        contributions: [{ recipeVersionId: 'rv-A', quantity: 250, unit: 'ml' }],
+        lots: [{ quantity: 500, unit: 'g' }],
+      },
+    ]);
+    const result = await groceryService.applyPlanGroceryDemand(plan);
+    const [, , inserted] = repo.insertGroceryListItems.mock.calls[0];
+    expect(inserted[0]).toMatchObject({
+      quantity: 250,
+      unit: 'ml',
+      quantityBasis: 'recipe_requirement',
+      sourceMetadata: { coverage: 'unresolved' },
+    });
+    expect(result.unresolvedCount).toBe(1);
+  });
+
+  it('a fully-covered plan writes nothing and reports nothingNeeded', async () => {
+    const plan = planDemand([
+      {
+        ingredientId: 'ing-chicken-breast',
+        contributions: [{ recipeVersionId: 'rv-A', quantity: 200, unit: 'g' }],
+        lots: [{ quantity: 500, unit: 'g' }],
+      },
+    ]);
+    const result = await groceryService.applyPlanGroceryDemand(plan);
+    expect(repo.insertGroceryListItems).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ addedCount: 0, nothingNeeded: true });
+  });
+
+  it('always reconciles: deletes this plan key prior unchecked lines before inserting', async () => {
+    repo.deletePlanGeneratedGroceryItems.mockResolvedValue(3);
+    const plan = planDemand([
+      { ingredientId: 'ing-chicken-breast', contributions: [{ recipeVersionId: 'rv-A', quantity: 300, unit: 'g' }] },
+    ]);
+    const result = await groceryService.applyPlanGroceryDemand(plan);
+    expect(repo.deletePlanGeneratedGroceryItems).toHaveBeenCalledWith('list-1', KEY);
+    expect(result.removedPriorCount).toBe(3);
+    // never edits existing lines (manual / checked / recipe lines are untouched)
+    expect(repo.updateGroceryListItem).not.toHaveBeenCalled();
+  });
+
+  it('IDEMPOTENT: running twice deletes-then-inserts each time and never doubles demand', async () => {
+    const plan = planDemand([
+      { ingredientId: 'ing-chicken-breast', contributions: [{ recipeVersionId: 'rv-A', quantity: 300, unit: 'g' }] },
+    ]);
+    await groceryService.applyPlanGroceryDemand(plan);
+    await groceryService.applyPlanGroceryDemand(plan);
+
+    expect(repo.deletePlanGeneratedGroceryItems).toHaveBeenCalledTimes(2);
+    const run1 = repo.insertGroceryListItems.mock.calls[0][2];
+    const run2 = repo.insertGroceryListItems.mock.calls[1][2];
+    expect(run2).toEqual(run1);
+    expect(run2[0].quantity).toBe(300); // not 600
+  });
+
+  it('retry after a partial write reconciles cleanly (delete runs again, full set re-inserted)', async () => {
+    const plan = planDemand([
+      { ingredientId: 'ing-chicken-breast', contributions: [{ recipeVersionId: 'rv-A', quantity: 300, unit: 'g' }] },
+    ]);
+    repo.insertGroceryListItems.mockRejectedValueOnce(new Error('write interrupted'));
+    await expect(groceryService.applyPlanGroceryDemand(plan)).rejects.toThrow('write interrupted');
+
+    repo.deletePlanGeneratedGroceryItems.mockResolvedValue(1); // the interrupted run left a partial row
+    const result = await groceryService.applyPlanGroceryDemand(plan);
+    expect(repo.deletePlanGeneratedGroceryItems).toHaveBeenCalledTimes(2);
+    expect(result.addedCount).toBe(1);
+    expect(repo.insertGroceryListItems.mock.calls.at(-1)?.[2][0].quantity).toBe(300);
+  });
+
+  it('incombinable segments land as separate lines, never merged and never unit-converted', async () => {
+    const plan = planDemand([
+      {
+        ingredientId: 'ing-spinach',
+        contributions: [
+          { recipeVersionId: 'rv-A', quantity: 300, unit: 'g' },
+          { recipeVersionId: 'rv-B', quantity: 2, unit: 'cup' },
+        ],
+      },
+    ]);
+    await groceryService.applyPlanGroceryDemand(plan);
+    const inserted = repo.insertGroceryListItems.mock.calls[0][2];
+    expect(inserted).toHaveLength(2);
+    expect(inserted.map((r) => r.unit).sort()).toEqual(['g', 'item']);
+    const fallbackLine = inserted.find((r) => r.unit === 'item');
+    expect(fallbackLine?.sourceMetadata).toMatchObject({ unitFallback: 'cup', coverage: 'unresolved' });
+  });
+
+  it('requires a session and touches no repository when signed out', async () => {
+    getUser.mockResolvedValue({ data: { user: null }, error: null });
+    const plan = planDemand([
+      { ingredientId: 'ing-chicken-breast', contributions: [{ recipeVersionId: 'rv-A', quantity: 300, unit: 'g' }] },
+    ]);
+    await expect(groceryService.applyPlanGroceryDemand(plan)).rejects.toThrow('Not signed in');
+    expect(repo.deletePlanGeneratedGroceryItems).not.toHaveBeenCalled();
+    expect(repo.insertGroceryListItems).not.toHaveBeenCalled();
+  });
+
+  it('propagates a Supabase failure from the delete step', async () => {
+    repo.deletePlanGeneratedGroceryItems.mockRejectedValue(new Error('rls'));
+    const plan = planDemand([
+      { ingredientId: 'ing-chicken-breast', contributions: [{ recipeVersionId: 'rv-A', quantity: 300, unit: 'g' }] },
+    ]);
+    await expect(groceryService.applyPlanGroceryDemand(plan)).rejects.toThrow('rls');
   });
 });

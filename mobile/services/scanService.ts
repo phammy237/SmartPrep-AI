@@ -1,40 +1,63 @@
-import { GUIDED_SCAN_SECTIONS, QUICK_SCAN_DETECTIONS } from '@/data';
-import { Scan, ScanConfirmSummary, ScanDetection, ScanMode, ScanSection, ScanSectionResult } from '@/types';
+import { INGREDIENTS_BY_ID, resolveCanonicalIngredient } from '@/data';
+import { normalizeUnit } from '@/lib/nutrition/units';
+import {
+  BLOCKING_REVIEW_REASONS,
+  SCAN_IDENTITY_NOISE_THRESHOLD,
+  SCAN_IDENTITY_REVIEW_THRESHOLD,
+  SCAN_QUANTITY_REVIEW_THRESHOLD,
+  isPersistableScanUnit,
+} from '@/lib/scan/thresholds';
+import {
+  ScanInferenceError,
+  beginScanConfirmation,
+  detectScanIngredients,
+  fetchConfirmedScans,
+  fetchScanDetail,
+  finalizeScanConfirmation,
+  linkScanDetection,
+} from '@/lib/supabase/repositories';
+import { VisionDetection } from '@/lib/validation/scanSchemas';
+import {
+  FreshnessState,
+  GuidedScanSection,
+  QuantityUnit,
+  Scan,
+  ScanCaptureImage,
+  ScanConfirmSummary,
+  ScanDetection,
+  ScanMode,
+  ScanRecord,
+  ScanRecordDetail,
+  ScanReviewReason,
+  ScanSection,
+  ScanSectionResult,
+} from '@/types';
 import { generateId } from '@/utils/id';
-import { clone, delay } from './apiSimulation';
-import { db } from './mockDb';
+import { placeholderPhotoUri } from '@/utils/ingredientPhoto';
+import { gridBoxes } from '@/utils/scanBoxes';
 import { pantryService } from './pantryService';
 import { recipeService } from './recipeService';
 import { requireUserId } from './requireUserId';
 
-function freshDetections(source: ScanDetection[]): ScanDetection[] {
-  return clone(source).map((detection: ScanDetection) => ({ ...detection, id: generateId('det') }));
+export { ScanInferenceError };
+
+/** Thrown by confirmScan when a detection still needs the user's attention (uncertain quantity / unit). */
+export class ScanReviewIncompleteError extends Error {
+  constructor(readonly detectionNames: string[]) {
+    super(
+      detectionNames.length === 1
+        ? `"${detectionNames[0]}" still needs a quantity or unit before it can be saved.`
+        : `${detectionNames.length} items still need a quantity or unit before they can be saved.`,
+    );
+    this.name = 'ScanReviewIncompleteError';
+  }
 }
+
+/** Vision doesn't assess freshness; every scanned item starts "Can't Tell" and the user can set it in Review. */
+const NEUTRAL_FRESHNESS: FreshnessState = { score: 50, confidence: 0, label: 'cant_tell' };
 
 function startScan(mode: ScanMode): Scan {
-  return {
-    id: generateId('scan'),
-    mode,
-    status: 'capturing',
-    createdAt: new Date().toISOString(),
-    sections: [],
-  };
-}
-
-/** Simulates the AI processing step and returns canned detections for the captured section. */
-async function processCapture(
-  mode: ScanMode,
-  section: ScanSection,
-  imageUri: string,
-): Promise<ScanSectionResult> {
-  await delay(1800);
-  const detections = mode === 'quick' ? QUICK_SCAN_DETECTIONS : GUIDED_SCAN_SECTIONS[section as 'fridge' | 'freezer' | 'pantry'];
-  return {
-    section,
-    imageUri,
-    detections: freshDetections(detections ?? []),
-    skipped: false,
-  };
+  return { id: generateId('scan'), mode, status: 'capturing', createdAt: new Date().toISOString(), sections: [] };
 }
 
 function skippedSection(section: ScanSection): ScanSectionResult {
@@ -42,12 +65,98 @@ function skippedSection(section: ScanSection): ScanSectionResult {
 }
 
 /**
+ * Turns one validated vision detection into a Review-ready `ScanDetection`:
+ *  - canonical identity via the shared exact-only resolver (no fuzzy/AI matching here)
+ *  - unit normalized through the Phase-4 taxonomy; a non-persistable unit is
+ *    NOT guessed - it's flagged `unit_needs_selection`
+ *  - a missing / low-confidence quantity is flagged (blocking) rather than fabricated
+ *  - a low-confidence identity is flagged (non-blocking - the user may accept it)
+ */
+function mapVisionDetection(v: VisionDetection, box: ScanDetection['boundingBox']): ScanDetection {
+  const canonical = resolveCanonicalIngredient(v.name);
+  const reviewReasons: ScanReviewReason[] = [];
+
+  if (v.confidence < SCAN_IDENTITY_REVIEW_THRESHOLD) reviewReasons.push('low_identity_confidence');
+
+  // Unit
+  const normalized = v.unit ? normalizeUnit(v.unit) : null;
+  let unit: QuantityUnit;
+  if (normalized && isPersistableScanUnit(normalized)) {
+    unit = normalized;
+  } else {
+    unit = canonical?.defaultUnit ?? 'item';
+    if (v.unit) reviewReasons.push('unit_needs_selection');
+  }
+
+  // Quantity
+  let quantityValue = v.quantity ?? 1;
+  let isLowConfidence = false;
+  if (v.quantity == null) {
+    reviewReasons.push('quantity_missing');
+    isLowConfidence = true;
+    quantityValue = 1;
+  } else if ((v.quantityConfidence ?? 0) < SCAN_QUANTITY_REVIEW_THRESHOLD) {
+    reviewReasons.push('quantity_uncertain');
+    isLowConfidence = true;
+  }
+  if (reviewReasons.includes('unit_needs_selection')) isLowConfidence = true;
+
+  const noteParts = [v.notes ?? undefined];
+  if (v.unit && !(normalized && isPersistableScanUnit(normalized))) {
+    noteParts.push(`Model said unit "${v.unit}".`);
+  }
+  const notes = noteParts.filter(Boolean).join(' ') || undefined;
+
+  return {
+    id: generateId('det'),
+    ingredientId: canonical?.id ?? generateId('ing-scan'),
+    name: canonical?.name ?? v.name,
+    imageUri: canonical?.imageUri ?? placeholderPhotoUri(`scan-${v.name}`, 300, 300),
+    category: canonical?.category ?? v.category ?? 'other',
+    boundingBox: box,
+    detectionConfidence: v.confidence,
+    quantity: {
+      value: quantityValue,
+      unit,
+      confidence: v.quantityConfidence ?? 0,
+      isLowConfidence,
+    },
+    freshness: NEUTRAL_FRESHNESS,
+    notes,
+    needsReview: reviewReasons.length > 0,
+    reviewReasons: reviewReasons.length > 0 ? reviewReasons : undefined,
+  };
+}
+
+/**
+ * REAL vision inference: capture -> authenticated Edge Function -> vision model
+ * -> validated detections -> Review-ready `ScanDetection[]`.
+ *
+ * Any failure throws a `ScanInferenceError` (or bubbles a `ScanInferenceError`
+ * from the repository). There is NO fallback to canned demo detections - an
+ * inference failure surfaces an honest retry / manual-entry path in the UI.
+ */
+async function processCapture(
+  mode: ScanMode,
+  section: ScanSection,
+  image: ScanCaptureImage,
+  previewUri: string,
+): Promise<ScanSectionResult> {
+  await requireUserId();
+
+  const { detections: raw } = await detectScanIngredients({ image, scanMode: mode, section });
+
+  const usable = raw.filter((d) => d.confidence >= SCAN_IDENTITY_NOISE_THRESHOLD);
+  const boxes = gridBoxes(usable.length);
+  const detections = usable.map((d, i) => mapVisionDetection(d, boxes[i]));
+
+  return { section, imageUri: previewUri, detections, skipped: false };
+}
+
+/**
  * Thrown when at least one confirmed detection could not be written to the
- * real pantry. The rows that DID persist are already in `pantry_items` (there
- * is no client delete grant, and no bulk transaction - each row is its own
- * `create_pantry_item` RPC call), so this carries the partial counts instead
- * of pretending nothing happened. Callers must not fall back to any local
- * store on this.
+ * real pantry. Rows that DID persist are already in `pantry_items` - this
+ * carries the partial counts rather than pretending nothing happened.
  */
 export class ScanConfirmError extends Error {
   constructor(
@@ -55,83 +164,142 @@ export class ScanConfirmError extends Error {
     readonly failedCount: number,
     readonly failures: unknown[],
   ) {
-    super(
-      `Saved ${addedCount} scanned item${addedCount === 1 ? '' : 's'}; ${failedCount} could not be saved.`,
-    );
+    super(`Saved ${addedCount} scanned item${addedCount === 1 ? '' : 's'}; ${failedCount} could not be saved.`);
     this.name = 'ScanConfirmError';
   }
 }
 
+function unresolvedReviewNames(detections: ScanDetection[]): string[] {
+  const blocking = new Set<string>(BLOCKING_REVIEW_REASONS);
+  return detections
+    .filter((d) => !d.isRemoved && (d.reviewReasons ?? []).some((r) => blocking.has(r)))
+    .filter((d) => {
+      const addressedQuantity = d.isQuantityEdited === true;
+      const addressedUnit = isPersistableScanUnit(d.quantity.unit);
+      const reasons = d.reviewReasons ?? [];
+      const quantityBlocked = (reasons.includes('quantity_missing') || reasons.includes('quantity_uncertain')) && !addressedQuantity;
+      const unitBlocked = reasons.includes('unit_needs_selection') && !addressedUnit;
+      return quantityBlocked || unitBlocked;
+    })
+    .map((d) => d.name);
+}
+
+/** Detections (across all sections) that still block confirmation. Exposed so Review can disable Confirm. */
+export function getBlockingReviewNames(scan: Scan): string[] {
+  return unresolvedReviewNames(scan.sections.flatMap((s) => s.detections));
+}
+
+function detectionSectionOf(scan: Scan): Map<string, GuidedScanSection | null> {
+  const map = new Map<string, GuidedScanSection | null>();
+  for (const s of scan.sections) {
+    for (const d of s.detections) {
+      map.set(d.id, s.section === 'quick' ? null : s.section);
+    }
+  }
+  return map;
+}
+
 /**
- * Persists the reviewed scan into the REAL pantry: every confirmed detection
- * is created through the same `create_pantry_item` RPC (via the repository
- * layer) that a manual "Add item" uses - identical validation, identical
- * append-only `added` ledger event, `scan_source = 'scan'`. There is no
- * separate scan insert path and no fallback to mock storage: if Supabase
- * rejects a row, that surfaces as a `ScanConfirmError`.
+ * Commits the reviewed scan through a DURABLE, RESUMABLE model so a retry
+ * after any partial failure never double-writes:
  *
- * Still mocked here, on purpose:
- *  - Vision/OCR inference itself (`processCapture` returns canned detections).
- *    Because a scan produces no real printed package date, every item is
- *    written with `expiration_confidence = 'unknown'` and no estimated date -
- *    the same honest result a manual add with no dates produces. A later
- *    vision Edge Function phase can supply real dates; persistence does not
- *    wait on it.
- *  - Scan *history* (`getScanHistory`): there is no `scans` table yet, so the
- *    confirmed scan is still recorded in the in-memory mock db for the
- *    history list only. This is independent of the (now real) pantry write.
+ *  1. `begin_scan_confirmation` - one `scans` row (keyed by the stable
+ *     `scan.id`, so a retry resumes it, never forks a new one) plus one
+ *     intent row per confirmed detection.
+ *  2. per detection - `pantryService.createScanItem` (the SAME shared path as
+ *     a manual add) keyed by the detection id, so the pantry insert is
+ *     idempotent even if a prior response was lost; then `link_scan_detection`
+ *     records which pantry item it produced. Detections already linked on a
+ *     previous attempt are skipped.
+ *  3. `finalize_scan_confirmation` - flips the scan to `confirmed` once every
+ *     detection is linked (idempotent; safe to retry on its own).
  *
- * Not idempotent - `create_pantry_item` takes no idempotency key (matching
- * Phase 2's "no client-side idempotency" pantry semantics), so confirming the
- * same scan twice adds the items twice. The Review screen resets the scan
- * session on success to prevent an accidental double submit; a retry after a
- * *partial* failure will re-add the rows that already succeeded.
+ * Rejects up front if any detection still needs the user's attention. On a
+ * pantry failure it throws `ScanConfirmError` with the partial counts and
+ * leaves the scan `confirming` (resumable) - it does NOT roll back the items
+ * that did persist.
  */
 async function confirmScan(
   scan: Scan,
   timeZone: string = 'UTC',
 ): Promise<{ scan: Scan; summary: ScanConfirmSummary }> {
-  // Fail before touching the pantry if there's no session - never silently
-  // degrade to a local write.
   await requireUserId();
 
   const confirmedDetections = scan.sections.flatMap((s) => s.detections).filter((d) => !d.isRemoved);
 
-  // Shared pantry creation path - identity resolution + persistence live in
-  // pantryService, never duplicated here.
+  const stillNeedsReview = unresolvedReviewNames(confirmedDetections);
+  if (stillNeedsReview.length > 0) {
+    throw new ScanReviewIncompleteError(stillNeedsReview);
+  }
+  if (confirmedDetections.length === 0) {
+    // Nothing to save - don't create an empty scan record.
+    throw new ScanConfirmError(0, 0, []);
+  }
+
+  const sectionOf = detectionSectionOf(scan);
+
+  const begin = await beginScanConfirmation({
+    clientScanId: scan.id,
+    mode: scan.mode,
+    startedAt: scan.createdAt,
+    sections:
+      scan.mode === 'guided'
+        ? scan.sections
+            .filter((s) => s.section !== 'quick')
+            .map((s, i) => ({ section: s.section, skipped: s.skipped, sortOrder: i }))
+        : [],
+    detections: confirmedDetections.map((d) => ({
+      detectionId: d.id,
+      section: sectionOf.get(d.id) ?? null,
+      displayName: d.name,
+      // Only a real catalog hit is a canonical id; a synthetic scan id is not.
+      canonicalIngredientId: INGREDIENTS_BY_ID[d.ingredientId] ? d.ingredientId : null,
+      quantity: d.quantity.value,
+      unit: d.quantity.unit,
+      category: d.category,
+      identityEdited: false,
+      quantityEdited: d.isQuantityEdited === true,
+    })),
+  });
+
+  const alreadyLinked = new Set(
+    begin.detections.filter((d) => d.pantryItemId !== null).map((d) => d.detectionId),
+  );
+
   const results = await Promise.allSettled(
-    confirmedDetections.map((d) =>
-      pantryService.createScanItem(
-        {
-          ingredientId: d.ingredientId,
-          name: d.name,
-          imageUri: d.imageUri,
-          category: d.category,
-          quantity: d.quantity.value,
-          unit: d.quantity.unit,
-        },
-        timeZone,
-      ),
-    ),
+    confirmedDetections
+      .filter((d) => !alreadyLinked.has(d.id))
+      .map(async (d) => {
+        const item = await pantryService.createScanItem(
+          {
+            ingredientId: d.ingredientId,
+            name: d.name,
+            imageUri: d.imageUri,
+            category: d.category,
+            quantity: d.quantity.value,
+            unit: d.quantity.unit,
+            sourceScanDetectionId: d.id,
+          },
+          timeZone,
+        );
+        await linkScanDetection(begin.scanId, d.id, item.id);
+      }),
   );
 
   const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected').map((r) => r.reason);
-  const addedCount = results.length - failures.length;
-
+  const addedCount = confirmedDetections.length - failures.length;
   if (failures.length > 0) {
+    // Scan stays `confirming`; a retry re-attempts only the still-pending detections.
     throw new ScanConfirmError(addedCount, failures.length, failures);
   }
 
-  const finalScan: Scan = { ...scan, status: 'confirmed' };
-  // Scan-history list only (no `scans` table yet) - see the doc comment above.
-  db.scans = [...db.scans, clone(finalScan)];
+  await finalizeScanConfirmation(begin.scanId);
 
+  const finalScan: Scan = { ...scan, status: 'confirmed' };
   const mealsPossibleEstimate = await recipeService.countReadyToCookRecipes();
 
   const summary: ScanConfirmSummary = {
     ingredientsAdded: addedCount,
-    // Derived from the vision output in the review session, not from the
-    // persisted rows (which are all 'unknown' urgency by design above).
     needsAttentionCount: confirmedDetections.filter(
       (d) => d.freshness.label === 'prioritize' || d.freshness.label === 'use_soon',
     ).length,
@@ -139,12 +307,19 @@ async function confirmScan(
     mealsPossibleEstimate,
   };
 
-  return { scan: clone(finalScan), summary };
+  return { scan: finalScan, summary };
 }
 
-async function getScanHistory(): Promise<Scan[]> {
-  await delay(300);
-  return clone(db.scans);
+/** Confirmed scans for the History screen, newest first. Authenticated + RLS-scoped. */
+async function getScanHistory(): Promise<ScanRecord[]> {
+  await requireUserId();
+  return fetchConfirmedScans();
+}
+
+/** One confirmed scan with its full detection list, or null if not found / not owned. */
+async function getScanDetail(scanId: string): Promise<ScanRecordDetail | null> {
+  await requireUserId();
+  return fetchScanDetail(scanId);
 }
 
 export const scanService = {
@@ -152,5 +327,7 @@ export const scanService = {
   processCapture,
   skippedSection,
   confirmScan,
+  getBlockingReviewNames,
   getScanHistory,
+  getScanDetail,
 };

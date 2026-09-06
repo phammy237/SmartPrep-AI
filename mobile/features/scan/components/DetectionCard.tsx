@@ -5,13 +5,12 @@ import { Pressable, ScrollView, Text, View } from 'react-native';
 import { Badge, Chip, FreshnessTag, IngredientAvatar } from '@/components';
 import { INGREDIENTS } from '@/data';
 import { useTheme } from '@/hooks/useTheme';
+import { PERSISTABLE_SCAN_UNITS, SCAN_IDENTITY_REVIEW_THRESHOLD, isPersistableScanUnit } from '@/lib/scan/thresholds';
 import { useScanSessionStore } from '@/store';
 import { ScanDetection } from '@/types';
 import { formatConfidence } from '@/utils/format';
 import { FRESHNESS_LABELS, FRESHNESS_META, FRESHNESS_OVERRIDE_VALUES } from '@/utils/freshness';
 import { QuantityVerifier } from './QuantityVerifier';
-
-const LOW_CONFIDENCE_THRESHOLD = 0.7;
 
 interface DetectionCardProps {
   detection: ScanDetection;
@@ -26,7 +25,12 @@ export function DetectionCard({ detection, isActive, onPress }: DetectionCardPro
   const restoreDetection = useScanSessionStore((s) => s.restoreDetection);
   const [editingFreshness, setEditingFreshness] = useState(false);
   const [reclassifying, setReclassifying] = useState(false);
-  const isLowConfidence = detection.detectionConfidence < LOW_CONFIDENCE_THRESHOLD;
+  const isLowConfidence = detection.detectionConfidence < SCAN_IDENTITY_REVIEW_THRESHOLD;
+  const reviewReasons = detection.reviewReasons ?? [];
+  const needsUnit = reviewReasons.includes('unit_needs_selection') && !isPersistableScanUnit(detection.quantity.unit);
+  const needsQuantity =
+    (reviewReasons.includes('quantity_missing') || reviewReasons.includes('quantity_uncertain')) &&
+    detection.isQuantityEdited !== true;
 
   if (detection.isRemoved) {
     return (
@@ -81,6 +85,43 @@ export function DetectionCard({ detection, isActive, onPress }: DetectionCardPro
             </Pressable>
           </View>
           <Badge label={`${formatConfidence(detection.detectionConfidence)} detection confidence`} tone="neutral" />
+
+          {needsQuantity || needsUnit ? (
+            <View
+              style={{
+                backgroundColor: theme.colors.freshness.useSoonMuted,
+                borderRadius: theme.radius.sm,
+                paddingHorizontal: 10,
+                paddingVertical: 6,
+                gap: 2,
+              }}
+            >
+              <Text style={[theme.typography.caption, { color: theme.colors.freshness.useSoon }]}>
+                {needsUnit ? 'Pick a unit before saving.' : 'Confirm the amount before saving.'}
+              </Text>
+              {detection.notes ? (
+                <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>{detection.notes}</Text>
+              ) : null}
+            </View>
+          ) : null}
+
+          {needsUnit ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxHeight: 40 }} contentContainerStyle={{ gap: 6 }}>
+              {PERSISTABLE_SCAN_UNITS.map((u) => (
+                <Chip
+                  key={u}
+                  label={u}
+                  selected={detection.quantity.unit === u}
+                  onPress={() =>
+                    updateDetection(detection.id, {
+                      quantity: { ...detection.quantity, unit: u },
+                      isQuantityEdited: true,
+                    })
+                  }
+                />
+              ))}
+            </ScrollView>
+          ) : null}
 
           {isLowConfidence ? (
             <View style={{ gap: 6 }}>

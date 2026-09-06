@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { CreateMealPlanEntryInput, UpdateMealPlanEntryInput } from '@/lib/validation/plannerSchemas';
-import { plannerService } from '@/services';
+import { groceryService, plannerService } from '@/services';
 import { haptics } from '@/utils/haptics';
 import { localWeekRange } from '@/utils/nutritionSnapshot';
 import { queryKeys } from './queryKeys';
@@ -72,6 +72,27 @@ export function useGenerateWeek() {
     onSuccess: () => {
       haptics.success();
       invalidate();
+    },
+  });
+}
+
+/**
+ * Adds this week's plan demand to the active grocery list. Two-step:
+ * compute whole-week demand (aggregated, pantry allocated once), then
+ * reconcile-and-persist. Idempotent - safe to re-run / retry.
+ */
+export function useAddWeekToGroceryList() {
+  const timeZone = useTimeZone();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { weekStart, weekEnd } = localWeekRange(new Date(), timeZone);
+      const demand = await plannerService.getPlanGroceryDemand(weekStart, weekEnd, timeZone);
+      return groceryService.applyPlanGroceryDemand(demand);
+    },
+    onSuccess: (result) => {
+      if (result.addedCount > 0 || result.removedPriorCount > 0) haptics.success();
+      queryClient.invalidateQueries({ queryKey: queryKeys.groceryList });
     },
   });
 }

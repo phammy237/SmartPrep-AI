@@ -136,6 +136,38 @@ describe('createPantryItem', () => {
     );
     expect(result.id).toBe('item-1');
   });
+
+  it('defaults p_source_scan_detection_id to null for a manual add', async () => {
+    const mock = supabase.rpc as jest.Mock;
+    mock.mockResolvedValue({ data: BASE_ROW, error: null });
+    await createPantryItem(
+      { ingredientId: 'i', imageUri: '', displayName: 'Milk', category: 'dairy', quantity: 1, unit: 'item' },
+      'UTC',
+    );
+    expect(mock.mock.calls.at(-1)?.[1]).toMatchObject({ p_source: 'manual', p_source_scan_detection_id: null });
+  });
+
+  it('forwards sourceScanDetectionId as the pantry idempotency key for a scan-confirmed item', async () => {
+    const mock = supabase.rpc as jest.Mock;
+    mock.mockResolvedValue({ data: BASE_ROW, error: null });
+    await createPantryItem(
+      {
+        ingredientId: 'i',
+        imageUri: '',
+        displayName: 'Milk',
+        category: 'dairy',
+        quantity: 1,
+        unit: 'item',
+        source: 'scan',
+        sourceScanDetectionId: 'det-123',
+      },
+      'UTC',
+    );
+    expect(mock.mock.calls.at(-1)?.[1]).toMatchObject({
+      p_source: 'scan',
+      p_source_scan_detection_id: 'det-123',
+    });
+  });
 });
 
 describe('adjustPantryQuantity / depletePantryItem / restorePantryItem / confirmPantryItem', () => {
