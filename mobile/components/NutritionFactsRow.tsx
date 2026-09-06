@@ -2,27 +2,43 @@ import React from 'react';
 import { Text, View } from 'react-native';
 
 import { useTheme } from '@/hooks/useTheme';
-import { NutritionFacts } from '@/types';
 
-interface NutritionFactsRowProps {
-  facts: NutritionFacts;
-  servingLabel?: string;
+/** Accepts either the legacy always-complete NutritionFacts or a nullable-fields NutritionSnapshot - unknown values render as "-", never as 0. */
+interface NutritionFactsLike {
+  calories: number | null | undefined;
+  proteinG: number | null | undefined;
+  carbsG: number | null | undefined;
+  fatG: number | null | undefined;
+  fiberG: number | null | undefined;
 }
 
-export function NutritionFactsRow({ facts, servingLabel }: NutritionFactsRowProps) {
+interface NutritionFactsRowProps {
+  facts: NutritionFactsLike;
+  servingLabel?: string;
+  /** Shown next to the heading when nutrition isn't fully known, e.g. "estimated". */
+  statusLabel?: string;
+}
+
+function display(value: number | null | undefined, suffix = ''): string {
+  return value == null ? '–' : `${Math.round(value)}${suffix}`;
+}
+
+export function NutritionFactsRow({ facts, servingLabel, statusLabel }: NutritionFactsRowProps) {
   const theme = useTheme();
   const stats = [
-    { label: 'kcal', value: String(Math.round(facts.calories)) },
-    { label: 'Protein', value: `${Math.round(facts.proteinG)}g` },
-    { label: 'Carbs', value: `${Math.round(facts.carbsG)}g` },
-    { label: 'Fat', value: `${Math.round(facts.fatG)}g` },
-    { label: 'Fiber', value: `${Math.round(facts.fiberG)}g` },
+    { label: 'kcal', value: display(facts.calories) },
+    { label: 'Protein', value: display(facts.proteinG, 'g') },
+    { label: 'Carbs', value: display(facts.carbsG, 'g') },
+    { label: 'Fat', value: display(facts.fatG, 'g') },
+    { label: 'Fiber', value: display(facts.fiberG, 'g') },
   ];
 
   return (
     <View style={{ gap: theme.spacing.sm }}>
       {servingLabel ? (
-        <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Nutrition ({servingLabel})</Text>
+        <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>
+          Nutrition ({servingLabel}){statusLabel ? ` · ${statusLabel}` : ''}
+        </Text>
       ) : null}
       <View style={{ flexDirection: 'row' }}>
         {stats.map((stat) => (

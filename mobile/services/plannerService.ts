@@ -1,28 +1,38 @@
-import { DayOfWeek, MealPlan, MealPlanItem, MealType } from '@/types';
-import { generateId } from '@/utils/id';
-import { clone, delay } from './apiSimulation';
-import { db } from './mockDb';
+import {
+  createMealPlanEntry,
+  deleteMealPlanEntry,
+  deletePlannedEntriesInRange,
+  fetchMealPlanEntries,
+  fetchPantryItems,
+  updateMealPlanEntry,
+} from '@/lib/supabase/repositories';
+import { CreateMealPlanEntryInput, UpdateMealPlanEntryInput } from '@/lib/validation/plannerSchemas';
+import { MealPlanEntry, PantryItem, Recipe } from '@/types';
+import { requireUserId } from './requireUserId';
+import { recipeService } from './recipeService';
 
-const DAY_ORDER: DayOfWeek[] = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
-
-function mondayOf(date: Date): Date {
-  const d = new Date(date);
-  const day = d.getDay(); // 0 = Sunday
-  const diff = day === 0 ? -6 : 1 - day;
-  d.setDate(d.getDate() + diff);
-  d.setHours(0, 0, 0, 0);
-  return d;
+async function getMealPlanForWeek(weekStart: string, weekEnd: string): Promise<MealPlanEntry[]> {
+  const userId = await requireUserId();
+  return fetchMealPlanEntries(userId, weekStart, weekEnd);
 }
 
-function dateForDay(weekStart: Date, day: DayOfWeek): string {
-  const d = new Date(weekStart);
-  d.setDate(d.getDate() + DAY_ORDER.indexOf(day));
-  return d.toISOString().slice(0, 10);
+async function addMealPlanEntry(input: CreateMealPlanEntryInput): Promise<MealPlanEntry> {
+  const userId = await requireUserId();
+  return createMealPlanEntry(userId, input);
 }
 
-/** Higher = more urgent to cook soon, based on Prioritize/Use Soon pantry items it uses. */
-function recipeUrgency(recipe: (typeof db.recipes)[number]): number {
-  const pantryByIngredient = new Map(db.pantry.map((item) => [item.ingredientId, item]));
+/** Marking an entry 'completed'/'skipped'/'cancelled' is a plain status write - it never creates a meal log. */
+async function updatePlanEntry(id: string, patch: UpdateMealPlanEntryInput): Promise<MealPlanEntry> {
+  return updateMealPlanEntry(id, patch);
+}
+
+async function removeMealPlanEntry(id: string): Promise<void> {
+  return deleteMealPlanEntry(id);
+}
+
+/** Higher = more urgent to cook soon, based on Prioritize/Use Soon pantry items it uses - same deterministic heuristic the mock planner used, now against real data. */
+function recipeUrgency(recipe: Recipe, pantry: PantryItem[]): number {
+  const pantryByIngredient = new Map(pantry.map((item) => [item.ingredientId, item]));
   return recipe.ingredients.reduce((score, ingredient) => {
     const pantryItem = pantryByIngredient.get(ingredient.ingredientId);
     if (!pantryItem) return score;
@@ -32,76 +42,58 @@ function recipeUrgency(recipe: (typeof db.recipes)[number]): number {
   }, 0);
 }
 
-async function getMealPlan(): Promise<MealPlan> {
-  await delay();
-  return clone(db.mealPlan);
+function eachDateInRange(startDate: string, endDate: string): string[] {
+  const [sy, sm, sd] = startDate.split('-').map(Number);
+  const cursor = new Date(Date.UTC(sy, sm - 1, sd));
+  const endTime = new Date(`${endDate}T00:00:00Z`).getTime();
+  const dates: string[] = [];
+  while (cursor.getTime() <= endTime) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return dates;
 }
 
-async function addMealPlanItem(day: DayOfWeek, mealType: MealType, recipeId: string): Promise<MealPlanItem> {
-  await delay(300);
-  const weekStart = new Date(db.mealPlan.weekStartDate);
-  const item: MealPlanItem = {
-    id: generateId('plan-item'),
-    day,
-    date: dateForDay(weekStart, day),
-    mealType,
-    recipeId,
-  };
-  db.mealPlan.items.push(item);
-  return clone(item);
-}
+/**
+ * Regenerates the week's dinners, front-loading recipes that use
+ * Prioritize/Use Soon ingredients - clears only still-planned dinner entries
+ * in this range first (never touches completed/skipped/cancelled history),
+ * then creates one real meal_plan_items row per day.
+ */
+async function generateWeek(weekStart: string, weekEnd: string, timeZone: string): Promise<MealPlanEntry[]> {
+  const userId = await requireUserId();
+  const [recipes, pantry] = await Promise.all([recipeService.getRecipes(), fetchPantryItems(userId, timeZone)]);
+  if (recipes.length === 0) {
+    return fetchMealPlanEntries(userId, weekStart, weekEnd);
+  }
 
-async function replaceMealPlanItem(itemId: string, recipeId: string): Promise<MealPlanItem> {
-  await delay(300);
-  const item = db.mealPlan.items.find((i) => i.id === itemId);
-  if (!item) throw new Error(`Meal plan item ${itemId} not found`);
-  item.recipeId = recipeId;
-  return clone(item);
-}
+  const ranked = [...recipes].sort(
+    (a, b) => recipeUrgency(b, pantry) - recipeUrgency(a, pantry) || b.smartMatchScore - a.smartMatchScore,
+  );
 
-async function removeMealPlanItem(itemId: string): Promise<void> {
-  await delay(250);
-  db.mealPlan.items = db.mealPlan.items.filter((i) => i.id !== itemId);
-}
+  await deletePlannedEntriesInRange(userId, 'dinner', weekStart, weekEnd);
 
-async function moveMealPlanItem(itemId: string, day: DayOfWeek, mealType: MealType): Promise<MealPlanItem> {
-  await delay(300);
-  const item = db.mealPlan.items.find((i) => i.id === itemId);
-  if (!item) throw new Error(`Meal plan item ${itemId} not found`);
-  const weekStart = new Date(db.mealPlan.weekStartDate);
-  item.day = day;
-  item.mealType = mealType;
-  item.date = dateForDay(weekStart, day);
-  return clone(item);
-}
+  const dates = eachDateInRange(weekStart, weekEnd);
+  const created = await Promise.all(
+    dates.map((date, index) => {
+      const recipe = ranked[index % ranked.length];
+      return createMealPlanEntry(userId, {
+        scheduledDate: date,
+        timezone: timeZone,
+        mealSlot: 'dinner',
+        recipeVersionId: recipe.recipeVersionId ?? recipe.id,
+        plannedServings: recipe.servings,
+      });
+    }),
+  );
 
-/** Regenerates the week's dinners, front-loading recipes that use Prioritize/Use Soon ingredients. */
-async function generateWeek(): Promise<MealPlan> {
-  await delay(900);
-  const weekStart = mondayOf(new Date());
-  const ranked = [...db.recipes].sort((a, b) => recipeUrgency(b) - recipeUrgency(a) || b.smartMatchScore - a.smartMatchScore);
-
-  const items: MealPlanItem[] = DAY_ORDER.map((day, index) => ({
-    id: generateId('plan-item'),
-    day,
-    date: dateForDay(weekStart, day),
-    mealType: 'dinner' as MealType,
-    recipeId: ranked[index % ranked.length].id,
-  }));
-
-  db.mealPlan = {
-    id: db.mealPlan.id,
-    weekStartDate: weekStart.toISOString().slice(0, 10),
-    items,
-  };
-  return clone(db.mealPlan);
+  return created;
 }
 
 export const plannerService = {
-  getMealPlan,
-  addMealPlanItem,
-  replaceMealPlanItem,
-  removeMealPlanItem,
-  moveMealPlanItem,
+  getMealPlanForWeek,
+  addMealPlanEntry,
+  updateMealPlanEntry: updatePlanEntry,
+  removeMealPlanEntry,
   generateWeek,
 };

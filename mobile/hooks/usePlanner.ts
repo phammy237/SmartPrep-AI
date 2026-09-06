@@ -1,58 +1,74 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
+import { CreateMealPlanEntryInput, UpdateMealPlanEntryInput } from '@/lib/validation/plannerSchemas';
 import { plannerService } from '@/services';
-import { DayOfWeek, MealType } from '@/types';
 import { haptics } from '@/utils/haptics';
+import { localWeekRange } from '@/utils/nutritionSnapshot';
 import { queryKeys } from './queryKeys';
+import { useUser } from './useUser';
 
-export function useMealPlan() {
-  return useQuery({ queryKey: queryKeys.mealPlan, queryFn: plannerService.getMealPlan });
+/** Same timezone-resolution pattern as usePantry's useTimeZone - falls back to UTC until the profile has loaded. */
+function useTimeZone(): string {
+  const userQuery = useUser();
+  return userQuery.data?.timezone ?? 'UTC';
+}
+
+/** The Monday-Sunday week containing "today" in the user's timezone. */
+export function useCurrentWeekRange(): { weekStart: string; weekEnd: string } {
+  const timeZone = useTimeZone();
+  return localWeekRange(new Date(), timeZone);
+}
+
+export function useMealPlanWeek() {
+  const timeZone = useTimeZone();
+  const { weekStart, weekEnd } = localWeekRange(new Date(), timeZone);
+  const query = useQuery({
+    queryKey: queryKeys.mealPlanWeek(weekStart, weekEnd),
+    queryFn: () => plannerService.getMealPlanForWeek(weekStart, weekEnd),
+  });
+  return { ...query, weekStart, weekEnd, timeZone };
 }
 
 function useInvalidateMealPlan() {
   const queryClient = useQueryClient();
+  // queryKeys.mealPlan is a prefix of every queryKeys.mealPlanWeek(...) key,
+  // so this invalidates every cached week, not just the current one.
   return () => queryClient.invalidateQueries({ queryKey: queryKeys.mealPlan });
 }
 
-export function useAddMealPlanItem() {
+export function useAddMealPlanEntry() {
   const invalidate = useInvalidateMealPlan();
   return useMutation({
-    mutationFn: ({ day, mealType, recipeId }: { day: DayOfWeek; mealType: MealType; recipeId: string }) =>
-      plannerService.addMealPlanItem(day, mealType, recipeId),
+    mutationFn: (input: CreateMealPlanEntryInput) => plannerService.addMealPlanEntry(input),
     onSuccess: invalidate,
   });
 }
 
-export function useReplaceMealPlanItem() {
+/** Covers edit (date/time/servings/notes/recipe), and status changes (skip/cancel/complete) - completing a plan item never itself creates a meal log. */
+export function useUpdateMealPlanEntry() {
   const invalidate = useInvalidateMealPlan();
   return useMutation({
-    mutationFn: ({ itemId, recipeId }: { itemId: string; recipeId: string }) =>
-      plannerService.replaceMealPlanItem(itemId, recipeId),
+    mutationFn: ({ id, patch }: { id: string; patch: UpdateMealPlanEntryInput }) => plannerService.updateMealPlanEntry(id, patch),
     onSuccess: invalidate,
   });
 }
 
-export function useRemoveMealPlanItem() {
+export function useRemoveMealPlanEntry() {
   const invalidate = useInvalidateMealPlan();
   return useMutation({
-    mutationFn: (itemId: string) => plannerService.removeMealPlanItem(itemId),
-    onSuccess: invalidate,
-  });
-}
-
-export function useMoveMealPlanItem() {
-  const invalidate = useInvalidateMealPlan();
-  return useMutation({
-    mutationFn: ({ itemId, day, mealType }: { itemId: string; day: DayOfWeek; mealType: MealType }) =>
-      plannerService.moveMealPlanItem(itemId, day, mealType),
+    mutationFn: (id: string) => plannerService.removeMealPlanEntry(id),
     onSuccess: invalidate,
   });
 }
 
 export function useGenerateWeek() {
+  const timeZone = useTimeZone();
   const invalidate = useInvalidateMealPlan();
   return useMutation({
-    mutationFn: plannerService.generateWeek,
+    mutationFn: () => {
+      const { weekStart, weekEnd } = localWeekRange(new Date(), timeZone);
+      return plannerService.generateWeek(weekStart, weekEnd, timeZone);
+    },
     onSuccess: () => {
       haptics.success();
       invalidate();

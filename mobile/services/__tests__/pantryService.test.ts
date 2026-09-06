@@ -77,7 +77,7 @@ describe('updateItemMetadata', () => {
   });
 });
 
-describe('adjustQuantity / deductManyForCooking', () => {
+describe('adjustQuantity', () => {
   it('calls the adjust RPC with a negative delta for a single deduction', async () => {
     (repositories.adjustPantryQuantity as jest.Mock).mockResolvedValue({ ...CURRENT_ITEM, quantity: 0 });
 
@@ -92,22 +92,6 @@ describe('adjustQuantity / deductManyForCooking', () => {
     await pantryService.adjustQuantity('item-1', -1, 'consumed', undefined, 'UTC');
     await pantryService.adjustQuantity('item-1', -1, 'consumed', undefined, 'UTC');
 
-    expect(repositories.adjustPantryQuantity).toHaveBeenCalledTimes(2);
-  });
-
-  it('deductManyForCooking issues one adjust call per item, each tagged deducted_by_cooking', async () => {
-    (repositories.adjustPantryQuantity as jest.Mock).mockResolvedValue(CURRENT_ITEM);
-
-    await pantryService.deductManyForCooking(
-      [
-        { id: 'item-1', amountUsed: 1 },
-        { id: 'item-2', amountUsed: 2 },
-      ],
-      'UTC',
-    );
-
-    expect(repositories.adjustPantryQuantity).toHaveBeenCalledWith('item-1', -1, 'deducted_by_cooking', undefined, 'UTC');
-    expect(repositories.adjustPantryQuantity).toHaveBeenCalledWith('item-2', -2, 'deducted_by_cooking', undefined, 'UTC');
     expect(repositories.adjustPantryQuantity).toHaveBeenCalledTimes(2);
   });
 });

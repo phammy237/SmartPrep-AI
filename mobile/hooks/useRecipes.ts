@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { recipeService } from '@/services';
 import { queryKeys } from './queryKeys';
@@ -21,4 +21,31 @@ export function useRecipeCollections() {
 
 export function useReadyToCookCount() {
   return useQuery({ queryKey: queryKeys.readyToCookCount, queryFn: recipeService.countReadyToCookRecipes });
+}
+
+export function useSavedRecipes() {
+  return useQuery({ queryKey: queryKeys.savedRecipes, queryFn: recipeService.getSavedRecipes });
+}
+
+function useInvalidateSavedRecipes() {
+  const queryClient = useQueryClient();
+  return () => queryClient.invalidateQueries({ queryKey: queryKeys.savedRecipes });
+}
+
+/** Idempotent - saving an already-saved recipe version just resolves with the existing row. */
+export function useSaveRecipe() {
+  const invalidate = useInvalidateSavedRecipes();
+  return useMutation({
+    mutationFn: ({ recipeVersionId, notes }: { recipeVersionId: string; notes?: string }) =>
+      recipeService.saveRecipe(recipeVersionId, notes),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUnsaveRecipe() {
+  const invalidate = useInvalidateSavedRecipes();
+  return useMutation({
+    mutationFn: (recipeVersionId: string) => recipeService.unsaveRecipe(recipeVersionId),
+    onSuccess: invalidate,
+  });
 }

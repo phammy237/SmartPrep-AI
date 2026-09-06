@@ -4,26 +4,19 @@ import React, { useMemo, useState } from 'react';
 import { Alert, Pressable, Text, View } from 'react-native';
 
 import { Button, Card, EmptyState, ListRow, LoadingState, Screen } from '@/components';
-import {
-  useAddMealPlanItem,
-  useGenerateWeek,
-  useMealPlan,
-  useMoveMealPlanItem,
-  useRecipes,
-  useRemoveMealPlanItem,
-  useReplaceMealPlanItem,
-} from '@/hooks';
+import { useAddMealPlanEntry, useGenerateWeek, useMealPlanWeek, useRecipes, useRemoveMealPlanEntry, useUpdateMealPlanEntry } from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
-import { DayOfWeek, MealPlanItem, MealType } from '@/types';
+import { MealPlanEntry, MealType } from '@/types';
+import { addDaysToIsoDate } from '@/utils/expiration';
 import { formatRelativeDay } from '@/utils/format';
 import { MoveMealModal } from '../components/MoveMealModal';
 import { RecipePickerModal } from '../components/RecipePickerModal';
-import { DAY_LABELS, DAY_ORDER } from '../constants';
+import { DAY_LABELS, DAY_ORDER, MEAL_TYPE_LABELS } from '../constants';
 
 interface PickerTarget {
-  day: DayOfWeek;
-  mealType: MealType;
-  replaceItemId?: string;
+  date: string;
+  mealSlot: MealType;
+  replaceEntryId?: string;
 }
 
 function capitalize(value: string): string {
@@ -32,29 +25,35 @@ function capitalize(value: string): string {
 
 export function PlannerScreen() {
   const theme = useTheme();
-  const mealPlanQuery = useMealPlan();
+  const mealPlanQuery = useMealPlanWeek();
   const recipesQuery = useRecipes();
   const generateWeek = useGenerateWeek();
-  const addItem = useAddMealPlanItem();
-  const replaceItem = useReplaceMealPlanItem();
-  const removeItem = useRemoveMealPlanItem();
-  const moveItem = useMoveMealPlanItem();
+  const addEntry = useAddMealPlanEntry();
+  const updateEntry = useUpdateMealPlanEntry();
+  const removeEntry = useRemoveMealPlanEntry();
 
   const [pickerTarget, setPickerTarget] = useState<PickerTarget | null>(null);
-  const [moveTarget, setMoveTarget] = useState<MealPlanItem | null>(null);
+  const [moveTarget, setMoveTarget] = useState<MealPlanEntry | null>(null);
 
   const recipesById = useMemo(
-    () => Object.fromEntries((recipesQuery.data ?? []).map((r) => [r.id, r])),
+    () => Object.fromEntries((recipesQuery.data ?? []).map((r) => [r.recipeVersionId ?? r.id, r])),
     [recipesQuery.data],
   );
 
-  const itemsByDay = useMemo(() => {
-    const buckets: Record<DayOfWeek, MealPlanItem[]> = { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] };
-    for (const item of mealPlanQuery.data?.items ?? []) {
-      buckets[item.day].push(item);
+  const weekDates = useMemo(
+    () => DAY_ORDER.map((day, index) => ({ day, date: addDaysToIsoDate(mealPlanQuery.weekStart, index) })),
+    [mealPlanQuery.weekStart],
+  );
+
+  const entriesByDate = useMemo(() => {
+    const buckets: Record<string, MealPlanEntry[]> = {};
+    for (const { date } of weekDates) buckets[date] = [];
+    for (const entry of mealPlanQuery.data ?? []) {
+      if (!buckets[entry.scheduledDate]) buckets[entry.scheduledDate] = [];
+      buckets[entry.scheduledDate].push(entry);
     }
     return buckets;
-  }, [mealPlanQuery.data]);
+  }, [mealPlanQuery.data, weekDates]);
 
   if (mealPlanQuery.isLoading || recipesQuery.isLoading) {
     return (
@@ -67,21 +66,22 @@ export function PlannerScreen() {
   if (!mealPlanQuery.data || !recipesQuery.data) {
     return (
       <Screen>
-        <EmptyState
-          title="Couldn't load your plan"
-          actionLabel="Retry"
-          onActionPress={() => mealPlanQuery.refetch()}
-        />
+        <EmptyState title="Couldn't load your plan" actionLabel="Retry" onActionPress={() => mealPlanQuery.refetch()} />
       </Screen>
     );
   }
 
-  const handleRowMenu = (item: MealPlanItem) => {
-    const recipe = recipesById[item.recipeId];
+  const handleRowMenu = (entry: MealPlanEntry) => {
+    const recipe = recipesById[entry.recipeVersionId];
     Alert.alert(recipe?.title ?? 'Meal', undefined, [
-      { text: 'Replace', onPress: () => setPickerTarget({ day: item.day, mealType: item.mealType, replaceItemId: item.id }) },
-      { text: 'Move', onPress: () => setMoveTarget(item) },
-      { text: 'Remove', style: 'destructive', onPress: () => removeItem.mutate(item.id) },
+      {
+        text: 'Replace',
+        onPress: () => setPickerTarget({ date: entry.scheduledDate, mealSlot: entry.mealSlot, replaceEntryId: entry.id }),
+      },
+      { text: 'Move', onPress: () => setMoveTarget(entry) },
+      { text: 'Cook Now', onPress: () => router.push(`/recipes/${entry.recipeVersionId}/cook?planItemId=${entry.id}`) },
+      { text: 'Skip', onPress: () => updateEntry.mutate({ id: entry.id, patch: { status: 'skipped' } }) },
+      { text: 'Remove', style: 'destructive', onPress: () => removeEntry.mutate(entry.id) },
       { text: 'Cancel', style: 'cancel' },
     ]);
   };
@@ -89,39 +89,41 @@ export function PlannerScreen() {
   return (
     <Screen scroll header edges={['top', 'left', 'right']} contentContainerStyle={{ padding: theme.spacing.lg, gap: theme.spacing.lg }}>
       <Text style={[theme.typography.largeTitle, { color: theme.colors.textPrimary }]}>Plan</Text>
+      <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>
+        Planned meals don't count toward your nutrition until you cook and log them.
+      </Text>
 
       <View style={{ gap: theme.spacing.sm }}>
         <Button label="Generate My Week" onPress={() => generateWeek.mutate()} loading={generateWeek.isPending} fullWidth />
         <Button label="View Grocery List" variant="secondary" onPress={() => router.push('/grocery')} fullWidth />
       </View>
 
-      {DAY_ORDER.map((day) => {
-        const dayItems = itemsByDay[day];
-        const date = dayItems[0]?.date;
+      {weekDates.map(({ day, date }) => {
+        const dayEntries = entriesByDate[date] ?? [];
         return (
           <View key={day} style={{ gap: theme.spacing.sm }}>
             <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>
-              {DAY_LABELS[day]}
-              {date ? ` · ${formatRelativeDay(date)}` : ''}
+              {DAY_LABELS[day]} · {formatRelativeDay(date)}
             </Text>
             <Card padded={false} style={{ paddingHorizontal: theme.spacing.md }}>
-              {dayItems.length === 0 ? (
+              {dayEntries.length === 0 ? (
                 <Text style={[theme.typography.footnote, { color: theme.colors.textTertiary, paddingVertical: theme.spacing.md }]}>
                   No meals planned
                 </Text>
               ) : (
-                dayItems.map((item, index) => {
-                  const recipe = recipesById[item.recipeId];
+                dayEntries.map((entry, index) => {
+                  const recipe = recipesById[entry.recipeVersionId];
+                  const subtitle = `${MEAL_TYPE_LABELS[entry.mealSlot]}${entry.status !== 'planned' ? ` · ${capitalize(entry.status)}` : ''}`;
                   return (
                     <ListRow
-                      key={item.id}
+                      key={entry.id}
                       title={recipe?.title ?? 'Recipe'}
-                      subtitle={capitalize(item.mealType)}
-                      isLast={index === dayItems.length - 1}
+                      subtitle={subtitle}
+                      isLast={index === dayEntries.length - 1}
                       onPress={() => recipe && router.push(`/recipes/${recipe.id}`)}
                       right={
                         <Pressable
-                          onPress={() => handleRowMenu(item)}
+                          onPress={() => handleRowMenu(entry)}
                           accessibilityRole="button"
                           accessibilityLabel="Meal options"
                           hitSlop={8}
@@ -134,7 +136,7 @@ export function PlannerScreen() {
                 })
               )}
             </Card>
-            <Button label="+ Add Meal" variant="ghost" onPress={() => setPickerTarget({ day, mealType: 'dinner' })} />
+            <Button label="+ Add Meal" variant="ghost" onPress={() => setPickerTarget({ date, mealSlot: 'dinner' })} />
           </View>
         );
       })}
@@ -144,18 +146,28 @@ export function PlannerScreen() {
         onClose={() => setPickerTarget(null)}
         onSelect={(recipeId) => {
           if (!pickerTarget) return;
-          if (pickerTarget.replaceItemId) {
-            replaceItem.mutate({ itemId: pickerTarget.replaceItemId, recipeId });
+          if (pickerTarget.replaceEntryId) {
+            updateEntry.mutate({ id: pickerTarget.replaceEntryId, patch: { recipeVersionId: recipeId } });
           } else {
-            addItem.mutate({ day: pickerTarget.day, mealType: pickerTarget.mealType, recipeId });
+            const recipe = recipesById[recipeId];
+            addEntry.mutate({
+              scheduledDate: pickerTarget.date,
+              timezone: mealPlanQuery.timeZone,
+              mealSlot: pickerTarget.mealSlot,
+              recipeVersionId: recipeId,
+              plannedServings: recipe?.servings ?? 1,
+            });
           }
         }}
       />
       <MoveMealModal
-        item={moveTarget}
+        visible={!!moveTarget}
+        currentDate={moveTarget?.scheduledDate}
+        currentMealSlot={moveTarget?.mealSlot}
+        weekDates={weekDates}
         onClose={() => setMoveTarget(null)}
-        onMove={(day, mealType) => {
-          if (moveTarget) moveItem.mutate({ itemId: moveTarget.id, day, mealType });
+        onMove={(scheduledDate, mealSlot) => {
+          if (moveTarget) updateEntry.mutate({ id: moveTarget.id, patch: { scheduledDate, mealSlot } });
         }}
       />
     </Screen>

@@ -1,16 +1,22 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Alert, Pressable, Text, View } from 'react-native';
 
-import { BarChart, Card, Chip, EmptyState, LoadingState, MacroBar, ProgressRing, Screen } from '@/components';
+import { BarChart, Button, Card, Chip, EmptyState, ListRow, LoadingState, MacroBar, ProgressRing, Screen } from '@/components';
 import { DAY_LABELS, DAY_ORDER } from '@/features/planner/constants';
-import { useKitchenImpact, useMealPlan, useRecipes, useUser } from '@/hooks';
+import { useCorrectMealLog, useKitchenImpact, useMealLogs, useQuickAddMealLog, useUser, useVoidMealLog } from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
-import { DayOfWeek, NutritionFacts } from '@/types';
-import { currentWeekday } from '@/utils/date';
+import { MealLog } from '@/types';
+import { generateId } from '@/utils/id';
+import { addDaysToIsoDate, todayIsoDateInTimeZone } from '@/utils/expiration';
 import { formatNumber } from '@/utils/format';
-import { macroPercent, NutritionPeriod as Period, scopeNutritionForPeriod, sumNutrition } from '@/utils/nutrition';
+import { macroPercent } from '@/utils/nutrition';
+import { dailyNutritionTotal, localWeekRange, sumNutritionSnapshots } from '@/utils/nutritionSnapshot';
+import { CorrectMealLogModal } from '../components/CorrectMealLogModal';
+import { QuickAddMealLogModal } from '../components/QuickAddMealLogModal';
+
+type Period = 'today' | 'week' | 'month';
 
 const PERIODS: { value: Period; label: string }[] = [
   { value: 'today', label: 'Today' },
@@ -18,53 +24,95 @@ const PERIODS: { value: Period; label: string }[] = [
   { value: 'month', label: 'Month' },
 ];
 
+const NUTRITION_STATUS_LABEL: Record<string, string> = {
+  verified: 'Verified',
+  estimated: 'Estimated',
+  incomplete: 'Incomplete',
+};
+
+function firstOfMonth(dateIso: string): string {
+  return `${dateIso.slice(0, 7)}-01`;
+}
+
+function daysInMonth(dateIso: string): number {
+  const [y, m] = dateIso.split('-').map(Number);
+  return new Date(Date.UTC(y, m, 0)).getUTCDate();
+}
+
+function lastOfMonth(dateIso: string): string {
+  return `${dateIso.slice(0, 7)}-${String(daysInMonth(dateIso)).padStart(2, '0')}`;
+}
+
+function capitalize(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
 export function NutritionProgressScreen() {
   const theme = useTheme();
   const userQuery = useUser();
-  const mealPlanQuery = useMealPlan();
-  const recipesQuery = useRecipes();
   const impactQuery = useKitchenImpact();
+  const voidLog = useVoidMealLog();
+  const quickAdd = useQuickAddMealLog();
+  const correctLog = useCorrectMealLog();
   const [period, setPeriod] = useState<Period>('week');
+  const [quickAddVisible, setQuickAddVisible] = useState(false);
+  const [correctingLog, setCorrectingLog] = useState<MealLog | null>(null);
 
-  const recipesById = useMemo(
-    () => Object.fromEntries((recipesQuery.data ?? []).map((r) => [r.id, r])),
-    [recipesQuery.data],
-  );
+  const timeZone = userQuery.data?.timezone ?? 'UTC';
+  const today = todayIsoDateInTimeZone(timeZone);
+  const { weekStart, weekEnd } = localWeekRange(new Date(), timeZone);
+  const monthStart = firstOfMonth(today);
+  const monthEnd = lastOfMonth(today);
 
-  const dayTotals = useMemo(() => {
-    const itemsByDay = {} as Record<DayOfWeek, NutritionFacts[]>;
-    for (const day of DAY_ORDER) itemsByDay[day] = [];
-    for (const item of mealPlanQuery.data?.items ?? []) {
-      const facts = recipesById[item.recipeId]?.nutritionPerServing;
-      if (facts) itemsByDay[item.day].push(facts);
-    }
-    const totals = {} as Record<DayOfWeek, NutritionFacts>;
-    for (const day of DAY_ORDER) totals[day] = sumNutrition(itemsByDay[day]);
-    return totals;
-  }, [mealPlanQuery.data, recipesById]);
+  const range =
+    period === 'today' ? { start: today, end: today } : period === 'week' ? { start: weekStart, end: weekEnd } : { start: monthStart, end: monthEnd };
+  const periodDays = period === 'today' ? 1 : period === 'week' ? 7 : daysInMonth(today);
 
-  const weeklyTotals = useMemo(() => sumNutrition(DAY_ORDER.map((day) => dayTotals[day])), [dayTotals]);
+  const periodLogsQuery = useMealLogs(range.start, range.end);
+  // The trend chart is always Mon-Sun regardless of the selected period.
+  const weekLogsQuery = useMealLogs(weekStart, weekEnd);
 
-  const today = currentWeekday();
+  const activePeriodLogs = useMemo(() => (periodLogsQuery.data ?? []).filter((log) => !log.voidedAt), [periodLogsQuery.data]);
+  const activeWeekLogs = useMemo(() => (weekLogsQuery.data ?? []).filter((log) => !log.voidedAt), [weekLogsQuery.data]);
 
-  const chartData = useMemo(
-    () =>
-      DAY_ORDER.map((day) => ({
-        label: DAY_LABELS[day].slice(0, 3),
-        value: dayTotals[day].calories,
-        highlighted: day === today,
-      })),
-    [dayTotals, today],
+  // activePeriodLogs is already scoped to [range.start, range.end] by the
+  // query itself, so summing all of them directly is the period total.
+  const consumedTotal = useMemo(
+    () => sumNutritionSnapshots(activePeriodLogs.map((log) => log.nutritionSnapshot)),
+    [activePeriodLogs],
   );
 
   const goals = userQuery.data?.preferences.nutritionGoals;
+  const goalForPeriod = goals
+    ? {
+        dailyCalories: goals.dailyCalories * periodDays,
+        proteinG: goals.proteinG * periodDays,
+        carbsG: goals.carbsG * periodDays,
+        fatG: goals.fatG * periodDays,
+      }
+    : null;
 
-  const scoped = useMemo(() => {
-    if (!goals) return null;
-    return scopeNutritionForPeriod(period, dayTotals[today], weeklyTotals, goals);
-  }, [dayTotals, today, weeklyTotals, goals, period]);
+  const percent = goalForPeriod ? Math.min(100, macroPercent(consumedTotal.calories ?? 0, goalForPeriod.dailyCalories)) : 0;
 
-  const isLoading = userQuery.isLoading || mealPlanQuery.isLoading || recipesQuery.isLoading;
+  const chartData = useMemo(
+    () =>
+      DAY_ORDER.map((day, index) => {
+        const date = addDaysToIsoDate(weekStart, index);
+        const dayTotal = dailyNutritionTotal(
+          activeWeekLogs.map((log) => ({ localDate: log.localDate, nutritionSnapshot: log.nutritionSnapshot })),
+          date,
+        );
+        return { label: DAY_LABELS[day].slice(0, 3), value: dayTotal.calories ?? 0, highlighted: date === today };
+      }),
+    [activeWeekLogs, weekStart, today],
+  );
+
+  const recentLogs = useMemo(
+    () => [...activePeriodLogs].sort((a, b) => b.consumedAt.localeCompare(a.consumedAt)).slice(0, 12),
+    [activePeriodLogs],
+  );
+
+  const isLoading = userQuery.isLoading || periodLogsQuery.isLoading;
 
   if (isLoading) {
     return (
@@ -74,7 +122,7 @@ export function NutritionProgressScreen() {
     );
   }
 
-  if (!userQuery.data || !goals || !scoped) {
+  if (!userQuery.data || !goals || !goalForPeriod) {
     return (
       <Screen>
         <EmptyState title="Couldn't load nutrition" actionLabel="Retry" onActionPress={() => userQuery.refetch()} />
@@ -82,7 +130,12 @@ export function NutritionProgressScreen() {
     );
   }
 
-  const percent = Math.min(100, macroPercent(scoped.consumed.calories, scoped.goal.dailyCalories));
+  const handleRemoveLog = (logId: string) => {
+    Alert.alert('Remove log?', 'This removes it from your totals. It stays in history as voided, not deleted.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Remove', style: 'destructive', onPress: () => voidLog.mutate({ mealLogId: logId, reason: 'removed_by_user' }) },
+    ]);
+  };
 
   return (
     <Screen scroll edges={['top', 'left', 'right']} contentContainerStyle={{ padding: theme.spacing.lg, gap: theme.spacing.xl }}>
@@ -105,21 +158,69 @@ export function NutritionProgressScreen() {
             <Text style={[theme.typography.title3, { color: theme.colors.textPrimary }]}>{percent}%</Text>
           </ProgressRing>
           <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>
-            {formatNumber(Math.round(scoped.consumed.calories))} of {formatNumber(Math.round(scoped.goal.dailyCalories))} kcal
+            {formatNumber(Math.round(consumedTotal.calories ?? 0))} of {formatNumber(Math.round(goalForPeriod.dailyCalories))} kcal
           </Text>
+          {consumedTotal.incompleteFields.length > 0 ? (
+            <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>
+              Some logged meals have incomplete nutrition - totals may be an undercount.
+            </Text>
+          ) : null}
         </View>
         <View style={{ gap: theme.spacing.sm, marginTop: theme.spacing.lg }}>
-          <MacroBar label="Protein" value={scoped.consumed.proteinG} goal={scoped.goal.proteinG} />
-          <MacroBar label="Carbs" value={scoped.consumed.carbsG} goal={scoped.goal.carbsG} color={theme.colors.freshness.useSoon} />
-          <MacroBar label="Fat" value={scoped.consumed.fatG} goal={scoped.goal.fatG} color={theme.colors.secondary} />
+          <MacroBar label="Protein" value={consumedTotal.proteinG ?? 0} goal={goalForPeriod.proteinG} />
+          <MacroBar label="Carbs" value={consumedTotal.carbsG ?? 0} goal={goalForPeriod.carbsG} color={theme.colors.freshness.useSoon} />
+          <MacroBar label="Fat" value={consumedTotal.fatG ?? 0} goal={goalForPeriod.fatG} color={theme.colors.secondary} />
         </View>
       </Card>
+
+      <View style={{ flexDirection: 'row', gap: theme.spacing.sm }}>
+        <View style={{ flex: 1 }}>
+          <Button label="Quick Add" variant="secondary" onPress={() => setQuickAddVisible(true)} fullWidth />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Button label="Leftovers" variant="ghost" onPress={() => router.push('/prepared-meals')} fullWidth />
+        </View>
+      </View>
 
       <View style={{ gap: theme.spacing.sm }}>
         <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Weekly trend (kcal)</Text>
         <Card>
           <BarChart data={chartData} goal={goals.dailyCalories} />
         </Card>
+      </View>
+
+      <View style={{ gap: theme.spacing.sm }}>
+        <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Recent</Text>
+        {recentLogs.length === 0 ? (
+          <Card>
+            <Text style={[theme.typography.body, { color: theme.colors.textSecondary }]}>Nothing logged for this period yet.</Text>
+          </Card>
+        ) : (
+          <Card padded={false} style={{ paddingHorizontal: theme.spacing.md }}>
+            {recentLogs.map((log, index) => {
+              const caloriesLabel = log.nutritionSnapshot.calories != null ? `${Math.round(log.nutritionSnapshot.calories)} kcal` : 'Calories unknown';
+              const statusLabel = NUTRITION_STATUS_LABEL[log.nutritionStatus];
+              return (
+                <ListRow
+                  key={log.id}
+                  title={`${capitalize(log.mealType)} · ${caloriesLabel}`}
+                  subtitle={`${statusLabel}${log.notes ? ` · ${log.notes}` : ''}`}
+                  isLast={index === recentLogs.length - 1}
+                  right={
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+                      <Pressable onPress={() => setCorrectingLog(log)} accessibilityRole="button" accessibilityLabel="Correct log" hitSlop={8}>
+                        <Ionicons name="create-outline" size={20} color={theme.colors.textTertiary} />
+                      </Pressable>
+                      <Pressable onPress={() => handleRemoveLog(log.id)} accessibilityRole="button" accessibilityLabel="Remove log" hitSlop={8}>
+                        <Ionicons name="close-circle-outline" size={20} color={theme.colors.textTertiary} />
+                      </Pressable>
+                    </View>
+                  }
+                />
+              );
+            })}
+          </Card>
+        )}
       </View>
 
       <View style={{ flexDirection: 'row', gap: theme.spacing.md }}>
@@ -138,6 +239,35 @@ export function NutritionProgressScreen() {
           <Text style={[theme.typography.caption, { color: theme.colors.textSecondary }]}>Estimated food saved</Text>
         </Card>
       </View>
+
+      <QuickAddMealLogModal
+        visible={quickAddVisible}
+        onClose={() => setQuickAddVisible(false)}
+        submitting={quickAdd.isPending}
+        onAdd={({ mealType, nutrition, notes }) =>
+          quickAdd.mutate({ mealType, nutrition, notes, idempotencyKey: generateId('quickadd') })
+        }
+      />
+
+      <CorrectMealLogModal
+        visible={!!correctingLog}
+        log={correctingLog}
+        onClose={() => setCorrectingLog(null)}
+        submitting={correctLog.isPending}
+        onSubmit={(input) => {
+          if (!correctingLog) return;
+          correctLog.mutate(
+            { mealLogId: correctingLog.id, newIdempotencyKey: generateId('correct-log'), ...input },
+            {
+              onSuccess: () => setCorrectingLog(null),
+              onError: (error) => {
+                const message = error instanceof Error ? error.message : 'Please try again.';
+                Alert.alert('Could not save correction', message);
+              },
+            },
+          );
+        }}
+      />
     </Screen>
   );
 }

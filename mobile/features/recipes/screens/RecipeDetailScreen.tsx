@@ -5,16 +5,25 @@ import React from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Button, EmptyState, LoadingState, NutritionFactsRow, ProgressRing, Screen } from '@/components';
-import { useAddMissingIngredientsForRecipe, useRecipe } from '@/hooks';
+import { useAddMissingIngredientsForRecipe, useRecipe, useSaveRecipe, useSavedRecipes, useUnsaveRecipe } from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
 import { getMissingIngredients, getRecipeAvailability } from '@/services';
 import { formatCurrency, formatMinutes } from '@/utils/format';
+
+const NUTRITION_STATUS_LABEL: Record<string, string> = {
+  verified: 'verified',
+  estimated: 'estimated',
+  incomplete: 'incomplete - some values unknown',
+};
 
 export function RecipeDetailScreen() {
   const theme = useTheme();
   const { id } = useLocalSearchParams<{ id: string }>();
   const recipeQuery = useRecipe(id);
   const addMissing = useAddMissingIngredientsForRecipe();
+  const savedQuery = useSavedRecipes();
+  const saveMutation = useSaveRecipe();
+  const unsaveMutation = useUnsaveRecipe();
 
   if (recipeQuery.isLoading) {
     return (
@@ -36,6 +45,9 @@ export function RecipeDetailScreen() {
   const { owned, total } = getRecipeAvailability(recipe);
   const missing = getMissingIngredients(recipe);
   const ownedIngredients = recipe.ingredients.filter((i) => i.isOwned);
+  const recipeVersionId = recipe.recipeVersionId ?? recipe.id;
+  const isSaved = savedQuery.data?.some((s) => s.recipeVersionId === recipeVersionId) ?? false;
+  const savingToggle = saveMutation.isPending || unsaveMutation.isPending;
 
   return (
     <Screen scroll edges={['top', 'left', 'right']}>
@@ -49,6 +61,20 @@ export function RecipeDetailScreen() {
           hitSlop={8}
         >
           <Ionicons name="chevron-back" size={22} color="#fff" />
+        </Pressable>
+        <Pressable
+          onPress={() => {
+            if (savingToggle) return;
+            if (isSaved) unsaveMutation.mutate(recipeVersionId);
+            else saveMutation.mutate({ recipeVersionId });
+          }}
+          disabled={savingToggle}
+          accessibilityRole="button"
+          accessibilityLabel={isSaved ? 'Remove from saved' : 'Save recipe'}
+          style={[styles.saveButton, { backgroundColor: 'rgba(0,0,0,0.4)', opacity: savingToggle ? 0.6 : 1 }]}
+          hitSlop={8}
+        >
+          <Ionicons name={isSaved ? 'heart' : 'heart-outline'} size={20} color={isSaved ? theme.colors.freshness.prioritize : '#fff'} />
         </Pressable>
       </View>
 
@@ -69,7 +95,11 @@ export function RecipeDetailScreen() {
           </View>
         </View>
 
-        <NutritionFactsRow facts={recipe.nutritionPerServing} servingLabel="per serving" />
+        <NutritionFactsRow
+          facts={recipe.nutritionSnapshot ?? recipe.nutritionPerServing}
+          servingLabel="per serving"
+          statusLabel={recipe.nutritionStatus ? NUTRITION_STATUS_LABEL[recipe.nutritionStatus] : undefined}
+        />
 
         <View style={{ gap: 6 }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
@@ -144,9 +174,10 @@ export function RecipeDetailScreen() {
               variant="secondary"
               loading={addMissing.isPending}
               onPress={() =>
-                addMissing.mutate(recipe.id, {
-                  onSuccess: () => Alert.alert('Added to Grocery List', `${missing.length} item(s) added.`),
-                })
+                addMissing.mutate(
+                  { recipeId: recipe.id, missingIngredients: missing },
+                  { onSuccess: () => Alert.alert('Added to Grocery List', `${missing.length} item(s) added.`) },
+                )
               }
               fullWidth
             />
@@ -192,6 +223,16 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 12,
     left: 16,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  saveButton: {
+    position: 'absolute',
+    top: 12,
+    right: 16,
     width: 38,
     height: 38,
     borderRadius: 19,

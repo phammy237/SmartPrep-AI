@@ -1,5 +1,5 @@
 import { QuantityUnit } from './common';
-import { NutritionFacts } from './nutrition';
+import { NutritionFacts, NutritionSnapshot, NutritionStatus } from './nutrition';
 
 export type RecipeDifficulty = 'easy' | 'medium' | 'hard';
 
@@ -10,6 +10,13 @@ export type RecipeCollectionId =
   | 'quick_meals'
   | 'for_you'
   | 'something_different';
+
+/**
+ * How much this recipe's provenance/nutrition can be trusted. 'demo' is the
+ * only label Phase 3's seed data uses - never 'source_tested'/'community_tested'
+ * without real provenance, never 'verified' nutrition without USDA (Phase 4+).
+ */
+export type RecipeTrustLabel = 'source_tested' | 'community_tested' | 'ai_experimental' | 'user_created' | 'demo';
 
 export interface RecipeIngredient {
   ingredientId: string;
@@ -25,6 +32,13 @@ export interface RecipeIngredient {
    * same way a real API would compute it server-side.
    */
   isOwned?: boolean;
+  // --- Phase 3 additions - populated for real (Supabase-backed) recipes only,
+  // undefined for the legacy mock catalog (data/mockRecipes.ts, still used
+  // internally by services/mockDb.ts but no longer read by recipeService). ---
+  /** recipe_ingredients.id - required to reference this ingredient in a cooking-event pantry deduction. */
+  recipeIngredientId?: string;
+  isOptional?: boolean;
+  preparation?: string;
 }
 
 export interface RecommendationReason {
@@ -40,10 +54,16 @@ export interface Recipe {
   cookTimeMinutes: number;
   difficulty: RecipeDifficulty;
   servings: number;
-  /** Estimated cost, in USD, of the ingredients the user doesn't already have. */
+  /** Estimated cost, in USD, of the ingredients the user doesn't already have. Static seed-authored figure, not a live pricing estimate. */
   additionalCostEstimate: number;
-  /** 0-100 SmartPrep Match score. Hydrated by recipeService alongside `reasons`. */
+  /** 0-100 pantry-overlap match score, computed at read time from live pantry ownership (owned/total ingredients) - not stored, not learned, not a recommendation model. */
   smartMatchScore: number;
+  /**
+   * Convenience non-null projection for existing simple display components.
+   * Safe today because every Phase 3 recipe has complete per-serving macros;
+   * any future incomplete recipe should be read via `nutritionSnapshot`
+   * (below) instead, which honestly preserves unknown fields as null.
+   */
   nutritionPerServing: NutritionFacts;
   reasons: RecommendationReason[];
   ingredients: RecipeIngredient[];
@@ -51,4 +71,11 @@ export interface Recipe {
   cuisines: string[];
   tags: string[];
   collections: RecipeCollectionId[];
+  // --- Phase 3 additions - populated for real (Supabase-backed) recipes only. ---
+  /** recipe_versions.id - equal to `id` for real recipes. The exact immutable version this Recipe represents. */
+  recipeVersionId?: string;
+  nutritionStatus?: NutritionStatus;
+  /** Honest, nullable-fields version of nutritionPerServing - use this for cooking/logging math, never the coalesced convenience field above. */
+  nutritionSnapshot?: NutritionSnapshot;
+  trustLabel?: RecipeTrustLabel;
 }

@@ -8,7 +8,9 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "test": "jest --watchAll",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "gen:route-types": "node scripts/generate-route-types.js",
+    "typecheck": "npm run gen:route-types && tsc --noEmit"
   },
   "jest": {
     "preset": "jest-expo",

@@ -1,5 +1,18 @@
 import { QuantityUnit, IngredientCategory } from './common';
 
+/** How a grocery line came to exist - provenance for future auto-generated lists. */
+export type GroceryItemSource = 'manual' | 'recipe' | 'meal_plan' | 'pantry_shortage';
+
+/**
+ * What a grocery line's `quantity` means. Explicit so quantities are never
+ * silently reinterpreted:
+ *  - as_entered           a human typed it
+ *  - recipe_requirement   the full amount a recipe calls for (no pantry subtraction)
+ *  - uncovered_shortfall  recipe requirement minus confirmed pantry coverage
+ *                         (reserved - needs unit conversion before anything populates it)
+ */
+export type GroceryQuantityBasis = 'as_entered' | 'recipe_requirement' | 'uncovered_shortfall';
+
 export interface GroceryListItem {
   id: string;
   ingredientId?: string;
@@ -9,6 +22,8 @@ export interface GroceryListItem {
   quantity: number;
   unit: QuantityUnit;
   isChecked: boolean;
+  source?: GroceryItemSource;
+  quantityBasis?: GroceryQuantityBasis;
   sourceRecipeIds?: string[];
   isManuallyAdded?: boolean;
   estimatedPrice?: number;
