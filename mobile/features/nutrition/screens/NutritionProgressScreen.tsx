@@ -50,11 +50,11 @@ function capitalize(value: string): string {
 export function NutritionProgressScreen() {
   const theme = useTheme();
   const userQuery = useUser();
-  const impactQuery = useKitchenImpact();
   const voidLog = useVoidMealLog();
   const quickAdd = useQuickAddMealLog();
   const correctLog = useCorrectMealLog();
   const [period, setPeriod] = useState<Period>('week');
+  const impactQuery = useKitchenImpact(period);
   const [quickAddVisible, setQuickAddVisible] = useState(false);
   const [correctingLog, setCorrectingLog] = useState<MealLog | null>(null);
 
@@ -225,18 +225,18 @@ export function NutritionProgressScreen() {
 
       <View style={{ flexDirection: 'row', gap: theme.spacing.md }}>
         <Card style={{ flex: 1, alignItems: 'center', gap: 4 }}>
-          <Ionicons name="flame" size={22} color={theme.colors.freshness.useSoon} />
+          <Ionicons name="restaurant-outline" size={22} color={theme.colors.freshness.useSoon} />
           <Text style={[theme.typography.title2, { color: theme.colors.textPrimary }]}>
-            {impactQuery.data?.cookingStreakDays ?? 0}
+            {impactQuery.data ? impactQuery.data.cookingSessionsCount : '—'}
           </Text>
-          <Text style={[theme.typography.caption, { color: theme.colors.textSecondary }]}>Day streak</Text>
+          <Text style={[theme.typography.caption, { color: theme.colors.textSecondary }]}>Meals cooked</Text>
         </Card>
         <Card style={{ flex: 1, alignItems: 'center', gap: 4 }}>
-          <Ionicons name="leaf" size={22} color={theme.colors.accent} />
+          <Ionicons name="basket-outline" size={22} color={theme.colors.accent} />
           <Text style={[theme.typography.title2, { color: theme.colors.textPrimary }]}>
-            {impactQuery.data?.estimatedFoodSavedLbs ?? 0} lbs
+            {impactQuery.data ? impactQuery.data.itemsUsedCount : '—'}
           </Text>
-          <Text style={[theme.typography.caption, { color: theme.colors.textSecondary }]}>Estimated food saved</Text>
+          <Text style={[theme.typography.caption, { color: theme.colors.textSecondary }]}>Pantry items used</Text>
         </Card>
       </View>
 

@@ -1,8 +1,10 @@
 -- RLS verification for Phase 1 (profiles, dietary_preferences, nutrition_goals),
 -- Phase 2 (pantry_items, pantry_events), Phase 3 (recipes, recipe_versions,
 -- recipe_ingredients, saved_recipes, meal_plan_items, cooking_events,
--- cooking_event_ingredients, prepared_meals, meal_logs), and Phase 4 grocery
--- (grocery_lists, grocery_list_items). Run migrations 0001-0005 first.
+-- cooking_event_ingredients, prepared_meals, meal_logs), Phase 4 grocery
+-- (grocery_lists, grocery_list_items), and Phase 4 kitchen impact
+-- (get_kitchen_impact_summary, derived from pantry_events / cooking_events).
+-- Run migrations 0001-0006 first.
 --
 -- Run this in the Supabase SQL editor or via `psql` against your linked
 -- project. It does NOT create test users itself - auth.users rows can only
@@ -1899,6 +1901,320 @@ set local role postgres;
 delete from public.grocery_list_items where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid);
 delete from public.grocery_lists where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid);
 drop table if exists rls_test_scratch_grocery;
+commit;
+
+-- ============================================================================
+-- Phase 4: kitchen impact (get_kitchen_impact_summary)
+--
+-- The function is SECURITY INVOKER and self-filters `where user_id =
+-- auth.uid()` on top of RLS, so isolation is proved by "user_a's numbers are
+-- user_a's, not user_a + user_b" - no victim-row-mutation to re-verify.
+-- Also covers: anon blocked, date filters cannot widen ownership, excluded
+-- event types (adjusted/corrected/restored) don't move the counts, and the
+-- cooking -> prepared-meal flow counts one real consumption exactly once.
+-- Run migrations 0002, 0003, 0004, 0006 first.
+-- ============================================================================
+
+create temporary table if not exists rls_test_scratch_impact (key text primary key, value uuid);
+
+-- ----------------------------------------------------------------------------
+-- Setup: user_a generates added(2) / used(4: 2 consumed + 1 consumed + 1
+-- depleted) / discarded(1) across two units ('item', 'g'); user_b generates
+-- added(1) / used(1) in 'bag'.
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+select public.create_pantry_item(
+  p_ingredient_id => 'ing-impact-a-1', p_display_name => 'Impact A Item 1',
+  p_image_uri => '', p_category => 'pantry', p_quantity => 10, p_unit => 'item',
+  p_expiration_confidence => 'unknown', p_source => 'manual'
+);
+select public.create_pantry_item(
+  p_ingredient_id => 'ing-impact-a-2', p_display_name => 'Impact A Item 2',
+  p_image_uri => '', p_category => 'pantry', p_quantity => 500, p_unit => 'g',
+  p_expiration_confidence => 'unknown', p_source => 'manual'
+);
+
+do $$
+declare
+  a1 uuid;
+  a2 uuid;
+begin
+  select id into a1 from public.pantry_items where user_id = auth.uid() and display_name = 'Impact A Item 1';
+  select id into a2 from public.pantry_items where user_id = auth.uid() and display_name = 'Impact A Item 2';
+  insert into rls_test_scratch_impact (key, value) values ('a1', a1) on conflict (key) do update set value = excluded.value;
+  insert into rls_test_scratch_impact (key, value) values ('a2', a2) on conflict (key) do update set value = excluded.value;
+
+  perform public.adjust_pantry_quantity(a1, -1, 'consumed', 'impact test');
+  perform public.adjust_pantry_quantity(a1, -1, 'consumed', 'impact test');
+  perform public.deplete_pantry_item(a1, 'discarded', 'impact test');       -- discards remaining 8 'item'
+
+  perform public.adjust_pantry_quantity(a2, -100, 'consumed', 'impact test');
+  perform public.deplete_pantry_item(a2, 'depleted', 'impact test');        -- "fully used" remaining 400 'g'
+end $$;
+commit;
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
+
+select public.create_pantry_item(
+  p_ingredient_id => 'ing-impact-b-1', p_display_name => 'Impact B Item',
+  p_image_uri => '', p_category => 'pantry', p_quantity => 3, p_unit => 'bag',
+  p_expiration_confidence => 'unknown', p_source => 'manual'
+);
+
+do $$
+declare b1 uuid;
+begin
+  select id into b1 from public.pantry_items where user_id = auth.uid() and display_name = 'Impact B Item';
+  perform public.adjust_pantry_quantity(b1, -1, 'consumed', 'impact test');
+end $$;
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Isolation: each user's summary reflects ONLY their own events. Date filters
+-- (wide, narrow, or an unrecognized timezone) never widen ownership.
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  s jsonb;
+  s_wide jsonb;
+  s_narrow jsonb;
+  s_badtz jsonb;
+begin
+  s := public.get_kitchen_impact_summary(null, null, 'UTC');
+  if (s ->> 'itemsAddedCount')::int <> 2 then raise exception 'FAIL: user_a itemsAddedCount = % (expected 2)', s ->> 'itemsAddedCount'; end if;
+  if (s ->> 'itemsUsedCount')::int <> 4 then raise exception 'FAIL: user_a itemsUsedCount = % (expected 4 - own events only)', s ->> 'itemsUsedCount'; end if;
+  if (s ->> 'itemsDiscardedCount')::int <> 1 then raise exception 'FAIL: user_a itemsDiscardedCount = % (expected 1)', s ->> 'itemsDiscardedCount'; end if;
+  if (s ->> 'cookingSessionsCount')::int <> 0 then raise exception 'FAIL: user_a cookingSessionsCount = % (expected 0 before any cook)', s ->> 'cookingSessionsCount'; end if;
+  if round((s ->> 'utilizationRate')::numeric, 2) <> 0.80 then raise exception 'FAIL: user_a utilizationRate = % (expected 0.80)', s ->> 'utilizationRate'; end if;
+
+  -- incompatible units are kept as separate grouped entries, never summed
+  if jsonb_array_length(s -> 'usedQuantitiesByUnit') <> 2 then
+    raise exception 'FAIL: usedQuantitiesByUnit should have 2 separate unit groups (g, item), got %', s -> 'usedQuantitiesByUnit';
+  end if;
+  if not (s -> 'usedQuantitiesByUnit' @> '[{"unit":"g","totalQuantity":500}]'::jsonb
+      and s -> 'usedQuantitiesByUnit' @> '[{"unit":"item","totalQuantity":2}]'::jsonb) then
+    raise exception 'FAIL: usedQuantitiesByUnit groups are wrong: %', s -> 'usedQuantitiesByUnit';
+  end if;
+
+  -- a very wide explicit date range does not let user_a see more (or less)
+  s_wide := public.get_kitchen_impact_summary('2000-01-01', '2100-01-01', 'UTC');
+  if (s_wide ->> 'itemsUsedCount')::int <> 4 then raise exception 'FAIL: wide date range changed user_a itemsUsedCount to %', s_wide ->> 'itemsUsedCount'; end if;
+
+  -- a range covering "now" still only sees user_a's events (not user_b's)
+  s_narrow := public.get_kitchen_impact_summary((current_date - 1), (current_date + 1), 'UTC');
+  if (s_narrow ->> 'itemsUsedCount')::int <> 4 then raise exception 'FAIL: near-now date range changed user_a itemsUsedCount to %', s_narrow ->> 'itemsUsedCount'; end if;
+
+  -- an unrecognized timezone falls back to UTC, does not error, does not bypass ownership
+  s_badtz := public.get_kitchen_impact_summary(null, null, 'Not/AZone');
+  if (s_badtz ->> 'itemsUsedCount')::int <> 4 then raise exception 'FAIL: bad-timezone call returned itemsUsedCount %', s_badtz ->> 'itemsUsedCount'; end if;
+
+  -- an empty range returns zeros with utilizationRate null and hasActivity false (never fabricated)
+  s := public.get_kitchen_impact_summary('2000-01-01', '2000-01-02', 'UTC');
+  if (s ->> 'itemsUsedCount')::int <> 0 or (s ->> 'itemsDiscardedCount')::int <> 0 then
+    raise exception 'FAIL: empty range should be all zeros, got %', s;
+  end if;
+  if jsonb_typeof(s -> 'utilizationRate') <> 'null' then
+    raise exception 'FAIL: empty-range utilizationRate should be JSON null, got %', s -> 'utilizationRate';
+  end if;
+  if (s ->> 'hasActivity')::boolean then raise exception 'FAIL: empty range reported hasActivity = true'; end if;
+
+  raise notice 'PASS: user_a kitchen impact reflects only user_a events; date/timezone filters cannot widen ownership; units stay separate; empty range is honestly empty';
+end $$;
+commit;
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare s jsonb;
+begin
+  s := public.get_kitchen_impact_summary(null, null, 'UTC');
+  if (s ->> 'itemsAddedCount')::int <> 1 then raise exception 'FAIL: user_b itemsAddedCount = % (expected 1)', s ->> 'itemsAddedCount'; end if;
+  if (s ->> 'itemsUsedCount')::int <> 1 then raise exception 'FAIL: user_b itemsUsedCount = % (expected 1 - not user_a''s 4)', s ->> 'itemsUsedCount'; end if;
+  if (s ->> 'itemsDiscardedCount')::int <> 0 then raise exception 'FAIL: user_b itemsDiscardedCount = % (expected 0)', s ->> 'itemsDiscardedCount'; end if;
+  if round((s ->> 'utilizationRate')::numeric, 2) <> 1.00 then raise exception 'FAIL: user_b utilizationRate = % (expected 1.00)', s ->> 'utilizationRate'; end if;
+  raise notice 'PASS: user_b kitchen impact reflects only user_b events';
+end $$;
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Excluded event types (adjusted / corrected / restored) must not move the
+-- used / discarded / added counts.
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  before_s jsonb;
+  after_s jsonb;
+  a1 uuid := (select value from rls_test_scratch_impact where key = 'a1');
+begin
+  before_s := public.get_kitchen_impact_summary(null, null, 'UTC');
+
+  perform public.restore_pantry_item(a1, 'impact test - restored');       -- 'restored' event
+  perform public.adjust_pantry_quantity(a1, 1, 'adjusted', 'impact test'); -- 'adjusted' event
+  perform public.confirm_pantry_item(a1);                                  -- 'corrected' (delta 0) event
+
+  after_s := public.get_kitchen_impact_summary(null, null, 'UTC');
+
+  if (after_s ->> 'itemsUsedCount')::int <> (before_s ->> 'itemsUsedCount')::int then
+    raise exception 'FAIL: an excluded event (restored/adjusted/corrected) changed itemsUsedCount (% -> %)',
+      before_s ->> 'itemsUsedCount', after_s ->> 'itemsUsedCount';
+  end if;
+  if (after_s ->> 'itemsDiscardedCount')::int <> (before_s ->> 'itemsDiscardedCount')::int then
+    raise exception 'FAIL: an excluded event changed itemsDiscardedCount';
+  end if;
+  if (after_s ->> 'itemsAddedCount')::int <> (before_s ->> 'itemsAddedCount')::int then
+    raise exception 'FAIL: an excluded event changed itemsAddedCount';
+  end if;
+
+  raise notice 'PASS: adjusted / corrected / restored events do not move any impact count';
+end $$;
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Cooking -> prepared-meal flow: one real consumption is counted exactly
+-- once. Completing a cook writes deducted_by_cooking (counted). Eating the
+-- leftover writes only a meal_log (NOT a pantry_event) -> must NOT re-count.
+-- ----------------------------------------------------------------------------
+begin;
+set local role postgres;
+insert into rls_test_scratch_impact (key, value)
+select 'recipe_version_id', rv.id
+from public.recipe_versions rv
+join public.recipes r on r.id = rv.recipe_id
+where r.legacy_mock_id = 'recipe-creamy-spinach-pasta'
+on conflict (key) do update set value = excluded.value;
+
+insert into rls_test_scratch_impact (key, value)
+select 'pasta_ingredient_id', ri.id
+from public.recipe_ingredients ri
+where ri.recipe_version_id = (select value from rls_test_scratch_impact where key = 'recipe_version_id')
+  and ri.catalog_ingredient_id = 'ing-pasta'
+on conflict (key) do update set value = excluded.value;
+commit;
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+select public.create_pantry_item(
+  p_ingredient_id => 'ing-impact-pasta', p_display_name => 'Impact Pasta A',
+  p_image_uri => '', p_category => 'pantry', p_quantity => 500, p_unit => 'g',
+  p_expiration_confidence => 'unknown', p_source => 'manual'
+);
+
+do $$
+declare
+  pasta_id uuid;
+  cook public.cooking_events;
+  complete_result jsonb;
+  prepared_meal_id uuid;
+  before_s jsonb;
+  after_cook_s jsonb;
+  after_leftover_s jsonb;
+begin
+  select id into pasta_id from public.pantry_items where user_id = auth.uid() and display_name = 'Impact Pasta A';
+
+  before_s := public.get_kitchen_impact_summary(null, null, 'UTC');
+
+  cook := public.start_cooking_event(
+    (select value from rls_test_scratch_impact where key = 'recipe_version_id'),
+    null, 2, 'impact-cook-a-1'
+  );
+
+  complete_result := public.complete_cooking_event(
+    cook.id, 2,
+    jsonb_build_array(jsonb_build_object(
+      'recipeIngredientId', (select value from rls_test_scratch_impact where key = 'pasta_ingredient_id'),
+      'pantryItemId', pasta_id,
+      'requestedQuantity', 200, 'requestedUnit', 'g',
+      'deductedQuantity', 200, 'deductedUnit', 'g',
+      'matchConfidence', 'exact', 'userConfirmed', true, 'wasSkipped', false
+    )),
+    null, 1, 'dinner', null
+  );
+  prepared_meal_id := (complete_result -> 'preparedMeal' ->> 'id')::uuid;
+
+  after_cook_s := public.get_kitchen_impact_summary(null, null, 'UTC');
+  if (after_cook_s ->> 'itemsUsedCount')::int <> (before_s ->> 'itemsUsedCount')::int + 1 then
+    raise exception 'FAIL: completing a cook should add exactly 1 used event (% -> %)',
+      before_s ->> 'itemsUsedCount', after_cook_s ->> 'itemsUsedCount';
+  end if;
+  if (after_cook_s ->> 'cookingSessionsCount')::int <> (before_s ->> 'cookingSessionsCount')::int + 1 then
+    raise exception 'FAIL: completing a cook should add exactly 1 cooking session';
+  end if;
+
+  -- Eat the leftover serving: writes a meal_log only, no pantry_event.
+  perform public.log_prepared_meal_consumption(prepared_meal_id, 1, 'dinner', null, null);
+
+  after_leftover_s := public.get_kitchen_impact_summary(null, null, 'UTC');
+  if (after_leftover_s ->> 'itemsUsedCount')::int <> (after_cook_s ->> 'itemsUsedCount')::int then
+    raise exception 'FAIL: eating a leftover re-counted the pantry ingredients (double count): % -> %',
+      after_cook_s ->> 'itemsUsedCount', after_leftover_s ->> 'itemsUsedCount';
+  end if;
+  if (after_leftover_s ->> 'cookingSessionsCount')::int <> (after_cook_s ->> 'cookingSessionsCount')::int then
+    raise exception 'FAIL: eating a leftover changed cookingSessionsCount';
+  end if;
+
+  raise notice 'PASS: cooking counts one deducted_by_cooking use + one session; logging the leftover meal adds nothing (no double count)';
+end $$;
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Anonymous requests cannot get an impact summary - with or without a date
+-- filter (a filter cannot bypass the auth check).
+-- ----------------------------------------------------------------------------
+begin;
+set local role anon;
+select set_config('request.jwt.claims', '', true);
+
+do $$
+declare succeeded boolean := false;
+begin
+  begin
+    perform public.get_kitchen_impact_summary(null, null, 'UTC');
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: anon got a kitchen impact summary'; end if;
+
+  succeeded := false;
+  begin
+    perform public.get_kitchen_impact_summary('2000-01-01', '2100-01-01', 'UTC');
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: anon got a kitchen impact summary via a date-filtered call'; end if;
+
+  raise notice 'PASS: anonymous role cannot get a kitchen impact summary (date filter does not bypass auth)';
+end $$;
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Kitchen impact cleanup.
+-- ----------------------------------------------------------------------------
+begin;
+set local role postgres;
+delete from public.meal_logs where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid);
+delete from public.prepared_meals where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid);
+delete from public.cooking_event_ingredients where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid);
+delete from public.cooking_events where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid);
+delete from public.pantry_items
+  where display_name in ('Impact A Item 1', 'Impact A Item 2', 'Impact B Item', 'Impact Pasta A');
+drop table if exists rls_test_scratch_impact;
 commit;
 
 do $$

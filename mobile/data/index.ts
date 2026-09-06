@@ -4,4 +4,3 @@ export * from './mockPantry';
 export * from './mockRecipes';
 export * from './mockMealPlan';
 export * from './mockScans';
-export * from './mockImpact';

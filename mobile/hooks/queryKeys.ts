@@ -15,5 +15,5 @@ export const queryKeys = {
   scanHistory: ['scans', 'history'] as const,
   user: ['user'] as const,
   profileSetupStatus: ['user', 'profile-setup-status'] as const,
-  kitchenImpact: ['kitchenImpact'] as const,
+  kitchenImpact: (period: string, timeZone: string) => ['kitchenImpact', period, timeZone] as const,
 };

@@ -8,3 +8,4 @@ export * from './cookingRepository';
 export * from './preparedMealRepository';
 export * from './mealLogRepository';
 export * from './groceryRepository';
+export * from './impactRepository';

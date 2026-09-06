@@ -1,5 +1,5 @@
 /**
- * Hand-authored to match supabase/migrations/0001-0005.
+ * Hand-authored to match supabase/migrations/0001-0006.
  *
  * This is a STAND-IN for the real generated file. Once a project is linked,
  * regenerate it for real and this file will be overwritten:
@@ -686,6 +686,14 @@ export interface Database {
           p_item_id: string;
         };
         Returns: Database['public']['Tables']['grocery_list_items']['Row'];
+      };
+      get_kitchen_impact_summary: {
+        Args: {
+          p_start_date: string | null;
+          p_end_date: string | null;
+          p_timezone: string;
+        };
+        Returns: Json;
       };
     };
     Enums: Record<string, never>;
