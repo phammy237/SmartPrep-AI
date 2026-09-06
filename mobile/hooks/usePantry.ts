@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { EditPantryItemMetadataInput } from '@/lib/validation/pantrySchemas';
 import { pantryService } from '@/services';
+import { PantryItem } from '@/types';
 import { queryKeys } from './queryKeys';
 import { useUser } from './useUser';
 
@@ -14,6 +15,27 @@ function useTimeZone(): string {
 export function usePantry() {
   const timeZone = useTimeZone();
   return useQuery({ queryKey: queryKeys.pantry, queryFn: () => pantryService.getPantry(timeZone) });
+}
+
+/**
+ * Read-time nutrition resolution for one pantry item (secondary to the item
+ * itself). Resolves to an explicit `unresolved` state when the quantity/unit
+ * can't be converted or no reference exists - the query only errors on a real
+ * infrastructure failure (auth / Supabase).
+ */
+export function usePantryItemNutrition(item: PantryItem | null | undefined) {
+  return useQuery({
+    queryKey: item
+      ? queryKeys.pantryItemNutrition(item.id, item.quantity, item.unit)
+      : queryKeys.pantryItemNutrition('none', 0, ''),
+    queryFn: () =>
+      pantryService.resolveItemNutrition({
+        ingredientId: (item as PantryItem).ingredientId,
+        quantity: (item as PantryItem).quantity,
+        unit: (item as PantryItem).unit,
+      }),
+    enabled: !!item,
+  });
 }
 
 export function usePantryItem(id: string | undefined) {

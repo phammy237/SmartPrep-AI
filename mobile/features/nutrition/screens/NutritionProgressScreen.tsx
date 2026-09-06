@@ -234,9 +234,9 @@ export function NutritionProgressScreen() {
         <Card style={{ flex: 1, alignItems: 'center', gap: 4 }}>
           <Ionicons name="basket-outline" size={22} color={theme.colors.accent} />
           <Text style={[theme.typography.title2, { color: theme.colors.textPrimary }]}>
-            {impactQuery.data ? impactQuery.data.itemsUsedCount : '—'}
+            {impactQuery.data ? impactQuery.data.useEventCount : '—'}
           </Text>
-          <Text style={[theme.typography.caption, { color: theme.colors.textSecondary }]}>Pantry items used</Text>
+          <Text style={[theme.typography.caption, { color: theme.colors.textSecondary }]}>Pantry-use events</Text>
         </Card>
       </View>
 

@@ -1,11 +1,18 @@
 import { supabase } from '@/lib/supabase/client';
 import * as repositories from '@/lib/supabase/repositories';
+import { IngredientCoverage } from '@/lib/nutrition/pantryCoverage';
 import { GroceryListItem, RecipeIngredient } from '@/types';
 import { groceryService } from '../groceryService';
 import { db } from '../mockDb';
+import { nutritionService } from '../nutritionService';
+import type { RecipeShortfall } from '../recipeService';
 
 jest.mock('@/lib/supabase/client', () => ({
   supabase: { auth: { getUser: jest.fn() } },
+}));
+
+jest.mock('../nutritionService', () => ({
+  nutritionService: { getConversionMetaMap: jest.fn() },
 }));
 
 jest.mock('@/lib/supabase/repositories', () => ({
@@ -40,14 +47,30 @@ function item(overrides: Partial<GroceryListItem> = {}): GroceryListItem {
   };
 }
 
-function missing(overrides: Partial<RecipeIngredient> = {}): RecipeIngredient {
+const getConversionMetaMap = nutritionService.getConversionMetaMap as jest.Mock;
+
+function shortfall(
+  ingredient: Partial<RecipeIngredient>,
+  coverage: Partial<IngredientCoverage>,
+): RecipeShortfall {
   return {
-    ingredientId: 'ing-parmesan',
-    name: 'Parmesan',
-    imageUri: 'https://example.com/p.jpg',
-    quantity: 1,
-    unit: 'package',
-    ...overrides,
+    ingredient: {
+      ingredientId: 'ing-parmesan',
+      name: 'Parmesan',
+      imageUri: 'https://example.com/p.jpg',
+      quantity: 1,
+      unit: 'package',
+      ...ingredient,
+    },
+    coverage: {
+      status: 'missing',
+      ingredientId: ingredient.ingredientId ?? 'ing-parmesan',
+      requiredQuantity: ingredient.quantity ?? 1,
+      requiredUnit: ingredient.unit ?? 'package',
+      matchedLotCount: 0,
+      basis: 'no_lots',
+      ...coverage,
+    } as IngredientCoverage,
   };
 }
 
@@ -61,6 +84,7 @@ beforeEach(() => {
   repo.insertGroceryListItems.mockImplementation(async (_u, _l, ps) => ps.map((p) => item({ name: p.displayName, quantity: p.quantity, unit: p.unit, source: p.source, quantityBasis: p.quantityBasis })));
   repo.updateGroceryListItem.mockImplementation(async (id, patch) => item({ id, quantity: patch.quantity ?? 1 }));
   repo.toggleGroceryListItemChecked.mockImplementation(async (id) => item({ id, isChecked: true }));
+  getConversionMetaMap.mockResolvedValue(new Map());
 });
 
 describe('getGroceryList (fetch)', () => {
@@ -175,86 +199,136 @@ describe('clearCheckedItems (clear checked)', () => {
   });
 });
 
-describe('addMissingIngredientsForRecipe (generated list persistence)', () => {
-  it('persists brand-new missing ingredients as recipe_requirement lines via the repository', async () => {
-    repo.fetchGroceryListItems.mockResolvedValue([]);
-
-    const result = await groceryService.addMissingIngredientsForRecipe('rv-42', [
-      missing({ ingredientId: 'ing-parmesan', name: 'Parmesan', quantity: 1, unit: 'package' }),
-      missing({ ingredientId: 'ing-heavy-cream', name: 'Heavy Cream', quantity: 120, unit: 'ml' }),
+describe('addRecipeShortfallsToGroceryList - line shape per coverage status', () => {
+  it('missing -> full recipe_requirement line', async () => {
+    const rows = await groceryService.addRecipeShortfallsToGroceryList('rv-42', [
+      shortfall({ ingredientId: 'ing-parmesan', name: 'Parmesan', quantity: 2, unit: 'package' }, { status: 'missing', requiredQuantity: 2, requiredUnit: 'package' }),
     ]);
-
-    expect(repo.insertGroceryListItems).toHaveBeenCalledTimes(1);
-    const [, , rows] = repo.insertGroceryListItems.mock.calls[0];
-    expect(rows).toHaveLength(2);
-    expect(rows[0]).toMatchObject({
+    const [, , inserted] = repo.insertGroceryListItems.mock.calls[0];
+    expect(inserted[0]).toMatchObject({
       catalogIngredientId: 'ing-parmesan',
-      displayName: 'Parmesan',
-      quantity: 1,
+      quantity: 2,
       unit: 'package',
       source: 'recipe',
       quantityBasis: 'recipe_requirement',
       sourceRecipeVersionIds: ['rv-42'],
+      sourceMetadata: { coverage: 'missing' },
     });
-    expect(result).toHaveLength(2);
-    // no merge attempted
-    expect(repo.updateGroceryListItem).not.toHaveBeenCalled();
+    expect(rows).toHaveLength(1);
   });
 
-  it('never writes to the in-memory mock db (no grocery bucket exists on it anymore)', async () => {
-    await groceryService.addMissingIngredientsForRecipe('rv-1', [missing()]);
-    expect(Object.keys(db)).not.toContain('groceryList');
+  it('partial (same-unit) -> uncovered_shortfall line for just the gap, in the recipe unit', async () => {
+    await groceryService.addRecipeShortfallsToGroceryList('rv-1', [
+      shortfall(
+        { ingredientId: 'ing-chicken-breast', name: 'Chicken Breast', quantity: 500, unit: 'g' },
+        { status: 'partial', requiredQuantity: 500, requiredUnit: 'g', availableQuantity: 200, shortfallQuantity: 300, shortfallUnit: 'g', basis: 'same_unit', matchedLotCount: 1 },
+      ),
+    ]);
+    const [, , inserted] = repo.insertGroceryListItems.mock.calls[0];
+    expect(inserted[0]).toMatchObject({ quantity: 300, unit: 'g', quantityBasis: 'uncovered_shortfall' });
+  });
+
+  it('partial (grams) -> shortfall converted back into the recipe unit when deterministic (2 lb - 1 lb = 1 lb)', async () => {
+    await groceryService.addRecipeShortfallsToGroceryList('rv-1', [
+      shortfall(
+        { ingredientId: 'ing-ground-beef', name: 'Ground Beef', quantity: 2, unit: 'lb' },
+        { status: 'partial', requiredQuantity: 2, requiredUnit: 'lb', basis: 'grams', shortfallGrams: 453.59237, matchedLotCount: 1 },
+      ),
+    ]);
+    const [, , inserted] = repo.insertGroceryListItems.mock.calls[0];
+    expect(inserted[0].unit).toBe('lb');
+    expect(inserted[0].quantity).toBeCloseTo(1, 5);
+    expect(inserted[0].quantityBasis).toBe('uncovered_shortfall');
+  });
+
+  it('unresolved -> conservative full recipe_requirement line, never a silent subtraction', async () => {
+    // recipe in ml, pantry lot in g, no density -> can't compare -> unresolved
+    await groceryService.addRecipeShortfallsToGroceryList('rv-1', [
+      shortfall(
+        { ingredientId: 'ing-heavy-cream', name: 'Heavy Cream', quantity: 250, unit: 'ml' },
+        { status: 'unresolved', requiredQuantity: 250, requiredUnit: 'ml', basis: 'unresolved', reason: 'missing_density', matchedLotCount: 1 },
+      ),
+    ]);
+    const [, , inserted] = repo.insertGroceryListItems.mock.calls[0];
+    expect(inserted[0]).toMatchObject({ quantity: 250, unit: 'ml', quantityBasis: 'recipe_requirement', sourceMetadata: { coverage: 'unresolved', reason: 'missing_density' } });
+  });
+
+  it('covered ingredients produce no grocery line and no silent demand loss elsewhere', async () => {
+    const rows = await groceryService.addRecipeShortfallsToGroceryList('rv-1', [
+      shortfall({ ingredientId: 'ing-x', quantity: 1, unit: 'g' }, { status: 'covered', basis: 'same_unit' }),
+    ]);
+    expect(rows).toEqual([]);
+    expect(repo.insertGroceryListItems).not.toHaveBeenCalled();
+  });
+
+  it('never writes to the in-memory mock db', async () => {
+    await groceryService.addRecipeShortfallsToGroceryList('rv-1', [shortfall({}, {})]);
     expect((db as unknown as Record<string, unknown>).groceryList).toBeUndefined();
   });
 });
 
-describe('addMissingIngredientsForRecipe (incompatible-unit behavior)', () => {
-  it('merges quantities ONLY into an unchecked recipe_requirement line with the exact same unit', async () => {
+describe('addRecipeShortfallsToGroceryList - merge rules', () => {
+  it('merges same canonical id + same unit + same quantity_basis into an unchecked generated line, preserving provenance', async () => {
     repo.fetchGroceryListItems.mockResolvedValue([
-      item({ id: 'g1', ingredientId: 'ing-parmesan', name: 'Parmesan', unit: 'package', quantity: 1, isChecked: false, source: 'recipe', quantityBasis: 'recipe_requirement', sourceRecipeIds: ['rv-1'] }),
+      item({ id: 'g1', ingredientId: 'ing-chicken-breast', name: 'Chicken Breast', unit: 'g', quantity: 200, isChecked: false, source: 'recipe', quantityBasis: 'uncovered_shortfall', sourceRecipeIds: ['rv-A'] }),
     ]);
 
-    await groceryService.addMissingIngredientsForRecipe('rv-2', [missing({ ingredientId: 'ing-parmesan', unit: 'package', quantity: 2 })]);
+    await groceryService.addRecipeShortfallsToGroceryList('rv-B', [
+      shortfall(
+        { ingredientId: 'ing-chicken-breast', name: 'Chicken Breast', quantity: 500, unit: 'g' },
+        { status: 'partial', requiredQuantity: 500, requiredUnit: 'g', shortfallQuantity: 300, shortfallUnit: 'g', basis: 'same_unit', matchedLotCount: 1 },
+      ),
+    ]);
 
-    expect(repo.updateGroceryListItem).toHaveBeenCalledWith('g1', {
-      quantity: 3,
-      sourceRecipeVersionIds: ['rv-1', 'rv-2'],
-    });
-    // pure merge - nothing new to insert
+    expect(repo.updateGroceryListItem).toHaveBeenCalledWith('g1', { quantity: 500, sourceRecipeVersionIds: ['rv-A', 'rv-B'] });
     expect(repo.insertGroceryListItems).not.toHaveBeenCalled();
   });
 
-  it('does NOT merge across incompatible units - it adds a separate line and never converts', async () => {
+  it('does NOT merge a shortfall line into a recipe_requirement line (different basis)', async () => {
+    repo.fetchGroceryListItems.mockResolvedValue([
+      item({ id: 'g1', ingredientId: 'ing-chicken-breast', name: 'Chicken Breast', unit: 'g', quantity: 500, isChecked: false, source: 'recipe', quantityBasis: 'recipe_requirement' }),
+    ]);
+    await groceryService.addRecipeShortfallsToGroceryList('rv-B', [
+      shortfall(
+        { ingredientId: 'ing-chicken-breast', name: 'Chicken Breast', quantity: 500, unit: 'g' },
+        { status: 'partial', requiredQuantity: 500, requiredUnit: 'g', shortfallQuantity: 300, shortfallUnit: 'g', basis: 'same_unit', matchedLotCount: 1 },
+      ),
+    ]);
+    expect(repo.updateGroceryListItem).not.toHaveBeenCalled();
+    expect(repo.insertGroceryListItems.mock.calls[0][2]).toHaveLength(1);
+  });
+
+  it('does NOT merge across incompatible units, and never converts them', async () => {
     repo.fetchGroceryListItems.mockResolvedValue([
       item({ id: 'g1', ingredientId: 'ing-heavy-cream', name: 'Heavy Cream', unit: 'ml', quantity: 100, isChecked: false, source: 'recipe', quantityBasis: 'recipe_requirement' }),
     ]);
-
-    await groceryService.addMissingIngredientsForRecipe('rv-2', [missing({ ingredientId: 'ing-heavy-cream', name: 'Heavy Cream', unit: 'L', quantity: 1 })]);
-
+    await groceryService.addRecipeShortfallsToGroceryList('rv-B', [
+      shortfall({ ingredientId: 'ing-heavy-cream', name: 'Heavy Cream', quantity: 1, unit: 'L' }, { status: 'missing', requiredQuantity: 1, requiredUnit: 'L' }),
+    ]);
     expect(repo.updateGroceryListItem).not.toHaveBeenCalled();
-    const [, , rows] = repo.insertGroceryListItems.mock.calls[0];
-    expect(rows).toEqual([expect.objectContaining({ catalogIngredientId: 'ing-heavy-cream', unit: 'L', quantity: 1, quantityBasis: 'recipe_requirement' })]);
+    expect(repo.insertGroceryListItems.mock.calls[0][2][0]).toMatchObject({ unit: 'L', quantity: 1 });
   });
 
-  it('does NOT merge into a manual (as_entered) line even when the unit matches', async () => {
+  it('does NOT touch manual (as_entered) or checked lines', async () => {
     repo.fetchGroceryListItems.mockResolvedValue([
-      item({ id: 'g1', ingredientId: 'ing-parmesan', name: 'Parmesan', unit: 'package', quantity: 1, isChecked: false, source: 'manual', quantityBasis: 'as_entered' }),
+      item({ id: 'm1', ingredientId: 'ing-parmesan', name: 'Parmesan', unit: 'package', quantity: 1, isChecked: false, source: 'manual', quantityBasis: 'as_entered' }),
+      item({ id: 'c1', ingredientId: 'ing-parmesan', name: 'Parmesan', unit: 'package', quantity: 1, isChecked: true, source: 'recipe', quantityBasis: 'recipe_requirement' }),
     ]);
-
-    await groceryService.addMissingIngredientsForRecipe('rv-2', [missing({ ingredientId: 'ing-parmesan', unit: 'package', quantity: 1 })]);
-
+    await groceryService.addRecipeShortfallsToGroceryList('rv-B', [
+      shortfall({ ingredientId: 'ing-parmesan', name: 'Parmesan', quantity: 1, unit: 'package' }, { status: 'missing', requiredQuantity: 1, requiredUnit: 'package' }),
+    ]);
     expect(repo.updateGroceryListItem).not.toHaveBeenCalled();
     expect(repo.insertGroceryListItems.mock.calls[0][2]).toHaveLength(1);
   });
 
-  it('does NOT merge into an already-checked line', async () => {
-    repo.fetchGroceryListItems.mockResolvedValue([
-      item({ id: 'g1', ingredientId: 'ing-parmesan', name: 'Parmesan', unit: 'package', quantity: 1, isChecked: true, source: 'recipe', quantityBasis: 'recipe_requirement' }),
+  it('two shortfalls for the same ingredient in one call fold into a single line (200 g + 300 g -> 500 g)', async () => {
+    repo.fetchGroceryListItems.mockResolvedValue([]);
+    await groceryService.addRecipeShortfallsToGroceryList('rv-1', [
+      shortfall({ ingredientId: 'ing-chicken-breast', name: 'Chicken Breast', quantity: 200, unit: 'g' }, { status: 'missing', requiredQuantity: 200, requiredUnit: 'g' }),
+      shortfall({ ingredientId: 'ing-chicken-breast', name: 'Chicken Breast', quantity: 300, unit: 'g' }, { status: 'missing', requiredQuantity: 300, requiredUnit: 'g' }),
     ]);
-
-    await groceryService.addMissingIngredientsForRecipe('rv-2', [missing({ ingredientId: 'ing-parmesan', unit: 'package', quantity: 1 })]);
-
-    expect(repo.updateGroceryListItem).not.toHaveBeenCalled();
-    expect(repo.insertGroceryListItems.mock.calls[0][2]).toHaveLength(1);
+    const insertedRows = repo.insertGroceryListItems.mock.calls[0][2];
+    expect(insertedRows).toHaveLength(1);
+    expect(insertedRows[0].quantity).toBe(500);
   });
 });

@@ -1,3 +1,4 @@
+import type { IngredientCoverage } from '@/lib/nutrition/pantryCoverage';
 import { QuantityUnit } from './common';
 import { NutritionFacts, NutritionSnapshot, NutritionStatus } from './nutrition';
 
@@ -27,11 +28,17 @@ export interface RecipeIngredient {
   /** A pantry staple (salt, oil, etc.) that's excluded from "missing" counts. */
   isPantryStaple?: boolean;
   /**
-   * Whether the user currently has this ingredient. Not stored in mock data -
-   * recipeService hydrates this against the live pantry on every read, the
-   * same way a real API would compute it server-side.
+   * Whether the user currently has ENOUGH of this ingredient. Hydrated by
+   * recipeService on every read from `coverage` (true iff coverage.status is
+   * 'covered'); kept for the many simple call sites that only need a boolean.
    */
   isOwned?: boolean;
+  /**
+   * Quantity-aware pantry coverage for this requirement (recipeService
+   * computes it on read against the live pantry + the shared conversion
+   * engine). Undefined only on a recipe that was never hydrated.
+   */
+  coverage?: IngredientCoverage;
   // --- Phase 3 additions - populated for real (Supabase-backed) recipes only,
   // undefined for the legacy mock catalog (data/mockRecipes.ts, still used
   // internally by services/mockDb.ts but no longer read by recipeService). ---

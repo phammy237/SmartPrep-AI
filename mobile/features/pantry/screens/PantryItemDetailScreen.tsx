@@ -9,6 +9,7 @@ import {
   useConfirmPantryItem,
   useDepletePantryItem,
   usePantryItem,
+  usePantryItemNutrition,
   useRecipes,
   useRestorePantryItem,
   useUpdatePantryItemMetadata,
@@ -55,6 +56,7 @@ export function PantryItemDetailScreen() {
   const theme = useTheme();
   const { id } = useLocalSearchParams<{ id: string }>();
   const itemQuery = usePantryItem(id);
+  const nutritionQuery = usePantryItemNutrition(itemQuery.data);
   const recipesQuery = useRecipes();
   const updateMetadata = useUpdatePantryItemMetadata();
   const adjustQuantity = useAdjustPantryQuantity();
@@ -319,6 +321,38 @@ export function PantryItemDetailScreen() {
       {catalogIngredient ? (
         <NutritionFactsRow facts={catalogIngredient.nutritionPerServing} servingLabel={catalogIngredient.servingDescription} />
       ) : null}
+
+      <View style={{ gap: 2 }}>
+        <Text style={[theme.typography.subhead, { color: theme.colors.textPrimary }]}>
+          Nutrition for {item.quantity} {item.unit}
+        </Text>
+        {nutritionQuery.isError ? (
+          <Text style={[theme.typography.caption, { color: theme.colors.freshness.prioritize }]}>
+            Couldn&apos;t load nutrition just now. Your item is saved.
+          </Text>
+        ) : nutritionQuery.data && nutritionQuery.data.status !== 'unresolved' ? (
+          <Text style={[theme.typography.caption, { color: theme.colors.textSecondary }]}>
+            {[
+              nutritionQuery.data.snapshot.calories != null ? `${Math.round(nutritionQuery.data.snapshot.calories)} kcal` : null,
+              nutritionQuery.data.snapshot.proteinG != null ? `${Math.round(nutritionQuery.data.snapshot.proteinG)}g protein` : null,
+              nutritionQuery.data.snapshot.carbsG != null ? `${Math.round(nutritionQuery.data.snapshot.carbsG)}g carbs` : null,
+              nutritionQuery.data.snapshot.fatG != null ? `${Math.round(nutritionQuery.data.snapshot.fatG)}g fat` : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+            {'  '}
+            {nutritionQuery.data.status === 'verified'
+              ? '(USDA-verified)'
+              : nutritionQuery.data.status === 'candidate'
+                ? '(USDA candidate, unconfirmed)'
+                : '(estimated)'}
+          </Text>
+        ) : (
+          <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>
+            Not available for this quantity/unit yet.
+          </Text>
+        )}
+      </View>
 
       <StorageTipCard category={item.category} />
 

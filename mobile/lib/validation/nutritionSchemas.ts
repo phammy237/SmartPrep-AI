@@ -10,7 +10,13 @@ const nonNegativeFinite = z.number().finite('Must be a finite number').min(0, 'C
 const nutrientField = nonNegativeFinite.nullable().optional();
 
 export const nutritionStatusSchema = z.enum(['verified', 'estimated', 'incomplete']);
-export const nutritionCalculationBasisSchema = z.enum(['per_serving', 'per_gram', 'per_batch', 'manual_entry']);
+export const nutritionCalculationBasisSchema = z.enum([
+  'per_serving',
+  'per_gram',
+  'per_batch',
+  'manual_entry',
+  'per_quantity',
+]);
 
 export const nutritionSnapshotSchema = z
   .object({

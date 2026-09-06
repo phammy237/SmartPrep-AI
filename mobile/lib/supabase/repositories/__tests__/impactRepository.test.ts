@@ -9,7 +9,7 @@ const rpc = supabase.rpc as jest.Mock;
 
 const FULL_RESPONSE = {
   itemsAddedCount: 4,
-  itemsUsedCount: 9,
+  useEventCount: 9,
   itemsDiscardedCount: 3,
   cookingSessionsCount: 2,
   utilizationRate: 0.75,
@@ -40,7 +40,7 @@ describe('fetchKitchenImpactSummary', () => {
     });
     expect(result).toEqual({
       itemsAddedCount: 4,
-      itemsUsedCount: 9,
+      useEventCount: 9,
       itemsDiscardedCount: 3,
       cookingSessionsCount: 2,
       utilizationRate: 0.75,
@@ -67,7 +67,7 @@ describe('fetchKitchenImpactSummary', () => {
     rpc.mockResolvedValue({
       data: {
         itemsAddedCount: 0,
-        itemsUsedCount: 0,
+        useEventCount: 0,
         itemsDiscardedCount: 0,
         cookingSessionsCount: 0,
         utilizationRate: null,
@@ -87,7 +87,7 @@ describe('fetchKitchenImpactSummary', () => {
     rpc.mockResolvedValue({
       data: {
         itemsAddedCount: '1',
-        itemsUsedCount: '2',
+        useEventCount: '2',
         itemsDiscardedCount: '1',
         cookingSessionsCount: '0',
         utilizationRate: '0.6667',
@@ -97,7 +97,7 @@ describe('fetchKitchenImpactSummary', () => {
     });
 
     const result = await fetchKitchenImpactSummary({ startDate: null, endDate: null, timeZone: 'UTC' });
-    expect(result.itemsUsedCount).toBe(2);
+    expect(result.useEventCount).toBe(2);
     expect(result.utilizationRate).toBeCloseTo(0.6667);
     expect(result.usedQuantitiesByUnit).toEqual([]);
     expect(result.discardedQuantitiesByUnit).toEqual([]);

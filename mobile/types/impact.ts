@@ -22,8 +22,12 @@ export interface ImpactUnitTotal {
 export interface KitchenImpactSummary {
   /** `added` pantry events in range. */
   itemsAddedCount: number;
-  /** `consumed` + `deducted_by_cooking` + `depleted` events - one real consumption counts once. */
-  itemsUsedCount: number;
+  /**
+   * Count of pantry-use EVENTS (`consumed` + `deducted_by_cooking` + `depleted`)
+   * in range - NOT distinct items. One real consumption is one event; the same
+   * item used across three sessions is 3. A distinct-item metric does not exist yet.
+   */
+  useEventCount: number;
   /** `discarded` events. */
   itemsDiscardedCount: number;
   /** `cooking_events` with status = 'completed' whose completed_at falls in range. */

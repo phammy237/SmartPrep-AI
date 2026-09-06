@@ -1,5 +1,7 @@
 /**
- * Hand-authored to match supabase/migrations/0001-0006.
+ * Hand-authored to match supabase/migrations/0001-0007. STILL A STAND-IN -
+ * regenerate from a live project once linked:
+ *   npx supabase gen types typescript --linked > types/database.types.ts
  *
  * This is a STAND-IN for the real generated file. Once a project is linked,
  * regenerate it for real and this file will be overwritten:
@@ -545,6 +547,68 @@ export interface Database {
           swap_suggestion?: string | null;
           waste_note?: string | null;
           sort_order?: number;
+        };
+        Relationships: [];
+      };
+      usda_foods: {
+        Row: {
+          fdc_id: number;
+          description: string;
+          data_type: string | null;
+          brand_owner: string | null;
+          serving_size: number | null;
+          serving_size_unit: string | null;
+          nutrition_per_100g: Json;
+          fetched_at: string;
+          fetched_by: string | null;
+        };
+        // Written only by the usda-lookup Edge Function (service role).
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      canonical_ingredient_nutrition: {
+        Row: {
+          canonical_ingredient_id: string;
+          fdc_id: number | null;
+          nutrition_per_100g: Json;
+          status: 'estimated' | 'candidate' | 'verified';
+          match_rule: string | null;
+          verified_at: string | null;
+          verified_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        // No client insert/update/delete grant - managed by migration / admin only.
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      user_ingredient_overrides: {
+        Row: {
+          id: string;
+          user_id: string;
+          canonical_ingredient_id: string;
+          nutrition_per_100g: Json | null;
+          grams_per_unit: Json | null;
+          density_g_per_ml: number | null;
+          note: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          user_id: string;
+          canonical_ingredient_id: string;
+          nutrition_per_100g?: Json | null;
+          grams_per_unit?: Json | null;
+          density_g_per_ml?: number | null;
+          note?: string | null;
+        };
+        Update: {
+          nutrition_per_100g?: Json | null;
+          grams_per_unit?: Json | null;
+          density_g_per_ml?: number | null;
+          note?: string | null;
         };
         Relationships: [];
       };

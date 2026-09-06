@@ -1,8 +1,10 @@
 export const queryKeys = {
   pantry: ['pantry'] as const,
   pantryItem: (id: string) => ['pantry', id] as const,
+  pantryItemNutrition: (id: string, quantity: number, unit: string) => ['pantry', id, 'nutrition', quantity, unit] as const,
   recipes: ['recipes'] as const,
   recipe: (id: string) => ['recipes', id] as const,
+  recipeNutritionCoverage: (id: string) => ['recipes', id, 'nutrition-coverage'] as const,
   recipeCollections: ['recipes', 'collections'] as const,
   readyToCookCount: ['recipes', 'ready-to-cook-count'] as const,
   savedRecipes: ['recipes', 'saved'] as const,

@@ -1,9 +1,9 @@
 import { GUIDED_SCAN_SECTIONS, QUICK_SCAN_DETECTIONS } from '@/data';
-import { createPantryItem } from '@/lib/supabase/repositories';
 import { Scan, ScanConfirmSummary, ScanDetection, ScanMode, ScanSection, ScanSectionResult } from '@/types';
 import { generateId } from '@/utils/id';
 import { clone, delay } from './apiSimulation';
 import { db } from './mockDb';
+import { pantryService } from './pantryService';
 import { recipeService } from './recipeService';
 import { requireUserId } from './requireUserId';
 
@@ -97,19 +97,18 @@ async function confirmScan(
 
   const confirmedDetections = scan.sections.flatMap((s) => s.detections).filter((d) => !d.isRemoved);
 
+  // Shared pantry creation path - identity resolution + persistence live in
+  // pantryService, never duplicated here.
   const results = await Promise.allSettled(
     confirmedDetections.map((d) =>
-      createPantryItem(
+      pantryService.createScanItem(
         {
           ingredientId: d.ingredientId,
+          name: d.name,
           imageUri: d.imageUri,
-          displayName: d.name,
           category: d.category,
           quantity: d.quantity.value,
           unit: d.quantity.unit,
-          // No fabricated expiration: a scan has no printed date to trust.
-          expirationConfidence: 'unknown',
-          source: 'scan',
         },
         timeZone,
       ),

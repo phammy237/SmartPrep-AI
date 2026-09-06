@@ -9,3 +9,4 @@ export * from './preparedMealRepository';
 export * from './mealLogRepository';
 export * from './groceryRepository';
 export * from './impactRepository';
+export * from './nutritionReferenceRepository';

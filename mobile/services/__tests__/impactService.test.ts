@@ -17,7 +17,7 @@ const getUser = supabase.auth.getUser as jest.Mock;
 function summary(overrides: Partial<KitchenImpactSummary> = {}): KitchenImpactSummary {
   return {
     itemsAddedCount: 4,
-    itemsUsedCount: 9,
+    useEventCount: 9,
     itemsDiscardedCount: 3,
     cookingSessionsCount: 2,
     utilizationRate: 0.75,
@@ -94,10 +94,10 @@ describe('getKitchenImpact - result shape / no client-side aggregation', () => {
     jest.useRealTimers();
   });
 
-  it('never folds cookingSessionsCount into itemsUsedCount (or otherwise recomputes counts)', async () => {
-    fetchSummary.mockResolvedValue(summary({ itemsUsedCount: 7, cookingSessionsCount: 2, itemsDiscardedCount: 1 }));
+  it('never folds cookingSessionsCount into useEventCount (or otherwise recomputes counts)', async () => {
+    fetchSummary.mockResolvedValue(summary({ useEventCount: 7, cookingSessionsCount: 2, itemsDiscardedCount: 1 }));
     const result = await impactService.getKitchenImpact({ period: 'all', timeZone: 'UTC' });
-    expect(result.itemsUsedCount).toBe(7);
+    expect(result.useEventCount).toBe(7);
     expect(result.cookingSessionsCount).toBe(2);
     expect(result.itemsDiscardedCount).toBe(1);
   });
@@ -106,7 +106,7 @@ describe('getKitchenImpact - result shape / no client-side aggregation', () => {
     fetchSummary.mockResolvedValue(
       summary({
         itemsAddedCount: 0,
-        itemsUsedCount: 0,
+        useEventCount: 0,
         itemsDiscardedCount: 0,
         cookingSessionsCount: 0,
         utilizationRate: null,

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { groceryService, ManualGroceryItemInput, UpdateGroceryItemInput } from '@/services';
-import { RecipeIngredient } from '@/types';
+import type { RecipeShortfall } from '@/services';
 import { queryKeys } from './queryKeys';
 
 export function useGroceryList() {
@@ -54,11 +54,11 @@ export function useClearCheckedGroceryItems() {
   });
 }
 
-export function useAddMissingIngredientsForRecipe() {
+export function useAddRecipeShortfallsToGroceryList() {
   const invalidate = useInvalidateGroceryList();
   return useMutation({
-    mutationFn: ({ recipeId, missingIngredients }: { recipeId: string; missingIngredients: RecipeIngredient[] }) =>
-      groceryService.addMissingIngredientsForRecipe(recipeId, missingIngredients),
+    mutationFn: ({ recipeId, shortfalls }: { recipeId: string; shortfalls: RecipeShortfall[] }) =>
+      groceryService.addRecipeShortfallsToGroceryList(recipeId, shortfalls),
     onSuccess: invalidate,
   });
 }

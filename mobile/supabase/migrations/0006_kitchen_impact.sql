@@ -166,7 +166,7 @@ begin
 
   return jsonb_build_object(
     'itemsAddedCount', coalesce(v_added, 0),
-    'itemsUsedCount', coalesce(v_used, 0),
+    'useEventCount', coalesce(v_used, 0),
     'itemsDiscardedCount', coalesce(v_discarded, 0),
     'cookingSessionsCount', coalesce(v_cooking, 0),
     'utilizationRate',

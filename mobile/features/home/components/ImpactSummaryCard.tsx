@@ -24,9 +24,9 @@ export function ImpactSummaryCard({ impact }: ImpactSummaryCardProps) {
         {impact.hasActivity ? (
           <View style={{ flexDirection: 'row' }}>
             <View style={{ flex: 1, gap: 2 }}>
-              <Text style={[theme.typography.title1, { color: theme.colors.textPrimary }]}>{impact.itemsUsedCount}</Text>
+              <Text style={[theme.typography.title1, { color: theme.colors.textPrimary }]}>{impact.useEventCount}</Text>
               <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>
-                pantry items used
+                pantry-use events
               </Text>
             </View>
             <View style={{ width: 1, backgroundColor: theme.colors.border, marginHorizontal: theme.spacing.lg }} />

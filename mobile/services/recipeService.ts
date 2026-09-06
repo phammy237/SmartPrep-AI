@@ -1,12 +1,16 @@
+import { INGREDIENTS_BY_ID, normalizeIngredientName } from '@/data';
+import { IngredientConversionMeta } from '@/lib/nutrition/conversion';
+import { IngredientCoverage, PantryLot, computeIngredientCoverage } from '@/lib/nutrition/pantryCoverage';
 import {
+  fetchPantryItems,
   fetchRecipeVersionById,
   fetchRecipeVersions,
   fetchSavedRecipes,
   saveRecipe as saveRecipeRow,
   unsaveRecipe as unsaveRecipeRow,
 } from '@/lib/supabase/repositories';
-import { fetchPantryItems } from '@/lib/supabase/repositories';
-import { PantryItem, Recipe, RecipeCollectionId, SavedRecipe } from '@/types';
+import { PantryItem, Recipe, RecipeCollectionId, RecipeIngredient, SavedRecipe } from '@/types';
+import { nutritionService } from './nutritionService';
 import { requireUserId } from './requireUserId';
 
 const COLLECTION_TITLES: Record<RecipeCollectionId, string> = {
@@ -24,28 +28,81 @@ export interface RecipeCollection {
   recipes: Recipe[];
 }
 
-function computeMatchScore(owned: number, total: number): number {
+function computeMatchScore(covered: number, total: number): number {
   if (total === 0) return 100;
-  return Math.round((owned / total) * 100);
+  return Math.round((covered / total) * 100);
+}
+
+interface PantryLotIndex {
+  byId: Map<string, PantryLot[]>;
+  byName: Map<string, PantryLot[]>;
 }
 
 /**
- * Hydrates ingredient ownership against the live pantry and derives
- * smartMatchScore from that same live overlap - computed here on every
- * read, never stored, never learned. Matching is by ingredientId: for
- * catalog-based ingredients (scan/grocery-sourced pantry items) this is a
- * real catalog id; manually-added pantry items carry a synthetic id and
- * simply won't match unless the recipe ingredient also lacks a catalog
- * mapping, same limitation the mock version always had.
+ * Group in-stock pantry lots by canonical ingredient id and (for a
+ * conservative fallback) by normalized name. Depleted / zero-quantity lots
+ * are excluded - they are not usable stock.
  */
-function hydrateRecipe(recipe: Recipe, pantry: PantryItem[]): Recipe {
-  const pantryIngredientIds = new Set(pantry.map((item) => item.ingredientId));
-  const ingredients = recipe.ingredients.map((ingredient) => ({
-    ...ingredient,
-    isOwned: ingredient.isPantryStaple ? true : pantryIngredientIds.has(ingredient.ingredientId),
-  }));
-  const owned = ingredients.filter((i) => i.isOwned).length;
-  return { ...recipe, ingredients, smartMatchScore: computeMatchScore(owned, ingredients.length) };
+function indexPantryLots(pantry: PantryItem[]): PantryLotIndex {
+  const byId = new Map<string, PantryLot[]>();
+  const byName = new Map<string, PantryLot[]>();
+  const push = (map: Map<string, PantryLot[]>, key: string, lot: PantryLot) => {
+    const list = map.get(key);
+    if (list) list.push(lot);
+    else map.set(key, [lot]);
+  };
+
+  for (const item of pantry) {
+    if (item.status === 'depleted') continue;
+    if (!(typeof item.quantity === 'number' && item.quantity > 0)) continue;
+    const lot: PantryLot = { quantity: item.quantity, unit: item.unit };
+    push(byId, item.ingredientId, lot);
+    const nn = item.normalizedName ?? normalizeIngredientName(item.name);
+    if (nn) push(byName, nn, lot);
+  }
+  return { byId, byName };
+}
+
+/**
+ * Canonical id is the primary match key. A normalized-name fallback is used
+ * ONLY when the recipe ingredient has no catalog id (its `ingredientId` is a
+ * recipe_ingredients row id, not an `ing-*`) - and even then only on an EXACT
+ * normalized-name match. Never fuzzy-matches unrelated ingredients.
+ */
+function lotsForIngredient(ingredient: RecipeIngredient, index: PantryLotIndex): PantryLot[] {
+  const byId = index.byId.get(ingredient.ingredientId);
+  if (byId && byId.length > 0) return byId;
+  if (!INGREDIENTS_BY_ID[ingredient.ingredientId]) {
+    return index.byName.get(normalizeIngredientName(ingredient.name)) ?? [];
+  }
+  return [];
+}
+
+/**
+ * Hydrates each ingredient with quantity-aware `coverage` against the live
+ * pantry and the shared conversion engine. `isOwned` is kept as a convenience
+ * boolean = (coverage.status === 'covered'). `smartMatchScore` is the share of
+ * fully-covered ingredients.
+ */
+function hydrateRecipe(
+  recipe: Recipe,
+  pantry: PantryItem[],
+  conversionMeta: Map<string, IngredientConversionMeta>,
+): Recipe {
+  const index = indexPantryLots(pantry);
+  const ingredients = recipe.ingredients.map((ingredient) => {
+    const coverage = computeIngredientCoverage({
+      ingredientId: ingredient.ingredientId,
+      requiredQuantity: ingredient.quantity,
+      requiredUnit: ingredient.unit,
+      isPantryStaple: ingredient.isPantryStaple,
+      lots: lotsForIngredient(ingredient, index),
+      conversionMeta: conversionMeta.get(ingredient.ingredientId),
+    });
+    return { ...ingredient, coverage, isOwned: coverage.status === 'covered' };
+  });
+  const covered = ingredients.filter((i) => i.isOwned).length;
+  return { ...recipe, ingredients, smartMatchScore: computeMatchScore(covered, ingredients.length) };
 }
 
 export function getRecipeAvailability(recipe: Recipe): { owned: number; total: number } {
@@ -53,8 +110,30 @@ export function getRecipeAvailability(recipe: Recipe): { owned: number; total: n
   return { owned, total: recipe.ingredients.length };
 }
 
-export function getMissingIngredients(recipe: Recipe) {
-  return recipe.ingredients.filter((i) => !i.isOwned);
+/**
+ * Ingredients the pantry has NONE of. Quantity-aware now: a partially-covered
+ * or unresolved ingredient is NOT "missing" (use `getRecipeShortfalls` for the
+ * full grocery picture). Falls back to the old boolean only for a recipe that
+ * somehow wasn't hydrated.
+ */
+export function getMissingIngredients(recipe: Recipe): RecipeIngredient[] {
+  return recipe.ingredients.filter((i) => (i.coverage ? i.coverage.status === 'missing' : !i.isOwned && !i.isPantryStaple));
+}
+
+export interface RecipeShortfall {
+  ingredient: RecipeIngredient;
+  coverage: IngredientCoverage;
+}
+
+/** Every ingredient that is not fully covered - missing, partial, OR unresolved. Drives grocery generation. */
+export function getRecipeShortfalls(recipe: Recipe): RecipeShortfall[] {
+  const out: RecipeShortfall[] = [];
+  for (const ingredient of recipe.ingredients) {
+    if (ingredient.coverage && ingredient.coverage.status !== 'covered') {
+      out.push({ ingredient, coverage: ingredient.coverage });
+    }
+  }
+  return out;
 }
 
 /** How many of this recipe's ingredients are pantry items flagged Prioritize or Use Soon. */
@@ -67,16 +146,24 @@ export function countIngredientsNeedingAttention(recipe: Recipe, pantry: PantryI
   return recipe.ingredients.filter((i) => attentionIds.has(i.ingredientId)).length;
 }
 
+async function hydrateAll(recipes: Recipe[], pantry: PantryItem[]): Promise<Recipe[]> {
+  const ids = Array.from(new Set(recipes.flatMap((r) => r.ingredients.map((i) => i.ingredientId))));
+  const conversionMeta = await nutritionService.getConversionMetaMap(ids);
+  return recipes.map((recipe) => hydrateRecipe(recipe, pantry, conversionMeta));
+}
+
 async function getRecipes(): Promise<Recipe[]> {
   const userId = await requireUserId();
   const [recipes, pantry] = await Promise.all([fetchRecipeVersions(), fetchPantryItems(userId, 'UTC')]);
-  return recipes.map((recipe) => hydrateRecipe(recipe, pantry));
+  return hydrateAll(recipes, pantry);
 }
 
 async function getRecipeById(id: string): Promise<Recipe | null> {
   const userId = await requireUserId();
   const [recipe, pantry] = await Promise.all([fetchRecipeVersionById(id), fetchPantryItems(userId, 'UTC')]);
-  return recipe ? hydrateRecipe(recipe, pantry) : null;
+  if (!recipe) return null;
+  const [hydrated] = await hydrateAll([recipe], pantry);
+  return hydrated;
 }
 
 async function getRecipeCollections(): Promise<RecipeCollection[]> {
@@ -88,10 +175,10 @@ async function getRecipeCollections(): Promise<RecipeCollection[]> {
   }));
 }
 
-/** Recipes the user could cook right now with zero shopping. */
+/** Recipes the user could cook right now with zero shopping - EVERY non-staple ingredient fully covered. */
 async function countReadyToCookRecipes(): Promise<number> {
   const recipes = await getRecipes();
-  return recipes.filter((recipe) => getMissingIngredients(recipe).length === 0).length;
+  return recipes.filter((recipe) => getRecipeShortfalls(recipe).length === 0).length;
 }
 
 async function getSavedRecipes(): Promise<SavedRecipe[]> {

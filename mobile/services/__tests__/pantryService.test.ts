@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase/client';
 import * as repositories from '@/lib/supabase/repositories';
 import { pantryService } from '../pantryService';
+import { nutritionService } from '../nutritionService';
 
 jest.mock('@/lib/supabase/client', () => ({
   supabase: { auth: { getUser: jest.fn() } },
@@ -16,6 +17,12 @@ jest.mock('@/lib/supabase/repositories', () => ({
   restorePantryItem: jest.fn(),
   confirmPantryItem: jest.fn(),
 }));
+
+jest.mock('../nutritionService', () => ({
+  nutritionService: { resolveQuantityNutrition: jest.fn() },
+}));
+
+const resolveQuantityNutrition = nutritionService.resolveQuantityNutrition as jest.Mock;
 
 const CURRENT_ITEM = {
   id: 'item-1',
@@ -35,6 +42,67 @@ const CURRENT_ITEM = {
 beforeEach(() => {
   jest.clearAllMocks();
   (supabase.auth.getUser as jest.Mock).mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null });
+  (repositories.createPantryItem as jest.Mock).mockImplementation(async (params) => ({ ...CURRENT_ITEM, ...params }));
+});
+
+describe('shared identity resolution on create', () => {
+  it('addManualPantryItem resolves an exact catalog match and stores the canonical id + photo', async () => {
+    await pantryService.addManualPantryItem(
+      { displayName: 'Chicken Breast', category: 'protein', quantity: 1, unit: 'lb' },
+      'UTC',
+    );
+    const [params] = (repositories.createPantryItem as jest.Mock).mock.calls[0];
+    expect(params.ingredientId).toBe('ing-chicken-breast');
+    expect(params.imageUri).toContain('loremflickr'); // catalog photo, not a synthetic one
+    // the user's explicit category pick is respected, not overridden by the catalog
+    expect(params.category).toBe('protein');
+    expect(params.source).toBe('manual');
+  });
+
+  it('addManualPantryItem keeps a synthetic id when nothing resolves', async () => {
+    await pantryService.addManualPantryItem(
+      { displayName: 'Some Obscure Homemade Thing', category: 'other', quantity: 1, unit: 'item' },
+      'UTC',
+    );
+    const [params] = (repositories.createPantryItem as jest.Mock).mock.calls[0];
+    expect(params.ingredientId).toMatch(/^ing-manual/);
+    expect(params.category).toBe('other');
+  });
+
+  it('createScanItem routes through the SAME identity path (catalog id preserved, scan source, no fabricated date)', async () => {
+    await pantryService.createScanItem(
+      { ingredientId: 'ing-spinach', name: 'Spinach', imageUri: 'x', category: 'produce', quantity: 1, unit: 'bag' },
+      'UTC',
+    );
+    const [params, tz] = (repositories.createPantryItem as jest.Mock).mock.calls[0];
+    expect(params).toMatchObject({ ingredientId: 'ing-spinach', source: 'scan', expirationConfidence: 'unknown' });
+    expect(params).not.toHaveProperty('estimatedExpirationDate');
+    expect(tz).toBe('UTC');
+  });
+
+  it('createScanItem resolves by name when the hint id is not a catalog id', async () => {
+    await pantryService.createScanItem(
+      { ingredientId: 'det-xyz', name: 'Chicken Breast', imageUri: 'x', category: 'protein', quantity: 1, unit: 'lb' },
+      'UTC',
+    );
+    const [params] = (repositories.createPantryItem as jest.Mock).mock.calls[0];
+    expect(params.ingredientId).toBe('ing-chicken-breast');
+  });
+});
+
+describe('resolveItemNutrition (read-time, secondary)', () => {
+  it('delegates to nutritionService with the item identity/quantity/unit', async () => {
+    resolveQuantityNutrition.mockResolvedValue({ status: 'unresolved', reason: 'no_nutrition_reference', grams: 100, snapshot: null, provenance: {} });
+    await pantryService.resolveItemNutrition({ ingredientId: 'ing-chicken-breast', quantity: 200, unit: 'g' });
+    expect(resolveQuantityNutrition).toHaveBeenCalledWith({ canonicalIngredientId: 'ing-chicken-breast', quantity: 200, unit: 'g' });
+  });
+
+  it('propagates an infrastructure failure (caller must know enrichment failed)', async () => {
+    resolveQuantityNutrition.mockRejectedValue(new Error('Not signed in'));
+    await expect(
+      pantryService.resolveItemNutrition({ ingredientId: 'ing-x', quantity: 1, unit: 'g' }),
+    ).rejects.toThrow('Not signed in');
+  });
 });
 
 describe('updateItemMetadata', () => {

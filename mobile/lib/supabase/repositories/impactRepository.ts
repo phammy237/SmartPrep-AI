@@ -28,7 +28,7 @@ function mapSummary(data: Record<string, unknown>): KitchenImpactSummary {
   const rawRate = data.utilizationRate;
   return {
     itemsAddedCount: toNumber(data.itemsAddedCount),
-    itemsUsedCount: toNumber(data.itemsUsedCount),
+    useEventCount: toNumber(data.useEventCount),
     itemsDiscardedCount: toNumber(data.itemsDiscardedCount),
     cookingSessionsCount: toNumber(data.cookingSessionsCount),
     utilizationRate: rawRate === null || rawRate === undefined ? null : toNumber(rawRate),

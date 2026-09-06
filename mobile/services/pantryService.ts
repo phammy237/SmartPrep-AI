@@ -1,3 +1,5 @@
+import { INGREDIENTS_BY_ID, resolveCanonicalIngredient } from '@/data';
+import { NutritionResolution } from '@/lib/nutrition/resolveNutrition';
 import {
   UpdatePantryItemMetadataParams,
   adjustPantryQuantity,
@@ -11,10 +13,11 @@ import {
 } from '@/lib/supabase/repositories';
 import { supabase } from '@/lib/supabase/client';
 import { CreatePantryItemInput, EditPantryItemMetadataInput } from '@/lib/validation/pantrySchemas';
-import { PantryItem } from '@/types';
+import { IngredientCategory, PantryItem, QuantityUnit } from '@/types';
 import { estimateExpiration } from '@/utils/expiration';
 import { generateId } from '@/utils/id';
 import { ingredientPhotoUri } from '@/utils/ingredientPhoto';
+import { nutritionService } from './nutritionService';
 
 async function requireUserId(): Promise<string> {
   const { data, error } = await supabase.auth.getUser();
@@ -22,6 +25,32 @@ async function requireUserId(): Promise<string> {
     throw new Error('Not signed in');
   }
   return data.user.id;
+}
+
+interface ResolvedPantryIdentity {
+  /** Canonical catalog id when one resolves exactly; otherwise the hint or a fresh synthetic id. */
+  ingredientId: string;
+  imageUri: string;
+  /** True when the display name / hint resolved to a real catalog ingredient. */
+  canonical: boolean;
+}
+
+/**
+ * The single place a pantry item gets its identity, shared by manual add and
+ * Scan confirm (and future OCR). Exact-only catalog resolution (id, then
+ * normalized name / alias) - never fuzzy. When it resolves, downstream
+ * quantity coverage and nutrition resolution work by canonical id; when it
+ * doesn't, the item still persists with a synthetic id (nothing is blocked).
+ */
+function resolvePantryIdentity(opts: { hintId?: string; name: string; fallbackImageUri: string }): ResolvedPantryIdentity {
+  const catalog =
+    (opts.hintId ? INGREDIENTS_BY_ID[opts.hintId] : undefined) ??
+    (opts.hintId ? resolveCanonicalIngredient(opts.hintId) : null) ??
+    resolveCanonicalIngredient(opts.name);
+  if (catalog) {
+    return { ingredientId: catalog.id, imageUri: catalog.imageUri, canonical: true };
+  }
+  return { ingredientId: opts.hintId ?? generateId('ing-manual'), imageUri: opts.fallbackImageUri, canonical: false };
 }
 
 async function getPantry(timeZone: string): Promise<PantryItem[]> {
@@ -34,7 +63,10 @@ async function getPantryItem(id: string, timeZone: string): Promise<PantryItem |
 }
 
 async function addManualPantryItem(input: CreatePantryItemInput, timeZone: string): Promise<PantryItem> {
-  const ingredientId = generateId('ing-manual');
+  const identity = resolvePantryIdentity({
+    name: input.displayName,
+    fallbackImageUri: ingredientPhotoUri(generateId('ing-manual'), input.displayName),
+  });
   const estimate = estimateExpiration({
     category: input.category,
     purchaseDate: input.purchaseDate,
@@ -43,9 +75,11 @@ async function addManualPantryItem(input: CreatePantryItemInput, timeZone: strin
 
   return createPantryItem(
     {
-      ingredientId,
-      imageUri: ingredientPhotoUri(ingredientId, input.displayName),
+      ingredientId: identity.ingredientId,
+      imageUri: identity.imageUri,
       displayName: input.displayName,
+      // The user's explicit category pick is respected; only identity + photo
+      // come from the canonical match.
       category: input.category,
       quantity: input.quantity,
       unit: input.unit,
@@ -61,6 +95,54 @@ async function addManualPantryItem(input: CreatePantryItemInput, timeZone: strin
     },
     timeZone,
   );
+}
+
+export interface ScanPantryItemInput {
+  ingredientId: string;
+  name: string;
+  imageUri: string;
+  category: IngredientCategory;
+  quantity: number;
+  unit: QuantityUnit;
+}
+
+/**
+ * Creates a pantry item from a confirmed Scan detection through the SAME
+ * identity path as a manual add. Scan/OCR must never grow its own pantry
+ * insert or enrichment logic - it calls here.
+ */
+async function createScanItem(input: ScanPantryItemInput, timeZone: string): Promise<PantryItem> {
+  const identity = resolvePantryIdentity({ hintId: input.ingredientId, name: input.name, fallbackImageUri: input.imageUri });
+  return createPantryItem(
+    {
+      ingredientId: identity.ingredientId,
+      imageUri: identity.imageUri,
+      displayName: input.name,
+      category: input.category,
+      quantity: input.quantity,
+      unit: input.unit,
+      // A scan has no printed date to trust.
+      expirationConfidence: 'unknown',
+      source: 'scan',
+    },
+    timeZone,
+  );
+}
+
+/**
+ * Read-time nutrition enrichment for a pantry item. Secondary to persistence:
+ * returns an explicit `unresolved` resolution (not an error) when the item's
+ * quantity/unit cannot be converted or no reference exists - never fabricates
+ * a snapshot, never converts a candidate USDA match to verified. Genuine
+ * infrastructure failures (auth, Supabase) DO propagate so the caller knows
+ * enrichment failed rather than silently seeing "unresolved".
+ */
+async function resolveItemNutrition(item: Pick<PantryItem, 'ingredientId' | 'quantity' | 'unit'>): Promise<NutritionResolution> {
+  return nutritionService.resolveQuantityNutrition({
+    canonicalIngredientId: item.ingredientId,
+    quantity: item.quantity,
+    unit: item.unit,
+  });
 }
 
 /**
@@ -124,6 +206,8 @@ export const pantryService = {
   getPantry,
   getPantryItem,
   addManualPantryItem,
+  createScanItem,
+  resolveItemNutrition,
   updateItemMetadata,
   adjustQuantity,
   depleteItem,

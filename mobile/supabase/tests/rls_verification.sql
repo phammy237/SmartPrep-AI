@@ -2,9 +2,11 @@
 -- Phase 2 (pantry_items, pantry_events), Phase 3 (recipes, recipe_versions,
 -- recipe_ingredients, saved_recipes, meal_plan_items, cooking_events,
 -- cooking_event_ingredients, prepared_meals, meal_logs), Phase 4 grocery
--- (grocery_lists, grocery_list_items), and Phase 4 kitchen impact
--- (get_kitchen_impact_summary, derived from pantry_events / cooking_events).
--- Run migrations 0001-0006 first.
+-- (grocery_lists, grocery_list_items), Phase 4 kitchen impact
+-- (get_kitchen_impact_summary, derived from pantry_events / cooking_events),
+-- and Phase 4 nutrition normalization (usda_foods,
+-- canonical_ingredient_nutrition, user_ingredient_overrides).
+-- Run migrations 0001-0007 first.
 --
 -- Run this in the Supabase SQL editor or via `psql` against your linked
 -- project. It does NOT create test users itself - auth.users rows can only
@@ -1991,7 +1993,7 @@ declare
 begin
   s := public.get_kitchen_impact_summary(null, null, 'UTC');
   if (s ->> 'itemsAddedCount')::int <> 2 then raise exception 'FAIL: user_a itemsAddedCount = % (expected 2)', s ->> 'itemsAddedCount'; end if;
-  if (s ->> 'itemsUsedCount')::int <> 4 then raise exception 'FAIL: user_a itemsUsedCount = % (expected 4 - own events only)', s ->> 'itemsUsedCount'; end if;
+  if (s ->> 'useEventCount')::int <> 4 then raise exception 'FAIL: user_a useEventCount = % (expected 4 - own events only)', s ->> 'useEventCount'; end if;
   if (s ->> 'itemsDiscardedCount')::int <> 1 then raise exception 'FAIL: user_a itemsDiscardedCount = % (expected 1)', s ->> 'itemsDiscardedCount'; end if;
   if (s ->> 'cookingSessionsCount')::int <> 0 then raise exception 'FAIL: user_a cookingSessionsCount = % (expected 0 before any cook)', s ->> 'cookingSessionsCount'; end if;
   if round((s ->> 'utilizationRate')::numeric, 2) <> 0.80 then raise exception 'FAIL: user_a utilizationRate = % (expected 0.80)', s ->> 'utilizationRate'; end if;
@@ -2007,19 +2009,19 @@ begin
 
   -- a very wide explicit date range does not let user_a see more (or less)
   s_wide := public.get_kitchen_impact_summary('2000-01-01', '2100-01-01', 'UTC');
-  if (s_wide ->> 'itemsUsedCount')::int <> 4 then raise exception 'FAIL: wide date range changed user_a itemsUsedCount to %', s_wide ->> 'itemsUsedCount'; end if;
+  if (s_wide ->> 'useEventCount')::int <> 4 then raise exception 'FAIL: wide date range changed user_a useEventCount to %', s_wide ->> 'useEventCount'; end if;
 
   -- a range covering "now" still only sees user_a's events (not user_b's)
   s_narrow := public.get_kitchen_impact_summary((current_date - 1), (current_date + 1), 'UTC');
-  if (s_narrow ->> 'itemsUsedCount')::int <> 4 then raise exception 'FAIL: near-now date range changed user_a itemsUsedCount to %', s_narrow ->> 'itemsUsedCount'; end if;
+  if (s_narrow ->> 'useEventCount')::int <> 4 then raise exception 'FAIL: near-now date range changed user_a useEventCount to %', s_narrow ->> 'useEventCount'; end if;
 
   -- an unrecognized timezone falls back to UTC, does not error, does not bypass ownership
   s_badtz := public.get_kitchen_impact_summary(null, null, 'Not/AZone');
-  if (s_badtz ->> 'itemsUsedCount')::int <> 4 then raise exception 'FAIL: bad-timezone call returned itemsUsedCount %', s_badtz ->> 'itemsUsedCount'; end if;
+  if (s_badtz ->> 'useEventCount')::int <> 4 then raise exception 'FAIL: bad-timezone call returned useEventCount %', s_badtz ->> 'useEventCount'; end if;
 
   -- an empty range returns zeros with utilizationRate null and hasActivity false (never fabricated)
   s := public.get_kitchen_impact_summary('2000-01-01', '2000-01-02', 'UTC');
-  if (s ->> 'itemsUsedCount')::int <> 0 or (s ->> 'itemsDiscardedCount')::int <> 0 then
+  if (s ->> 'useEventCount')::int <> 0 or (s ->> 'itemsDiscardedCount')::int <> 0 then
     raise exception 'FAIL: empty range should be all zeros, got %', s;
   end if;
   if jsonb_typeof(s -> 'utilizationRate') <> 'null' then
@@ -2040,7 +2042,7 @@ declare s jsonb;
 begin
   s := public.get_kitchen_impact_summary(null, null, 'UTC');
   if (s ->> 'itemsAddedCount')::int <> 1 then raise exception 'FAIL: user_b itemsAddedCount = % (expected 1)', s ->> 'itemsAddedCount'; end if;
-  if (s ->> 'itemsUsedCount')::int <> 1 then raise exception 'FAIL: user_b itemsUsedCount = % (expected 1 - not user_a''s 4)', s ->> 'itemsUsedCount'; end if;
+  if (s ->> 'useEventCount')::int <> 1 then raise exception 'FAIL: user_b useEventCount = % (expected 1 - not user_a''s 4)', s ->> 'useEventCount'; end if;
   if (s ->> 'itemsDiscardedCount')::int <> 0 then raise exception 'FAIL: user_b itemsDiscardedCount = % (expected 0)', s ->> 'itemsDiscardedCount'; end if;
   if round((s ->> 'utilizationRate')::numeric, 2) <> 1.00 then raise exception 'FAIL: user_b utilizationRate = % (expected 1.00)', s ->> 'utilizationRate'; end if;
   raise notice 'PASS: user_b kitchen impact reflects only user_b events';
@@ -2069,9 +2071,9 @@ begin
 
   after_s := public.get_kitchen_impact_summary(null, null, 'UTC');
 
-  if (after_s ->> 'itemsUsedCount')::int <> (before_s ->> 'itemsUsedCount')::int then
-    raise exception 'FAIL: an excluded event (restored/adjusted/corrected) changed itemsUsedCount (% -> %)',
-      before_s ->> 'itemsUsedCount', after_s ->> 'itemsUsedCount';
+  if (after_s ->> 'useEventCount')::int <> (before_s ->> 'useEventCount')::int then
+    raise exception 'FAIL: an excluded event (restored/adjusted/corrected) changed useEventCount (% -> %)',
+      before_s ->> 'useEventCount', after_s ->> 'useEventCount';
   end if;
   if (after_s ->> 'itemsDiscardedCount')::int <> (before_s ->> 'itemsDiscardedCount')::int then
     raise exception 'FAIL: an excluded event changed itemsDiscardedCount';
@@ -2149,9 +2151,9 @@ begin
   prepared_meal_id := (complete_result -> 'preparedMeal' ->> 'id')::uuid;
 
   after_cook_s := public.get_kitchen_impact_summary(null, null, 'UTC');
-  if (after_cook_s ->> 'itemsUsedCount')::int <> (before_s ->> 'itemsUsedCount')::int + 1 then
+  if (after_cook_s ->> 'useEventCount')::int <> (before_s ->> 'useEventCount')::int + 1 then
     raise exception 'FAIL: completing a cook should add exactly 1 used event (% -> %)',
-      before_s ->> 'itemsUsedCount', after_cook_s ->> 'itemsUsedCount';
+      before_s ->> 'useEventCount', after_cook_s ->> 'useEventCount';
   end if;
   if (after_cook_s ->> 'cookingSessionsCount')::int <> (before_s ->> 'cookingSessionsCount')::int + 1 then
     raise exception 'FAIL: completing a cook should add exactly 1 cooking session';
@@ -2161,9 +2163,9 @@ begin
   perform public.log_prepared_meal_consumption(prepared_meal_id, 1, 'dinner', null, null);
 
   after_leftover_s := public.get_kitchen_impact_summary(null, null, 'UTC');
-  if (after_leftover_s ->> 'itemsUsedCount')::int <> (after_cook_s ->> 'itemsUsedCount')::int then
+  if (after_leftover_s ->> 'useEventCount')::int <> (after_cook_s ->> 'useEventCount')::int then
     raise exception 'FAIL: eating a leftover re-counted the pantry ingredients (double count): % -> %',
-      after_cook_s ->> 'itemsUsedCount', after_leftover_s ->> 'itemsUsedCount';
+      after_cook_s ->> 'useEventCount', after_leftover_s ->> 'useEventCount';
   end if;
   if (after_leftover_s ->> 'cookingSessionsCount')::int <> (after_cook_s ->> 'cookingSessionsCount')::int then
     raise exception 'FAIL: eating a leftover changed cookingSessionsCount';
@@ -2215,6 +2217,196 @@ delete from public.cooking_events where user_id in ('TEST_USER_A_ID'::uuid, 'TES
 delete from public.pantry_items
   where display_name in ('Impact A Item 1', 'Impact A Item 2', 'Impact B Item', 'Impact Pasta A');
 drop table if exists rls_test_scratch_impact;
+commit;
+
+-- ============================================================================
+-- Phase 4: nutrition normalization (usda_foods, canonical_ingredient_nutrition,
+-- user_ingredient_overrides). Run migration 0007 first.
+--
+--   usda_foods                     - read-all for authenticated, no client write
+--   canonical_ingredient_nutrition - read-all for authenticated, no client write
+--   user_ingredient_overrides      - owner-scoped CRUD
+-- ============================================================================
+
+-- Seed one usda_foods row as postgres (the client can never write this table).
+begin;
+set local role postgres;
+insert into public.usda_foods (fdc_id, description, data_type, nutrition_per_100g)
+values (999999001, 'RLS Test Food', 'SR Legacy', '{"calories":100,"proteinG":10}'::jsonb)
+on conflict (fdc_id) do update set description = excluded.description;
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Reference tables: readable by any authenticated user, mutable by none.
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  n int;
+  succeeded boolean := false;
+begin
+  -- user_a can read the seeded USDA cache row and the migration-seeded references
+  select count(*) into n from public.usda_foods where fdc_id = 999999001;
+  if n <> 1 then raise exception 'FAIL: authenticated user cannot read usda_foods reference row'; end if;
+
+  select count(*) into n from public.canonical_ingredient_nutrition where canonical_ingredient_id = 'ing-chicken-breast';
+  if n <> 1 then raise exception 'FAIL: authenticated user cannot read the seeded canonical_ingredient_nutrition row'; end if;
+
+  -- ...but cannot write either reference table
+  begin
+    insert into public.usda_foods (fdc_id, description, nutrition_per_100g) values (999999002, 'hack', '{"calories":1}'::jsonb);
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: authenticated user inserted into usda_foods'; end if;
+
+  succeeded := false;
+  begin
+    update public.usda_foods set description = 'tampered' where fdc_id = 999999001;
+    if (select description from public.usda_foods where fdc_id = 999999001) = 'tampered' then succeeded := true; end if;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: authenticated user updated usda_foods'; end if;
+
+  succeeded := false;
+  begin
+    insert into public.canonical_ingredient_nutrition (canonical_ingredient_id, nutrition_per_100g, status)
+      values ('ing-hack', '{"calories":1}'::jsonb, 'verified');
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: authenticated user inserted into canonical_ingredient_nutrition'; end if;
+
+  succeeded := false;
+  begin
+    update public.canonical_ingredient_nutrition set status = 'verified', nutrition_per_100g = '{"calories":9999}'::jsonb
+      where canonical_ingredient_id = 'ing-chicken-breast';
+    if (select (nutrition_per_100g->>'calories')::numeric from public.canonical_ingredient_nutrition where canonical_ingredient_id = 'ing-chicken-breast') = 9999 then
+      succeeded := true;
+    end if;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: authenticated user mutated globally-managed canonical_ingredient_nutrition'; end if;
+
+  raise notice 'PASS: reference nutrition tables are read-only for authenticated users';
+end $$;
+commit;
+
+-- ----------------------------------------------------------------------------
+-- user_ingredient_overrides: owner-scoped CRUD, no cross-user visibility.
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+insert into public.user_ingredient_overrides (user_id, canonical_ingredient_id, nutrition_per_100g, density_g_per_ml, note)
+values ('TEST_USER_A_ID'::uuid, 'ing-milk', '{"calories":55}'::jsonb, 1.03, 'user_a milk');
+
+do $$
+declare
+  own int;
+  succeeded boolean := false;
+begin
+  select count(*) into own from public.user_ingredient_overrides where user_id = 'TEST_USER_A_ID'::uuid;
+  if own <> 1 then raise exception 'FAIL: user_a cannot read back their own ingredient override'; end if;
+
+  update public.user_ingredient_overrides set note = 'edited' where canonical_ingredient_id = 'ing-milk';
+  if (select note from public.user_ingredient_overrides where user_id = 'TEST_USER_A_ID'::uuid) <> 'edited' then
+    raise exception 'FAIL: user_a cannot update their own ingredient override';
+  end if;
+
+  -- cannot create an override FOR user_b
+  begin
+    insert into public.user_ingredient_overrides (user_id, canonical_ingredient_id, nutrition_per_100g)
+      values ('TEST_USER_B_ID'::uuid, 'ing-milk', '{"calories":1}'::jsonb);
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: user_a created an ingredient override for user_b'; end if;
+
+  raise notice 'PASS: user_a owns their ingredient overrides (read + update; cannot write for user_b)';
+end $$;
+commit;
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  leaked int;
+  affected int;
+begin
+  select count(*) into leaked from public.user_ingredient_overrides where user_id = 'TEST_USER_A_ID'::uuid;
+  if leaked <> 0 then raise exception 'FAIL: user_b can see user_a''s ingredient overrides'; end if;
+
+  update public.user_ingredient_overrides set note = 'hijacked' where canonical_ingredient_id = 'ing-milk';
+  get diagnostics affected = row_count;
+  if affected <> 0 then raise exception 'FAIL: user_b updated user_a''s ingredient override'; end if;
+
+  delete from public.user_ingredient_overrides where canonical_ingredient_id = 'ing-milk';
+  get diagnostics affected = row_count;
+  if affected <> 0 then raise exception 'FAIL: user_b deleted user_a''s ingredient override'; end if;
+
+  raise notice 'PASS: user_b cannot see, update, or delete user_a''s ingredient overrides';
+end $$;
+commit;
+
+-- Verify (as postgres) user_a's override is untouched by user_b's attempts.
+begin;
+set local role postgres;
+do $$
+declare note_val text;
+begin
+  select note into note_val from public.user_ingredient_overrides where user_id = 'TEST_USER_A_ID'::uuid and canonical_ingredient_id = 'ing-milk';
+  if note_val is distinct from 'edited' then
+    raise exception 'FAIL: user_a''s ingredient override changed (note = %) despite user_b''s attempts', note_val;
+  end if;
+  raise notice 'PASS: user_a''s ingredient override verified unchanged as postgres';
+end $$;
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Anonymous requests see no nutrition data at all.
+-- ----------------------------------------------------------------------------
+begin;
+set local role anon;
+select set_config('request.jwt.claims', '', true);
+
+do $$
+declare n int;
+begin
+  -- A "permission denied" here is also a pass (anon cannot read); an RLS-filtered
+  -- 0-row count is a pass too. A positive count is the only failure.
+  begin
+    select count(*) into n from public.usda_foods;
+    if n <> 0 then raise exception 'FAIL: anon can read usda_foods (% rows)', n; end if;
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    select count(*) into n from public.canonical_ingredient_nutrition;
+    if n <> 0 then raise exception 'FAIL: anon can read canonical_ingredient_nutrition (% rows)', n; end if;
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    select count(*) into n from public.user_ingredient_overrides;
+    if n <> 0 then raise exception 'FAIL: anon can read user_ingredient_overrides (% rows)', n; end if;
+  exception when insufficient_privilege then null;
+  end;
+  raise notice 'PASS: anonymous role cannot read any nutrition-normalization table';
+end $$;
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Nutrition-normalization cleanup.
+-- ----------------------------------------------------------------------------
+begin;
+set local role postgres;
+delete from public.user_ingredient_overrides where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid);
+delete from public.usda_foods where fdc_id = 999999001;
 commit;
 
 do $$

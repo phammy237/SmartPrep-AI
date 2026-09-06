@@ -8,8 +8,19 @@ export interface NutritionFacts {
 
 export type NutritionStatus = 'verified' | 'estimated' | 'incomplete';
 
-/** What the numbers in a NutritionSnapshot represent - one serving, one gram, or a whole prepared batch. */
-export type NutritionCalculationBasis = 'per_serving' | 'per_gram' | 'per_batch' | 'manual_entry';
+/**
+ * What the numbers in a NutritionSnapshot represent - one serving, one gram, a
+ * whole prepared batch, a hand-typed entry, or (Phase 4) the total for one
+ * specific normalized quantity computed from a per-100g reference.
+ * Client-only metadata: the SQL `is_valid_nutrition_snapshot` check never
+ * inspects this field, so extending it needs no migration.
+ */
+export type NutritionCalculationBasis =
+  | 'per_serving'
+  | 'per_gram'
+  | 'per_batch'
+  | 'manual_entry'
+  | 'per_quantity';
 
 export const NUTRIENT_KEYS = ['calories', 'proteinG', 'carbsG', 'fatG', 'fiberG', 'sugarG', 'sodiumMg'] as const;
 export type NutrientKey = (typeof NUTRIENT_KEYS)[number];

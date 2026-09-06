@@ -1,23 +1,23 @@
 import { supabase } from '@/lib/supabase/client';
-import * as repositories from '@/lib/supabase/repositories';
 import { FreshnessLabel, Scan, ScanDetection, ScanSectionResult } from '@/types';
 import { scanService, ScanConfirmError } from '../scanService';
 import { db } from '../mockDb';
+import { pantryService } from '../pantryService';
 import { recipeService } from '../recipeService';
 
 jest.mock('@/lib/supabase/client', () => ({
   supabase: { auth: { getUser: jest.fn() } },
 }));
 
-jest.mock('@/lib/supabase/repositories', () => ({
-  createPantryItem: jest.fn(),
+jest.mock('../pantryService', () => ({
+  pantryService: { createScanItem: jest.fn() },
 }));
 
 jest.mock('../recipeService', () => ({
   recipeService: { countReadyToCookRecipes: jest.fn() },
 }));
 
-const createPantryItem = repositories.createPantryItem as jest.Mock;
+const createScanItem = pantryService.createScanItem as jest.Mock;
 const countReadyToCookRecipes = recipeService.countReadyToCookRecipes as jest.Mock;
 const getUser = supabase.auth.getUser as jest.Mock;
 
@@ -50,7 +50,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   getUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null });
   countReadyToCookRecipes.mockResolvedValue(3);
-  createPantryItem.mockImplementation(async (params) => ({ id: `item-${params.ingredientId}`, ...params }));
+  createScanItem.mockImplementation(async (params) => ({ id: `item-${params.ingredientId}`, ...params }));
   db.scans = [];
   db.pantry = [];
 });
@@ -64,23 +64,16 @@ describe('confirmScan - successful confirmation', () => {
 
     const { summary } = await scanService.confirmScan(scan);
 
-    expect(createPantryItem).toHaveBeenCalledTimes(2);
-    expect(createPantryItem).toHaveBeenNthCalledWith(
+    expect(createScanItem).toHaveBeenCalledTimes(2);
+    // Routes through the SHARED pantry creation path (pantryService.createScanItem),
+    // not a scan-local insert. Detection shape in, no fabricated date fields.
+    expect(createScanItem).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({
-        ingredientId: 'ing-spinach',
-        displayName: 'Spinach',
-        category: 'produce',
-        quantity: 1,
-        unit: 'bag',
-        source: 'scan',
-        expirationConfidence: 'unknown',
-      }),
+      { ingredientId: 'ing-spinach', name: 'Spinach', imageUri: 'https://example.com/spinach.jpg', category: 'produce', quantity: 1, unit: 'bag' },
       'UTC',
     );
-    // Never fabricates a date for a scanned item.
-    expect(createPantryItem.mock.calls[0][0]).not.toHaveProperty('estimatedExpirationDate');
-    expect(createPantryItem.mock.calls[0][0]).not.toHaveProperty('purchaseDate');
+    expect(createScanItem.mock.calls[0][0]).not.toHaveProperty('estimatedExpirationDate');
+    expect(createScanItem.mock.calls[0][0]).not.toHaveProperty('purchaseDate');
 
     expect(summary.ingredientsAdded).toBe(2);
     expect(summary.mealsPossibleEstimate).toBe(3);
@@ -95,8 +88,8 @@ describe('confirmScan - successful confirmation', () => {
 
     const { summary } = await scanService.confirmScan(scan);
 
-    expect(createPantryItem).toHaveBeenCalledTimes(2);
-    expect(createPantryItem.mock.calls.map((c) => c[0].ingredientId)).toEqual(['ing-a', 'ing-b']);
+    expect(createScanItem).toHaveBeenCalledTimes(2);
+    expect(createScanItem.mock.calls.map((c) => c[0].ingredientId)).toEqual(['ing-a', 'ing-b']);
     expect(summary.ingredientsAdded).toBe(2);
     expect(summary.needsAttentionCount).toBe(2);
     expect(summary.quantityCorrectedCount).toBe(1);
@@ -113,20 +106,20 @@ describe('confirmScan - successful confirmation', () => {
 
   it('passes an explicit timezone through to the repository when given', async () => {
     await scanService.confirmScan(makeScan([makeDetection()]), 'America/New_York');
-    expect(createPantryItem).toHaveBeenCalledWith(expect.any(Object), 'America/New_York');
+    expect(createScanItem).toHaveBeenCalledWith(expect.any(Object), 'America/New_York');
   });
 });
 
 describe('confirmScan - invalid quantities / units', () => {
   it('throws ScanConfirmError (never swallows) when the RPC rejects an out-of-range quantity', async () => {
-    createPantryItem.mockRejectedValueOnce(new Error('quantity cannot be negative'));
+    createScanItem.mockRejectedValueOnce(new Error('quantity cannot be negative'));
     const scan = makeScan([makeDetection({ quantity: { value: -2, unit: 'bag', confidence: 0.5, isLowConfidence: true } })]);
 
     await expect(scanService.confirmScan(scan)).rejects.toBeInstanceOf(ScanConfirmError);
   });
 
   it('reports the RPC rejection for an unsupported unit and adds nothing to history', async () => {
-    createPantryItem.mockRejectedValueOnce(new Error('new row for relation "pantry_items" violates check constraint "pantry_items_unit_check"'));
+    createScanItem.mockRejectedValueOnce(new Error('new row for relation "pantry_items" violates check constraint "pantry_items_unit_check"'));
     const scan = makeScan([makeDetection({ quantity: { value: 1, unit: 'scoop' as never, confidence: 0.5, isLowConfidence: true } })]);
 
     await expect(scanService.confirmScan(scan)).rejects.toMatchObject({ addedCount: 0, failedCount: 1 });
@@ -136,7 +129,7 @@ describe('confirmScan - invalid quantities / units', () => {
 
 describe('confirmScan - partial failures', () => {
   it('throws with accurate added/failed counts and does NOT roll back the rows that already persisted', async () => {
-    createPantryItem
+    createScanItem
       .mockImplementationOnce(async (p) => ({ id: 'item-1', ...p }))
       .mockRejectedValueOnce(new Error('duplicate key value violates unique constraint'))
       .mockImplementationOnce(async (p) => ({ id: 'item-3', ...p }));
@@ -154,7 +147,7 @@ describe('confirmScan - partial failures', () => {
     expect(error.failedCount).toBe(1);
     expect(error.failures).toHaveLength(1);
     // All three were attempted - the two successes are real writes, not undone.
-    expect(createPantryItem).toHaveBeenCalledTimes(3);
+    expect(createScanItem).toHaveBeenCalledTimes(3);
     // A partial failure is not "history".
     expect(db.scans).toHaveLength(0);
   });
@@ -166,7 +159,7 @@ describe('confirmScan - auth isolation / no silent fallback', () => {
     const scan = makeScan([makeDetection()]);
 
     await expect(scanService.confirmScan(scan)).rejects.toThrow('Not signed in');
-    expect(createPantryItem).not.toHaveBeenCalled();
+    expect(createScanItem).not.toHaveBeenCalled();
   });
 
   it('never writes to the in-memory mock pantry, on success or on failure', async () => {
@@ -175,7 +168,7 @@ describe('confirmScan - auth isolation / no silent fallback', () => {
     await scanService.confirmScan(makeScan([makeDetection({ ingredientId: 'ok' })]));
     expect(db.pantry.length).toBe(pantryLenBefore);
 
-    createPantryItem.mockRejectedValueOnce(new Error('boom'));
+    createScanItem.mockRejectedValueOnce(new Error('boom'));
     await scanService.confirmScan(makeScan([makeDetection({ ingredientId: 'bad' })])).catch(() => undefined);
     expect(db.pantry.length).toBe(pantryLenBefore);
   });
@@ -188,26 +181,26 @@ describe('confirmScan - duplicate / retry behavior', () => {
     await scanService.confirmScan(scan);
     await scanService.confirmScan(scan);
 
-    expect(createPantryItem).toHaveBeenCalledTimes(4);
+    expect(createScanItem).toHaveBeenCalledTimes(4);
     expect(db.scans).toHaveLength(2);
   });
 
   it('after a partial failure, a retry re-attempts all detections (including the ones that already succeeded)', async () => {
     const scan = makeScan([makeDetection({ ingredientId: 'ing-1' }), makeDetection({ ingredientId: 'ing-2' })]);
 
-    createPantryItem
+    createScanItem
       .mockImplementationOnce(async (p) => ({ id: 'item-1', ...p }))
       .mockRejectedValueOnce(new Error('transient network error'));
 
     await expect(scanService.confirmScan(scan)).rejects.toBeInstanceOf(ScanConfirmError);
-    expect(createPantryItem).toHaveBeenCalledTimes(2);
+    expect(createScanItem).toHaveBeenCalledTimes(2);
 
     // Retry: both go through again - no client-side dedupe of the already-added row.
-    createPantryItem.mockImplementation(async (p) => ({ id: `item-${p.ingredientId}`, ...p }));
+    createScanItem.mockImplementation(async (p) => ({ id: `item-${p.ingredientId}`, ...p }));
     const { summary } = await scanService.confirmScan(scan);
 
-    expect(createPantryItem).toHaveBeenCalledTimes(4);
-    expect(createPantryItem.mock.calls.slice(2).map((c) => c[0].ingredientId)).toEqual(['ing-1', 'ing-2']);
+    expect(createScanItem).toHaveBeenCalledTimes(4);
+    expect(createScanItem.mock.calls.slice(2).map((c) => c[0].ingredientId)).toEqual(['ing-1', 'ing-2']);
     expect(summary.ingredientsAdded).toBe(2);
   });
 });

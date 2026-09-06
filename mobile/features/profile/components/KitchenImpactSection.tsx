@@ -24,7 +24,7 @@ export function KitchenImpactSection({ impact }: KitchenImpactSectionProps) {
   const theme = useTheme();
 
   const stats: { value: string; label: string }[] = [
-    { value: String(impact.itemsUsedCount), label: 'pantry items used' },
+    { value: String(impact.useEventCount), label: 'pantry-use events' },
     { value: String(impact.itemsDiscardedCount), label: 'items discarded' },
     { value: String(impact.cookingSessionsCount), label: 'meals cooked' },
   ];

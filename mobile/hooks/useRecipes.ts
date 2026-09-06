@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { recipeService } from '@/services';
+import { nutritionService, recipeService } from '@/services';
+import { Recipe } from '@/types';
 import { queryKeys } from './queryKeys';
 
 export function useRecipes() {
@@ -17,6 +18,28 @@ export function useRecipe(id: string | undefined) {
 
 export function useRecipeCollections() {
   return useQuery({ queryKey: queryKeys.recipeCollections, queryFn: recipeService.getRecipeCollections });
+}
+
+/**
+ * Ingredient-level nutrition coverage for one recipe (resolved vs total,
+ * verified/estimated/partial). Separate query so the recipe screen renders
+ * immediately and the coverage badge fills in.
+ */
+export function useRecipeNutritionCoverage(recipe: Recipe | null | undefined) {
+  const versionId = recipe?.recipeVersionId ?? recipe?.id;
+  return useQuery({
+    queryKey: queryKeys.recipeNutritionCoverage(versionId ?? ''),
+    queryFn: () =>
+      nutritionService.getRecipeNutritionCoverage(
+        (recipe as Recipe).ingredients.map((i) => ({
+          ingredientId: i.ingredientId,
+          quantity: i.quantity,
+          unit: i.unit,
+          isOptional: i.isOptional,
+        })),
+      ),
+    enabled: !!recipe,
+  });
 }
 
 export function useReadyToCookCount() {

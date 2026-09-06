@@ -6,6 +6,7 @@ export * from './cookingService';
 export * from './preparedMealService';
 export * from './mealLogService';
 export * from './groceryService';
+export * from './nutritionService';
 export * from './scanService';
 export * from './userService';
 export * from './impactService';

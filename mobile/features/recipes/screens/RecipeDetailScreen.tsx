@@ -5,10 +5,18 @@ import React from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Button, EmptyState, LoadingState, NutritionFactsRow, ProgressRing, Screen } from '@/components';
-import { useAddMissingIngredientsForRecipe, useRecipe, useSaveRecipe, useSavedRecipes, useUnsaveRecipe } from '@/hooks';
+import {
+  useAddRecipeShortfallsToGroceryList,
+  useRecipe,
+  useRecipeNutritionCoverage,
+  useSaveRecipe,
+  useSavedRecipes,
+  useUnsaveRecipe,
+} from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
-import { getMissingIngredients, getRecipeAvailability } from '@/services';
-import { formatCurrency, formatMinutes } from '@/utils/format';
+import { getRecipeAvailability, getRecipeShortfalls } from '@/services';
+import type { IngredientCoverage } from '@/lib/nutrition/pantryCoverage';
+import { formatCurrency, formatMinutes, formatNumber } from '@/utils/format';
 
 const NUTRITION_STATUS_LABEL: Record<string, string> = {
   verified: 'verified',
@@ -16,11 +24,23 @@ const NUTRITION_STATUS_LABEL: Record<string, string> = {
   incomplete: 'incomplete - some values unknown',
 };
 
+/** A short human hint of what's still needed for one ingredient. */
+function shortfallHint(coverage: IngredientCoverage): string {
+  if (coverage.status === 'missing') return 'not in pantry';
+  if (coverage.status === 'unresolved') return "can't compare units";
+  if (coverage.shortfallQuantity !== undefined) {
+    return `need ${formatNumber(coverage.shortfallQuantity)} ${coverage.shortfallUnit ?? coverage.requiredUnit} more`;
+  }
+  if (coverage.shortfallGrams !== undefined) return `need ~${formatNumber(coverage.shortfallGrams)} g more`;
+  return 'partly stocked';
+}
+
 export function RecipeDetailScreen() {
   const theme = useTheme();
   const { id } = useLocalSearchParams<{ id: string }>();
   const recipeQuery = useRecipe(id);
-  const addMissing = useAddMissingIngredientsForRecipe();
+  const addShortfalls = useAddRecipeShortfallsToGroceryList();
+  const nutritionCoverage = useRecipeNutritionCoverage(recipeQuery.data);
   const savedQuery = useSavedRecipes();
   const saveMutation = useSaveRecipe();
   const unsaveMutation = useUnsaveRecipe();
@@ -43,7 +63,7 @@ export function RecipeDetailScreen() {
 
   const recipe = recipeQuery.data;
   const { owned, total } = getRecipeAvailability(recipe);
-  const missing = getMissingIngredients(recipe);
+  const shortfalls = getRecipeShortfalls(recipe);
   const ownedIngredients = recipe.ingredients.filter((i) => i.isOwned);
   const recipeVersionId = recipe.recipeVersionId ?? recipe.id;
   const isSaved = savedQuery.data?.some((s) => s.recipeVersionId === recipeVersionId) ?? false;
@@ -101,6 +121,23 @@ export function RecipeDetailScreen() {
           statusLabel={recipe.nutritionStatus ? NUTRITION_STATUS_LABEL[recipe.nutritionStatus] : undefined}
         />
 
+        {nutritionCoverage.data ? (
+          <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>
+            {(() => {
+              const c = nutritionCoverage.data;
+              const label =
+                c.totalCount === 0 || c.resolvedCount === 0
+                  ? 'Unavailable'
+                  : c.isPartial
+                    ? 'Partial'
+                    : c.status === 'verified'
+                      ? 'Verified'
+                      : 'Estimated';
+              return `Nutrition coverage: ${label} — ${c.resolvedCount} of ${c.totalCount} ingredients resolved`;
+            })()}
+          </Text>
+        ) : null}
+
         <View style={{ gap: 6 }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
             <Text style={[theme.typography.subhead, { color: theme.colors.textPrimary }]}>Pantry match</Text>
@@ -151,14 +188,19 @@ export function RecipeDetailScreen() {
             </View>
           </View>
 
-          {missing.length > 0 ? (
+          {shortfalls.length > 0 ? (
             <View style={{ gap: theme.spacing.sm }}>
               <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>YOU NEED</Text>
               <View style={{ gap: 6 }}>
-                {missing.map((ingredient) => (
+                {shortfalls.map(({ ingredient, coverage }) => (
                   <View key={ingredient.ingredientId} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                     <Ionicons name="add-circle-outline" size={16} color={theme.colors.textTertiary} />
-                    <Text style={[theme.typography.body, { color: theme.colors.textSecondary }]}>{ingredient.name}</Text>
+                    <Text style={[theme.typography.body, { color: theme.colors.textSecondary }]}>
+                      {ingredient.name}
+                      <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>
+                        {'  '}· {shortfallHint(coverage)}
+                      </Text>
+                    </Text>
                   </View>
                 ))}
               </View>
@@ -168,15 +210,18 @@ export function RecipeDetailScreen() {
 
         <View style={{ gap: theme.spacing.sm }}>
           <Button label="Cook This" onPress={() => router.push(`/recipes/${recipe.id}/cook`)} fullWidth />
-          {missing.length > 0 ? (
+          {shortfalls.length > 0 ? (
             <Button
-              label="Add Missing Items"
+              label="Add to Grocery List"
               variant="secondary"
-              loading={addMissing.isPending}
+              loading={addShortfalls.isPending}
               onPress={() =>
-                addMissing.mutate(
-                  { recipeId: recipe.id, missingIngredients: missing },
-                  { onSuccess: () => Alert.alert('Added to Grocery List', `${missing.length} item(s) added.`) },
+                addShortfalls.mutate(
+                  { recipeId: recipe.id, shortfalls },
+                  {
+                    onSuccess: (added) =>
+                      Alert.alert('Added to Grocery List', `${added.length} item(s) added or updated.`),
+                  },
                 )
               }
               fullWidth

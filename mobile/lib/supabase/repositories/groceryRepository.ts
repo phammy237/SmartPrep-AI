@@ -6,7 +6,7 @@ import {
   IngredientCategory,
   QuantityUnit,
 } from '@/types';
-import { Database } from '@/types/database.types';
+import { Database, Json } from '@/types/database.types';
 import { supabase } from '../client';
 
 type GroceryListRow = Database['public']['Tables']['grocery_lists']['Row'];
@@ -82,6 +82,8 @@ export interface InsertGroceryItemParams {
   source?: GroceryItemSource;
   sourceRecipeVersionIds?: string[];
   quantityBasis?: GroceryQuantityBasis;
+  /** e.g. { coverage: 'unresolved', reason: 'missing_density' } - provenance for a generated line. */
+  sourceMetadata?: Record<string, unknown>;
   sortOrder?: number;
 }
 
@@ -103,6 +105,7 @@ export async function insertGroceryListItems(
     source: it.source ?? 'manual',
     source_recipe_version_ids: it.sourceRecipeVersionIds ?? [],
     quantity_basis: it.quantityBasis ?? 'as_entered',
+    ...(it.sourceMetadata !== undefined ? { source_metadata: it.sourceMetadata as Json } : {}),
     ...(it.sortOrder !== undefined ? { sort_order: it.sortOrder } : {}),
   }));
   const { data, error } = await supabase.from('grocery_list_items').insert(rows).select();
