@@ -4,7 +4,14 @@ import React, { useMemo, useState } from 'react';
 import { Alert, Pressable, Text, View } from 'react-native';
 
 import { Button, Card, EmptyState, LoadingState, Screen } from '@/components';
-import { useAddGroceryItem, useGroceryList, useRemoveGroceryItem, useToggleGroceryItem, useUser } from '@/hooks';
+import {
+  useAddGroceryItem,
+  useClearCheckedGroceryItems,
+  useGroceryList,
+  useRemoveGroceryItem,
+  useToggleGroceryItem,
+  useUser,
+} from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
 import { GroceryListItem, IngredientCategory } from '@/types';
 import { AddGroceryItemModal } from '../components/AddGroceryItemModal';
@@ -28,6 +35,7 @@ export function GroceryScreen() {
   const toggle = useToggleGroceryItem();
   const remove = useRemoveGroceryItem();
   const add = useAddGroceryItem();
+  const clearChecked = useClearCheckedGroceryItems();
   const [showAdd, setShowAdd] = useState(false);
   const [collapsedCategories, setCollapsedCategories] = useState<Set<IngredientCategory>>(new Set());
 
@@ -53,6 +61,11 @@ export function GroceryScreen() {
 
   const lowWasteItems = useMemo(
     () => (listQuery.data?.items ?? []).filter((item) => item.swapSuggestion || item.wasteNote),
+    [listQuery.data],
+  );
+
+  const checkedCount = useMemo(
+    () => (listQuery.data?.items ?? []).filter((item) => item.isChecked).length,
     [listQuery.data],
   );
 
@@ -137,6 +150,21 @@ export function GroceryScreen() {
                   'Low-Waste Swaps',
                   lowWasteItems.map((item) => `${item.name}: ${item.wasteNote ?? item.swapSuggestion}`).join('\n\n'),
                 )
+              }
+              fullWidth
+            />
+          ) : null}
+
+          {checkedCount > 0 ? (
+            <Button
+              label={`Clear Checked (${checkedCount})`}
+              variant="ghost"
+              loading={clearChecked.isPending}
+              onPress={() =>
+                Alert.alert('Clear checked items?', `This removes ${checkedCount} acquired item(s) from your list.`, [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Clear', style: 'destructive', onPress: () => clearChecked.mutate() },
+                ])
               }
               fullWidth
             />

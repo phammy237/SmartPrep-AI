@@ -7,3 +7,4 @@ export * from './plannerRepository';
 export * from './cookingRepository';
 export * from './preparedMealRepository';
 export * from './mealLogRepository';
+export * from './groceryRepository';

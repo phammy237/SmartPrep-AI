@@ -66,6 +66,7 @@ export function ReviewScreen() {
           },
         });
       },
+      onError: () => haptics.error(),
     });
   };
 
@@ -157,6 +158,18 @@ export function ReviewScreen() {
       />
 
       <View style={[styles.footer, { backgroundColor: theme.colors.background, borderTopColor: theme.colors.border }]}>
+        {confirmScan.isError ? (
+          <Text
+            style={[
+              theme.typography.footnote,
+              { color: theme.colors.freshness.prioritize, marginBottom: theme.spacing.sm, textAlign: 'center' },
+            ]}
+          >
+            {confirmScan.error instanceof Error && confirmScan.error.message
+              ? confirmScan.error.message
+              : "Couldn't save your scan. Check your connection and try again."}
+          </Text>
+        ) : null}
         <Button label="Confirm Ingredients" onPress={handleConfirm} loading={confirmScan.isPending} fullWidth />
       </View>
     </Screen>

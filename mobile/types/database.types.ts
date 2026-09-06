@@ -1,5 +1,5 @@
 /**
- * Hand-authored to match supabase/migrations/0001_identity_and_preferences.sql.
+ * Hand-authored to match supabase/migrations/0001-0005.
  *
  * This is a STAND-IN for the real generated file. Once a project is linked,
  * regenerate it for real and this file will be overwritten:
@@ -456,6 +456,98 @@ export interface Database {
         };
         Relationships: [];
       };
+      grocery_lists: {
+        Row: {
+          id: string;
+          user_id: string;
+          title: string;
+          status: 'active' | 'completed' | 'archived';
+          source: 'manual' | 'meal_plan' | 'recipe' | 'pantry_shortage';
+          source_metadata: Json;
+          created_at: string;
+          updated_at: string;
+        };
+        // Created via get_or_create_active_grocery_list() in practice; a plain
+        // insert is still RLS-legal for the owner.
+        Insert: {
+          user_id: string;
+          title?: string;
+          status?: 'active' | 'completed' | 'archived';
+          source?: 'manual' | 'meal_plan' | 'recipe' | 'pantry_shortage';
+          source_metadata?: Json;
+        };
+        Update: {
+          title?: string;
+          status?: 'active' | 'completed' | 'archived';
+          source?: 'manual' | 'meal_plan' | 'recipe' | 'pantry_shortage';
+          source_metadata?: Json;
+        };
+        Relationships: [];
+      };
+      grocery_list_items: {
+        Row: {
+          id: string;
+          grocery_list_id: string;
+          user_id: string;
+          catalog_ingredient_id: string | null;
+          display_name: string;
+          normalized_name: string;
+          image_uri: string;
+          category: 'produce' | 'protein' | 'dairy' | 'pantry' | 'frozen' | 'other' | null;
+          quantity: number;
+          unit: PantryQuantityUnit;
+          quantity_basis: 'as_entered' | 'recipe_requirement' | 'uncovered_shortfall';
+          is_checked: boolean;
+          checked_at: string | null;
+          source: 'manual' | 'recipe' | 'meal_plan' | 'pantry_shortage';
+          source_recipe_version_ids: string[];
+          source_metadata: Json;
+          estimated_price: number | null;
+          swap_suggestion: string | null;
+          waste_note: string | null;
+          sort_order: number;
+          created_at: string;
+          updated_at: string;
+        };
+        // normalized_name / checked_at / sort_order are set by triggers - not
+        // sent by the client.
+        Insert: {
+          grocery_list_id: string;
+          user_id: string;
+          catalog_ingredient_id?: string | null;
+          display_name: string;
+          image_uri?: string;
+          category?: 'produce' | 'protein' | 'dairy' | 'pantry' | 'frozen' | 'other' | null;
+          quantity?: number;
+          unit: PantryQuantityUnit;
+          quantity_basis?: 'as_entered' | 'recipe_requirement' | 'uncovered_shortfall';
+          is_checked?: boolean;
+          source?: 'manual' | 'recipe' | 'meal_plan' | 'pantry_shortage';
+          source_recipe_version_ids?: string[];
+          source_metadata?: Json;
+          estimated_price?: number | null;
+          swap_suggestion?: string | null;
+          waste_note?: string | null;
+          sort_order?: number;
+        };
+        Update: {
+          catalog_ingredient_id?: string | null;
+          display_name?: string;
+          image_uri?: string;
+          category?: 'produce' | 'protein' | 'dairy' | 'pantry' | 'frozen' | 'other' | null;
+          quantity?: number;
+          unit?: PantryQuantityUnit;
+          quantity_basis?: 'as_entered' | 'recipe_requirement' | 'uncovered_shortfall';
+          is_checked?: boolean;
+          source_recipe_version_ids?: string[];
+          source_metadata?: Json;
+          estimated_price?: number | null;
+          swap_suggestion?: string | null;
+          waste_note?: string | null;
+          sort_order?: number;
+        };
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {
@@ -584,6 +676,16 @@ export interface Database {
           p_new_consumed_at: string | null;
         };
         Returns: Json;
+      };
+      get_or_create_active_grocery_list: {
+        Args: Record<string, never>;
+        Returns: Database['public']['Tables']['grocery_lists']['Row'];
+      };
+      toggle_grocery_item: {
+        Args: {
+          p_item_id: string;
+        };
+        Returns: Database['public']['Tables']['grocery_list_items']['Row'];
       };
     };
     Enums: Record<string, never>;

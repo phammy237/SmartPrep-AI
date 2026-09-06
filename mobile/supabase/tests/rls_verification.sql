@@ -1,5 +1,8 @@
--- RLS verification for Phase 1 (profiles, dietary_preferences, nutrition_goals)
--- and Phase 2 (pantry_items, pantry_events).
+-- RLS verification for Phase 1 (profiles, dietary_preferences, nutrition_goals),
+-- Phase 2 (pantry_items, pantry_events), Phase 3 (recipes, recipe_versions,
+-- recipe_ingredients, saved_recipes, meal_plan_items, cooking_events,
+-- cooking_event_ingredients, prepared_meals, meal_logs), and Phase 4 grocery
+-- (grocery_lists, grocery_list_items). Run migrations 0001-0005 first.
 --
 -- Run this in the Supabase SQL editor or via `psql` against your linked
 -- project. It does NOT create test users itself - auth.users rows can only
@@ -219,9 +222,13 @@ begin;
 set local role authenticated;
 select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
 
+-- Named args: the RPC's parameter order is not the app's mental order
+-- (p_display_name comes before p_image_uri), so positional calls here are a
+-- trap. Naming them keeps this file correct regardless of signature order.
 select public.create_pantry_item(
-  'ing-manual-rls-a', 'https://example.com/a.jpg', 'RLS Test Item A', 'pantry', 3, 'item',
-  null, null, null, null, null, null, null, 'unknown', 'manual'
+  p_ingredient_id => 'ing-manual-rls-a', p_display_name => 'RLS Test Item A',
+  p_image_uri => 'https://example.com/a.jpg', p_category => 'pantry',
+  p_quantity => 3, p_unit => 'item', p_expiration_confidence => 'unknown', p_source => 'manual'
 );
 
 commit;
@@ -231,8 +238,9 @@ set local role authenticated;
 select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
 
 select public.create_pantry_item(
-  'ing-manual-rls-b', 'https://example.com/b.jpg', 'RLS Test Item B', 'pantry', 3, 'item',
-  null, null, null, null, null, null, null, 'unknown', 'manual'
+  p_ingredient_id => 'ing-manual-rls-b', p_display_name => 'RLS Test Item B',
+  p_image_uri => 'https://example.com/b.jpg', p_category => 'pantry',
+  p_quantity => 3, p_unit => 'item', p_expiration_confidence => 'unknown', p_source => 'manual'
 );
 
 commit;
@@ -523,8 +531,9 @@ begin
 
   begin
     perform public.create_pantry_item(
-      'ing-anon', 'https://example.com/x.jpg', 'Anon Item', 'other', 1, 'item',
-      null, null, null, null, null, null, null, 'unknown', 'manual'
+      p_ingredient_id => 'ing-anon', p_display_name => 'Anon Item',
+      p_image_uri => 'https://example.com/x.jpg', p_category => 'other',
+      p_quantity => 1, p_unit => 'item', p_expiration_confidence => 'unknown', p_source => 'manual'
     );
     succeeded := true;
   exception
@@ -613,8 +622,9 @@ set local role authenticated;
 select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
 
 select public.create_pantry_item(
-  'ing-manual-rls-pasta', 'https://example.com/pasta.jpg', 'RLS Test Pasta', 'pantry', 500, 'g',
-  null, null, null, null, null, null, null, 'unknown', 'manual'
+  p_ingredient_id => 'ing-manual-rls-pasta', p_display_name => 'RLS Test Pasta',
+  p_image_uri => 'https://example.com/pasta.jpg', p_category => 'pantry',
+  p_quantity => 500, p_unit => 'g', p_expiration_confidence => 'unknown', p_source => 'manual'
 );
 commit;
 
@@ -983,41 +993,46 @@ commit;
 -- in the UI can never even show a foreign item, since it only lists the
 -- caller's own pantry via RLS - this checks the server-side trust boundary
 -- an adversarial client could otherwise try to bypass).
+--
+-- user_b is the attacker; user_a's "RLS Test Pasta" (pantry_item_id) is the
+-- victim row. The victim quantity is snapshotted and re-checked as `postgres`,
+-- NOT as the attacker: an attacker SELECT on the victim row returns zero rows
+-- under RLS, so a before/after comparison done as the attacker is NULL vs NULL
+-- and "passes" even if the row actually changed. The privileged read is
+-- verification only - the attack itself still runs as plain authenticated
+-- user_b with no elevated rights, and no RLS policy or grant is relaxed.
 -- ----------------------------------------------------------------------------
-begin;
-set local role authenticated;
-select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
-
-select public.create_pantry_item(
-  'ing-manual-rls-pasta-b', 'https://example.com/pasta-b.jpg', 'RLS Test Pasta B', 'pantry', 500, 'g',
-  null, null, null, null, null, null, null, 'unknown', 'manual'
-);
-commit;
+create temporary table if not exists rls_test_scratch_p3_num (key text primary key, value numeric);
 
 begin;
 set local role postgres;
-insert into rls_test_scratch_p3 (key, value)
-select 'pantry_item_b_id', id from public.pantry_items where display_name = 'RLS Test Pasta B'
+insert into rls_test_scratch_p3_num (key, value)
+select 'victim_qty_before', quantity from public.pantry_items
+where id = (select value from rls_test_scratch_p3 where key = 'pantry_item_id')
 on conflict (key) do update set value = excluded.value;
+
+do $$
+begin
+  if not exists (select 1 from rls_test_scratch_p3_num where key = 'victim_qty_before' and value is not null) then
+    raise exception 'FAIL: setup - could not read the victim pantry row (pantry_item_id) even as postgres';
+  end if;
+end $$;
 commit;
 
+-- The attack: plain authenticated user_b, no elevated privileges, targets
+-- user_a's real pantry_item_id.
 begin;
 set local role authenticated;
-select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
 
 do $$
 declare
   event_foreign public.cooking_events;
   succeeded boolean := false;
-  b_quantity_before numeric;
-  b_quantity_after numeric;
 begin
-  select quantity into b_quantity_before from public.pantry_items
-  where id = (select value from rls_test_scratch_p3 where key = 'pantry_item_b_id');
-
   event_foreign := public.start_cooking_event(
     (select value from rls_test_scratch_p3 where key = 'recipe_version_id'),
-    null, 2, 'rls-test-cooking-a-foreign'
+    null, 2, 'rls-test-cooking-b-foreign'
   );
 
   begin
@@ -1026,7 +1041,7 @@ begin
       jsonb_build_array(
         jsonb_build_object(
           'recipeIngredientId', (select value from rls_test_scratch_p3 where key = 'pasta_ingredient_id'),
-          'pantryItemId', (select value from rls_test_scratch_p3 where key = 'pantry_item_b_id'),
+          'pantryItemId', (select value from rls_test_scratch_p3 where key = 'pantry_item_id'),
           'requestedQuantity', 200, 'requestedUnit', 'g',
           'deductedQuantity', 200, 'deductedUnit', 'g',
           'matchConfidence', 'exact', 'userConfirmed', true, 'wasSkipped', false
@@ -1037,21 +1052,38 @@ begin
     succeeded := true;
   exception when others then succeeded := false;
   end;
-  if succeeded then raise exception 'FAIL: user_a deducted from user_b''s pantry item by passing its id directly to complete_cooking_event'; end if;
-
-  select quantity into b_quantity_after from public.pantry_items
-  where id = (select value from rls_test_scratch_p3 where key = 'pantry_item_b_id');
-  if b_quantity_after <> b_quantity_before then
-    raise exception 'FAIL: user_b''s pantry quantity changed despite the cross-user deduction being rejected';
-  end if;
+  if succeeded then raise exception 'FAIL: user_b deducted from user_a''s pantry item by passing its id directly to complete_cooking_event'; end if;
 
   if exists (select 1 from public.cooking_events where id = event_foreign.id and status = 'completed') then
     raise exception 'FAIL: the cooking event was marked completed despite the cross-user deduction being rejected';
   end if;
 
   perform public.cancel_cooking_event(event_foreign.id, 'rls test cleanup');
+end $$;
 
-  raise notice 'PASS: a user cannot deduct from another user''s pantry item via complete_cooking_event, even with a real foreign pantry_item_id';
+commit;
+
+-- Verification (as postgres): the victim row must be unchanged from the
+-- privileged "before" snapshot taken above.
+begin;
+set local role postgres;
+do $$
+declare
+  qty_before numeric;
+  qty_after numeric;
+begin
+  select value into qty_before from rls_test_scratch_p3_num where key = 'victim_qty_before';
+  select quantity into qty_after from public.pantry_items
+  where id = (select value from rls_test_scratch_p3 where key = 'pantry_item_id');
+
+  if qty_after is null then
+    raise exception 'FAIL: the victim pantry row (pantry_item_id) disappeared during the cross-user deduction attempt';
+  end if;
+  if qty_after is distinct from qty_before then
+    raise exception 'FAIL: user_a''s pantry quantity changed from % to % despite the cross-user deduction being rejected', qty_before, qty_after;
+  end if;
+
+  raise notice 'PASS: user_b cannot deduct from user_a''s pantry item via complete_cooking_event; victim quantity verified unchanged (%) as postgres', qty_after;
 end $$;
 
 commit;
@@ -1594,8 +1626,279 @@ delete from public.cooking_event_ingredients where user_id in ('TEST_USER_A_ID':
 delete from public.cooking_events where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid);
 delete from public.meal_plan_items where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid);
 delete from public.saved_recipes where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid);
-delete from public.pantry_items where display_name in ('RLS Test Pasta', 'RLS Test Pasta B');
+delete from public.pantry_items where display_name in ('RLS Test Pasta');
 drop table if exists rls_test_scratch_p3;
+drop table if exists rls_test_scratch_p3_num;
+commit;
+
+-- ============================================================================
+-- Phase 4: grocery_lists / grocery_list_items
+--
+-- Same conventions as Phase 2/3: every "should fail" check uses a `succeeded`
+-- flag set inside its own begin/exception block and asserted *outside* it, and
+-- any "the victim row is unchanged" assertion is re-read as `postgres` (never
+-- as the attacker, whose SELECT is empty under RLS). Run migration 0005 first.
+-- ============================================================================
+
+create temporary table if not exists rls_test_scratch_grocery (key text primary key, value uuid);
+
+-- ----------------------------------------------------------------------------
+-- Owner CRUD: user_a resolves their active list, inserts an item, reads it,
+-- toggles it (checked_at trigger), updates it. All succeed; triggers fire.
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+insert into rls_test_scratch_grocery (key, value)
+select 'a_list_id', id from public.get_or_create_active_grocery_list()
+on conflict (key) do update set value = excluded.value;
+
+do $$
+declare
+  a_list_id uuid;
+  a_list_id_again uuid;
+  new_item public.grocery_list_items;
+  toggled public.grocery_list_items;
+  updated_qty numeric;
+begin
+  select value into a_list_id from rls_test_scratch_grocery where key = 'a_list_id';
+  if a_list_id is null then
+    raise exception 'FAIL: get_or_create_active_grocery_list returned no list for user_a';
+  end if;
+
+  -- Idempotent: a second call returns the SAME active list, never a new one.
+  select id into a_list_id_again from public.get_or_create_active_grocery_list();
+  if a_list_id_again <> a_list_id then
+    raise exception 'FAIL: get_or_create_active_grocery_list created a second active list for user_a';
+  end if;
+
+  insert into public.grocery_list_items (grocery_list_id, user_id, display_name, quantity, unit)
+  values (a_list_id, auth.uid(), 'RLS Test Milk', 2, 'container')
+  returning * into new_item;
+
+  if new_item.normalized_name <> 'rls test milk' then
+    raise exception 'FAIL: normalized_name trigger did not fire on grocery item insert (got %)', new_item.normalized_name;
+  end if;
+  if new_item.sort_order <= 0 then
+    raise exception 'FAIL: sort_order trigger did not assign a positive order (got %)', new_item.sort_order;
+  end if;
+  if new_item.checked_at is not null then
+    raise exception 'FAIL: a freshly-inserted unchecked grocery item already has checked_at set';
+  end if;
+
+  if not exists (select 1 from public.grocery_list_items where id = new_item.id) then
+    raise exception 'FAIL: user_a cannot read back their own grocery item';
+  end if;
+
+  toggled := public.toggle_grocery_item(new_item.id);
+  if not toggled.is_checked or toggled.checked_at is null then
+    raise exception 'FAIL: toggle_grocery_item did not check the item / set checked_at';
+  end if;
+  toggled := public.toggle_grocery_item(new_item.id);
+  if toggled.is_checked or toggled.checked_at is not null then
+    raise exception 'FAIL: toggling back did not clear is_checked / checked_at';
+  end if;
+
+  update public.grocery_list_items set quantity = 5, display_name = 'RLS Test Milk 2%' where id = new_item.id;
+  select quantity into updated_qty from public.grocery_list_items where id = new_item.id;
+  if updated_qty <> 5 then
+    raise exception 'FAIL: user_a could not update their own grocery item quantity';
+  end if;
+
+  insert into rls_test_scratch_grocery (key, value) values ('a_item_id', new_item.id)
+  on conflict (key) do update set value = excluded.value;
+
+  raise notice 'PASS: grocery owner CRUD works (get-or-create list is idempotent; insert/read/toggle/update; normalized_name + sort_order + checked_at triggers fire)';
+end $$;
+
+commit;
+
+-- ----------------------------------------------------------------------------
+-- user_b gets their OWN active list + item, distinct from user_a's.
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
+
+insert into rls_test_scratch_grocery (key, value)
+select 'b_list_id', id from public.get_or_create_active_grocery_list()
+on conflict (key) do update set value = excluded.value;
+
+do $$
+declare
+  b_list_id uuid;
+  b_item public.grocery_list_items;
+begin
+  select value into b_list_id from rls_test_scratch_grocery where key = 'b_list_id';
+  insert into public.grocery_list_items (grocery_list_id, user_id, display_name, quantity, unit)
+  values (b_list_id, auth.uid(), 'RLS Test Eggs B', 1, 'container')
+  returning * into b_item;
+  insert into rls_test_scratch_grocery (key, value) values ('b_item_id', b_item.id)
+  on conflict (key) do update set value = excluded.value;
+  raise notice 'PASS: user_b has their own active grocery list and item';
+end $$;
+
+commit;
+
+begin;
+set local role postgres;
+do $$
+begin
+  if (select value from rls_test_scratch_grocery where key = 'a_list_id')
+   = (select value from rls_test_scratch_grocery where key = 'b_list_id') then
+    raise exception 'FAIL: user_a and user_b resolved to the SAME active grocery list';
+  end if;
+  raise notice 'PASS: user_a and user_b have distinct active grocery lists';
+end $$;
+commit;
+
+-- ----------------------------------------------------------------------------
+-- user_a cannot read / insert into / update / toggle / delete user_b's list
+-- or items. The attack runs as plain authenticated user_a.
+-- ----------------------------------------------------------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  b_list_id uuid := (select value from rls_test_scratch_grocery where key = 'b_list_id');
+  b_item_id uuid := (select value from rls_test_scratch_grocery where key = 'b_item_id');
+  leaked int;
+  affected int;
+  succeeded boolean := false;
+begin
+  select count(*) into leaked from public.grocery_lists where id = b_list_id;
+  if leaked <> 0 then raise exception 'FAIL: user_a can see user_b''s grocery_lists row'; end if;
+
+  select count(*) into leaked from public.grocery_list_items where id = b_item_id;
+  if leaked <> 0 then raise exception 'FAIL: user_a can see user_b''s grocery_list_items row'; end if;
+
+  select count(*) into leaked from public.grocery_list_items where grocery_list_id = b_list_id;
+  if leaked <> 0 then raise exception 'FAIL: user_a can see items in user_b''s list'; end if;
+
+  -- insert into user_b's list, with user_a's own user_id
+  begin
+    insert into public.grocery_list_items (grocery_list_id, user_id, display_name, quantity, unit)
+    values (b_list_id, auth.uid(), 'Hijack A into B list', 1, 'item');
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: user_a inserted an item into user_b''s grocery list (own user_id)'; end if;
+
+  -- insert into user_b's list while spoofing user_b's user_id
+  succeeded := false;
+  begin
+    insert into public.grocery_list_items (grocery_list_id, user_id, display_name, quantity, unit)
+    values (b_list_id, 'TEST_USER_B_ID'::uuid, 'Hijack spoofing user_b', 1, 'item');
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: user_a inserted an item into user_b''s list by spoofing user_b''s user_id'; end if;
+
+  -- update user_b's item
+  update public.grocery_list_items set quantity = 999 where id = b_item_id;
+  get diagnostics affected = row_count;
+  if affected <> 0 then raise exception 'FAIL: user_a updated user_b''s grocery item'; end if;
+
+  -- check (toggle) user_b's item via the RPC
+  succeeded := false;
+  begin
+    perform public.toggle_grocery_item(b_item_id);
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: user_a toggled user_b''s grocery item via toggle_grocery_item'; end if;
+
+  -- delete user_b's item
+  delete from public.grocery_list_items where id = b_item_id;
+  get diagnostics affected = row_count;
+  if affected <> 0 then raise exception 'FAIL: user_a deleted user_b''s grocery item'; end if;
+
+  -- delete user_b's list
+  delete from public.grocery_lists where id = b_list_id;
+  get diagnostics affected = row_count;
+  if affected <> 0 then raise exception 'FAIL: user_a deleted user_b''s grocery list'; end if;
+
+  raise notice 'PASS: user_a cannot read, insert into, update, toggle, or delete user_b''s grocery list/items';
+end $$;
+
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Verification (as postgres): user_b's item must be byte-for-byte unchanged
+-- after all of user_a's attempts above.
+-- ----------------------------------------------------------------------------
+begin;
+set local role postgres;
+do $$
+declare
+  q numeric;
+  c boolean;
+  n text;
+begin
+  select quantity, is_checked, display_name into q, c, n
+  from public.grocery_list_items
+  where id = (select value from rls_test_scratch_grocery where key = 'b_item_id');
+
+  if not found then
+    raise exception 'FAIL: user_b''s grocery item disappeared during user_a''s cross-user attempts';
+  end if;
+  if q <> 1 or c or n <> 'RLS Test Eggs B' then
+    raise exception 'FAIL: user_b''s grocery item changed (qty=%, checked=%, name=%) despite the cross-user attempts being rejected', q, c, n;
+  end if;
+  raise notice 'PASS: user_b''s grocery item verified unchanged as postgres';
+end $$;
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Anonymous requests cannot read the grocery tables or make anything happen
+-- through the grocery functions.
+-- ----------------------------------------------------------------------------
+begin;
+set local role anon;
+select set_config('request.jwt.claims', '', true);
+
+do $$
+declare
+  total int;
+  succeeded boolean := false;
+begin
+  select count(*) into total from public.grocery_lists;
+  if total <> 0 then raise exception 'FAIL: anon can read grocery_lists (% rows)', total; end if;
+
+  select count(*) into total from public.grocery_list_items;
+  if total <> 0 then raise exception 'FAIL: anon can read grocery_list_items (% rows)', total; end if;
+
+  begin
+    perform public.get_or_create_active_grocery_list();
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: anon successfully called get_or_create_active_grocery_list'; end if;
+
+  succeeded := false;
+  begin
+    perform public.toggle_grocery_item((select value from rls_test_scratch_grocery where key = 'b_item_id'));
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: anon successfully toggled a grocery item'; end if;
+
+  raise notice 'PASS: anonymous role cannot read the grocery tables or drive the grocery functions';
+end $$;
+
+commit;
+
+-- ----------------------------------------------------------------------------
+-- Grocery cleanup.
+-- ----------------------------------------------------------------------------
+begin;
+set local role postgres;
+delete from public.grocery_list_items where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid);
+delete from public.grocery_lists where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid);
+drop table if exists rls_test_scratch_grocery;
 commit;
 
 do $$

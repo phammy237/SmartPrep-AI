@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { groceryService, ManualGroceryItemInput } from '@/services';
+import { groceryService, ManualGroceryItemInput, UpdateGroceryItemInput } from '@/services';
 import { RecipeIngredient } from '@/types';
 import { queryKeys } from './queryKeys';
 
@@ -29,10 +29,27 @@ export function useAddGroceryItem() {
   });
 }
 
+export function useUpdateGroceryItem() {
+  const invalidate = useInvalidateGroceryList();
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: UpdateGroceryItemInput }) =>
+      groceryService.updateGroceryItem(id, patch),
+    onSuccess: invalidate,
+  });
+}
+
 export function useRemoveGroceryItem() {
   const invalidate = useInvalidateGroceryList();
   return useMutation({
     mutationFn: (id: string) => groceryService.removeGroceryItem(id),
+    onSuccess: invalidate,
+  });
+}
+
+export function useClearCheckedGroceryItems() {
+  const invalidate = useInvalidateGroceryList();
+  return useMutation({
+    mutationFn: () => groceryService.clearCheckedItems(),
     onSuccess: invalidate,
   });
 }

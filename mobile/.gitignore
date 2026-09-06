@@ -33,6 +33,13 @@ yarn-error.*
 .env
 .env*.local
 
+# Supabase CLI (config.toml IS committed; these are per-machine / generated)
+supabase/.temp/
+supabase/.branches/
+supabase/logs/
+supabase/functions/**/.env
+**/supabase/.temp/
+
 # typescript
 *.tsbuildinfo
 
