@@ -7,6 +7,7 @@ import { Button, Card, EmptyState, LoadingState, Screen } from '@/components';
 import {
   useAddGroceryItem,
   useClearCheckedGroceryItems,
+  useCompleteShoppingTrip,
   useGroceryList,
   useRemoveGroceryItem,
   useToggleGroceryItem,
@@ -40,6 +41,7 @@ export function GroceryScreen() {
   const add = useAddGroceryItem();
   const clearChecked = useClearCheckedGroceryItems();
   const transferToPantry = useTransferGroceryItemsToPantry();
+  const completeTrip = useCompleteShoppingTrip();
   const [showAdd, setShowAdd] = useState(false);
   const [showTransfer, setShowTransfer] = useState(false);
   const [collapsedCategories, setCollapsedCategories] = useState<Set<IngredientCategory>>(new Set());
@@ -81,6 +83,38 @@ export function GroceryScreen() {
 
   // Checked items the user hasn't put in the pantry (and might not want to).
   const untransferredCheckedCount = transferCandidates.length;
+  const itemCount = listQuery.data?.items.length ?? 0;
+
+  const runComplete = () => {
+    completeTrip.mutate(undefined, {
+      onSuccess: (result) => {
+        Alert.alert(
+          'Shopping trip completed',
+          `Saved ${result.completed.itemCount} item${result.completed.itemCount === 1 ? '' : 's'} to your history. Started a fresh grocery list.`,
+        );
+      },
+      onError: () => Alert.alert("Couldn't complete trip", 'Something went wrong. Please try again.'),
+    });
+  };
+
+  const handleCompleteTrip = () => {
+    if (untransferredCheckedCount > 0) {
+      Alert.alert(
+        'Complete this trip?',
+        `${untransferredCheckedCount} purchased item${untransferredCheckedCount === 1 ? " hasn't" : "s haven't"} been added to Pantry. They'll stay in this completed trip's history.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Review', onPress: () => setShowTransfer(true) },
+          { text: 'Complete Anyway', style: 'destructive', onPress: runComplete },
+        ],
+      );
+      return;
+    }
+    Alert.alert('Complete this trip?', 'Your current list becomes history and a fresh list is started.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Complete', onPress: runComplete },
+    ]);
+  };
 
   const toggleCategoryCollapsed = (category: IngredientCategory) => {
     setCollapsedCategories((prev) => {
@@ -95,9 +129,19 @@ export function GroceryScreen() {
     <Screen scroll header edges={['top', 'left', 'right']} contentContainerStyle={{ padding: theme.spacing.lg, paddingTop: theme.spacing.xs, gap: theme.spacing.lg }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
         <Text style={[theme.typography.largeTitle, { color: theme.colors.textPrimary }]}>Grocery List</Text>
-        <Pressable onPress={() => router.back()} accessibilityRole="button" accessibilityLabel="Close" hitSlop={8}>
-          <Ionicons name="chevron-back" size={26} color={theme.colors.textPrimary} />
-        </Pressable>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.spacing.md }}>
+          <Pressable
+            onPress={() => router.push('/grocery/history')}
+            accessibilityRole="button"
+            accessibilityLabel="Shopping history"
+            hitSlop={8}
+          >
+            <Ionicons name="time-outline" size={22} color={theme.colors.textSecondary} />
+          </Pressable>
+          <Pressable onPress={() => router.back()} accessibilityRole="button" accessibilityLabel="Close" hitSlop={8}>
+            <Ionicons name="chevron-back" size={26} color={theme.colors.textPrimary} />
+          </Pressable>
+        </View>
       </View>
 
       {listQuery.isLoading ? (
@@ -173,6 +217,16 @@ export function GroceryScreen() {
               label={`Add Purchased Items to Pantry (${transferCandidates.length})`}
               variant="secondary"
               onPress={() => setShowTransfer(true)}
+              fullWidth
+            />
+          ) : null}
+
+          {itemCount > 0 ? (
+            <Button
+              label="Complete Shopping Trip"
+              variant="primary"
+              loading={completeTrip.isPending}
+              onPress={handleCompleteTrip}
               fullWidth
             />
           ) : null}

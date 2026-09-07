@@ -1,5 +1,5 @@
 /**
- * Hand-authored to match supabase/migrations/0001-0009. STILL A STAND-IN -
+ * Hand-authored to match supabase/migrations/0001-0010. STILL A STAND-IN -
  * regenerate from a live project once linked:
  *   npx supabase gen types typescript --linked > types/database.types.ts
  *
@@ -524,6 +524,8 @@ export interface Database {
           status: 'active' | 'completed' | 'archived';
           source: 'manual' | 'meal_plan' | 'recipe' | 'pantry_shortage';
           source_metadata: Json;
+          // Set when the shopping trip is completed; null while active. See migration 0010.
+          completed_at: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -536,11 +538,11 @@ export interface Database {
           source?: 'manual' | 'meal_plan' | 'recipe' | 'pantry_shortage';
           source_metadata?: Json;
         };
+        // 0010 revoked the blanket UPDATE grant: a client may only rename its
+        // own ACTIVE list. status / completed_at move exclusively through
+        // complete_grocery_list, and completed rows are frozen by a trigger.
         Update: {
           title?: string;
-          status?: 'active' | 'completed' | 'archived';
-          source?: 'manual' | 'meal_plan' | 'recipe' | 'pantry_shortage';
-          source_metadata?: Json;
         };
         Relationships: [];
       };
@@ -860,6 +862,13 @@ export interface Database {
           p_item_id: string;
         };
         Returns: Database['public']['Tables']['grocery_list_items']['Row'];
+      };
+      complete_grocery_list: {
+        Args: {
+          p_list_id: string;
+        };
+        // { completedList: grocery_lists Row; activeList: grocery_lists Row }
+        Returns: Json;
       };
       get_kitchen_impact_summary: {
         Args: {

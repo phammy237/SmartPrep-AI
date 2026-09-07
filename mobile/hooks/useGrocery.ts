@@ -79,3 +79,34 @@ export function useTransferGroceryItemsToPantry() {
     },
   });
 }
+
+/** Completed shopping trips, newest first. */
+export function useGroceryHistory() {
+  return useQuery({ queryKey: queryKeys.groceryHistory, queryFn: groceryService.getGroceryHistory });
+}
+
+/** One completed trip with its read-only item list. */
+export function useGroceryTrip(tripId: string) {
+  return useQuery({
+    queryKey: queryKeys.groceryTrip(tripId),
+    queryFn: () => groceryService.getGroceryTrip(tripId),
+    enabled: !!tripId,
+  });
+}
+
+/**
+ * Completes the current shopping trip (active list -> frozen history + fresh
+ * active list). Retry-safe. Invalidates the active list and history; does NOT
+ * invalidate the pantry - completing a trip never transfers anything (that is
+ * a separate, explicit action).
+ */
+export function useCompleteShoppingTrip() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => groceryService.completeShoppingTrip(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.groceryList });
+      queryClient.invalidateQueries({ queryKey: queryKeys.groceryHistory });
+    },
+  });
+}

@@ -4,11 +4,14 @@ import { PlanWeekGroceryDemand } from '@/lib/nutrition/planDemand';
 import { normalizeUnit } from '@/lib/nutrition/units';
 import {
   InsertGroceryItemParams,
+  completeGroceryList,
   deleteCheckedGroceryListItems,
   deleteGroceryListItem,
   deletePlanGeneratedGroceryItems,
   fetchActiveGroceryList,
+  fetchGroceryHistory,
   fetchGroceryListItems,
+  fetchGroceryTrip,
   fetchOrCreateActiveGroceryList,
   insertGroceryListItem,
   insertGroceryListItems,
@@ -16,7 +19,14 @@ import {
   updateGroceryListItem,
 } from '@/lib/supabase/repositories';
 import { AddGroceryItemInput, UpdateGroceryItemInput, addGroceryItemSchema, updateGroceryItemSchema } from '@/lib/validation/grocerySchemas';
-import { GroceryList, GroceryListItem, QuantityUnit } from '@/types';
+import {
+  CompleteShoppingTripResult,
+  GroceryList,
+  GroceryListItem,
+  GroceryTripDetail,
+  GroceryTripSummary,
+  QuantityUnit,
+} from '@/types';
 import { ingredientPhotoUri } from '@/utils/ingredientPhoto';
 import { nutritionService } from './nutritionService';
 import type { RecipeShortfall } from './recipeService';
@@ -296,6 +306,55 @@ async function applyPlanGroceryDemand(plan: PlanWeekGroceryDemand): Promise<Appl
   };
 }
 
+// --- Shopping-trip lifecycle (Phase 8) -----------------------------------
+
+/** Completed shopping trips, newest first. */
+async function getGroceryHistory(): Promise<GroceryTripSummary[]> {
+  await requireUserId();
+  return fetchGroceryHistory();
+}
+
+/** One completed trip with its read-only item list, or null if not found / not owned / still active. */
+async function getGroceryTrip(tripId: string): Promise<GroceryTripDetail | null> {
+  await requireUserId();
+  return fetchGroceryTrip(tripId);
+}
+
+/**
+ * Finishes the current shopping trip: the active list becomes a frozen
+ * COMPLETED trip and a fresh empty active list is created - one atomic
+ * server-side operation (`complete_grocery_list`). Retry-safe: a repeat call
+ * returns the same completed trip and the current active list without creating
+ * a second list or changing `completed_at`.
+ *
+ * Unchecked items stay in the completed trip exactly as they were - they are
+ * NOT carried into the new list. Checked-but-not-transferred purchases are the
+ * caller's decision (the screen warns before calling this); completion never
+ * forces a pantry transfer and never touches the pantry.
+ */
+async function completeShoppingTrip(): Promise<CompleteShoppingTripResult> {
+  await requireUserId();
+  // Resolve the active list AND its items in one shot - we need the items to
+  // report accurate counts for the just-completed trip without another round trip.
+  const activeBefore = await fetchActiveGroceryList();
+  const { completed, active } = await completeGroceryList(activeBefore.id);
+
+  const items = activeBefore.items;
+  return {
+    completed: {
+      id: completed.id,
+      status: completed.status,
+      createdAt: completed.createdAt,
+      completedAt: completed.completedAt ?? activeBefore.createdAt,
+      itemCount: items.length,
+      acquiredCount: items.filter((i) => i.isChecked).length,
+      transferredCount: items.filter((i) => i.pantryTransferStatus === 'transferred').length,
+      itemPreview: items.slice(0, 4).map((i) => i.name),
+    },
+    active: { id: active.id, createdAt: active.createdAt, items: [] },
+  };
+}
+
 /**
  * Grocery <-> pantry boundary: checking a grocery item means "acquired /
  * done", NOT "now in my pantry". Nothing in THIS service reads or writes
@@ -313,4 +372,7 @@ export const groceryService = {
   clearCheckedItems,
   addRecipeShortfallsToGroceryList,
   applyPlanGroceryDemand,
+  getGroceryHistory,
+  getGroceryTrip,
+  completeShoppingTrip,
 };

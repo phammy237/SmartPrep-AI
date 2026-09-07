@@ -48,3 +48,37 @@ export interface GroceryList {
   createdAt: string;
   items: GroceryListItem[];
 }
+
+// ---------------------------------------------------------------------------
+// Shopping-trip lifecycle (Phase 8). A grocery_lists row moves active ->
+// completed; the completed list + its items ARE the history.
+// ---------------------------------------------------------------------------
+
+export type GroceryListStatus = 'active' | 'completed' | 'archived';
+
+/** One row in Shopping History. Counts are derived, not stored. */
+export interface GroceryTripSummary {
+  id: string;
+  status: GroceryListStatus;
+  createdAt: string;
+  /** Completed trips always have this. */
+  completedAt: string;
+  itemCount: number;
+  /** is_checked = acquired. */
+  acquiredCount: number;
+  /** Lines that were turned into pantry lots. */
+  transferredCount: number;
+  /** First few item names, for a list preview. */
+  itemPreview: string[];
+}
+
+/** A completed trip opened in read-only detail. */
+export interface GroceryTripDetail extends GroceryTripSummary {
+  items: GroceryListItem[];
+}
+
+/** What `completeShoppingTrip()` returns: the frozen trip + the fresh active list. */
+export interface CompleteShoppingTripResult {
+  completed: GroceryTripSummary;
+  active: GroceryList;
+}

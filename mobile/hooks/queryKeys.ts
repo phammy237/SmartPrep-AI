@@ -14,6 +14,8 @@ export const queryKeys = {
   preparedMeals: ['preparedMeals'] as const,
   mealLogs: (startDate: string, endDate: string) => ['mealLogs', startDate, endDate] as const,
   groceryList: ['groceryList'] as const,
+  groceryHistory: ['groceryHistory'] as const,
+  groceryTrip: (id: string) => ['groceryHistory', id] as const,
   scanHistory: ['scans', 'history'] as const,
   scanDetail: (id: string) => ['scans', 'history', id] as const,
   user: ['user'] as const,

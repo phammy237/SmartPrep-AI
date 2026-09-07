@@ -8,9 +8,11 @@
 -- canonical_ingredient_nutrition, user_ingredient_overrides), Phase 6
 -- scan history (scans, scan_sections, scan_detections + the idempotent
 -- begin/link/finalize confirmation RPCs and pantry_items.source_scan_detection_id),
--- and Phase 7 grocery->pantry transfer (transfer_grocery_item_to_pantry +
--- pantry_items.source_grocery_item_id + grocery_list_items transfer state).
--- Run migrations 0001-0009 first.
+-- Phase 7 grocery->pantry transfer (transfer_grocery_item_to_pantry +
+-- pantry_items.source_grocery_item_id + grocery_list_items transfer state),
+-- and Phase 8 grocery shopping-trip lifecycle (complete_grocery_list +
+-- grocery_lists.completed_at + completed-trip immutability triggers).
+-- Run migrations 0001-0010 first.
 --
 -- Run this in the Supabase SQL editor or via `psql` against your linked
 -- project. It does NOT create test users itself - auth.users rows can only
@@ -2832,6 +2834,277 @@ delete from public.pantry_events where pantry_item_id in (
 delete from public.pantry_items where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid) and source_grocery_item_id is not null;
 delete from public.grocery_list_items where display_name in ('rls-transfer-eggs', 'rls-transfer-unchecked');
 drop table if exists _rls_gi_a;
+commit;
+
+-- ============================================================================
+-- Phase 8: grocery shopping-trip lifecycle (complete_grocery_list,
+-- grocery_lists.completed_at, and the completed-trip immutability triggers).
+-- ============================================================================
+
+-- --- user_a stocks an active list and completes the trip -----------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  v_active_before uuid;
+begin
+  v_active_before := (public.get_or_create_active_grocery_list()).id;
+
+  insert into public.grocery_list_items (grocery_list_id, user_id, display_name, category, quantity, unit, source, is_checked)
+  values
+    (v_active_before, 'TEST_USER_A_ID'::uuid, 'rls-trip-milk',  'dairy',   1, 'container', 'manual',    true),
+    (v_active_before, 'TEST_USER_A_ID'::uuid, 'rls-trip-eggs',  'protein', 1, 'package',   'meal_plan', true),
+    (v_active_before, 'TEST_USER_A_ID'::uuid, 'rls-trip-kale',  'produce', 1, 'bag',       'manual',    false);
+end $$;
+commit;
+
+-- Stash the before-active id (as postgres, RLS-free).
+begin;
+set local role postgres;
+drop table if exists _rls_trip_a;
+create temp table _rls_trip_a as
+  select
+    (select id from public.grocery_lists where user_id = 'TEST_USER_A_ID'::uuid and status = 'active' order by created_at asc limit 1) as before_active_id,
+    null::uuid as completed_id,
+    null::uuid as new_active_id,
+    null::uuid as completed_item_id,
+    null::timestamptz as completed_at;
+commit;
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  v_before uuid;
+  v_result jsonb;
+  v_completed_id uuid;
+  v_new_active_id uuid;
+  v_completed_at timestamptz;
+  v_active_count int;
+  v_items int;
+  v_checked int;
+  v_status text;
+  v_affected int;
+  succeeded boolean := false;
+begin
+  select before_active_id into v_before from _rls_trip_a;
+
+  -- 1. complete the trip.
+  v_result := public.complete_grocery_list(v_before);
+  v_completed_id := (v_result -> 'completedList' ->> 'id')::uuid;
+  v_new_active_id := (v_result -> 'activeList' ->> 'id')::uuid;
+  v_completed_at := (v_result -> 'completedList' ->> 'completed_at')::timestamptz;
+
+  if v_completed_id <> v_before then raise exception 'FAIL: completed list id changed'; end if;
+  if (v_result -> 'completedList' ->> 'status') <> 'completed' then raise exception 'FAIL: trip not marked completed'; end if;
+  if v_completed_at is null then raise exception 'FAIL: completed_at not set'; end if;
+  if v_new_active_id = v_before then raise exception 'FAIL: no fresh active list was created'; end if;
+  if (v_result -> 'activeList' ->> 'status') <> 'active' then raise exception 'FAIL: replacement list is not active'; end if;
+
+  select count(*) into v_active_count from public.grocery_lists where user_id = 'TEST_USER_A_ID'::uuid and status = 'active';
+  if v_active_count <> 1 then raise exception 'FAIL: user_a has % active lists after completion (expected 1)', v_active_count; end if;
+
+  select count(*) into v_items from public.grocery_list_items where grocery_list_id = v_new_active_id;
+  if v_items <> 0 then raise exception 'FAIL: replacement active list is not empty (% items)', v_items; end if;
+
+  select count(*), count(*) filter (where is_checked) into v_items, v_checked
+  from public.grocery_list_items where grocery_list_id = v_completed_id;
+  if v_items <> 3 or v_checked <> 2 then raise exception 'FAIL: completed trip items changed (% items, % checked)', v_items, v_checked; end if;
+
+  -- 2. retry: same completed row, completed_at unchanged, still exactly one active list.
+  v_result := public.complete_grocery_list(v_before);
+  if (v_result -> 'completedList' ->> 'id')::uuid <> v_completed_id then raise exception 'FAIL: retry returned a different completed list'; end if;
+  if (v_result -> 'completedList' ->> 'completed_at')::timestamptz <> v_completed_at then raise exception 'FAIL: retry changed completed_at'; end if;
+  if (v_result -> 'activeList' ->> 'id')::uuid <> v_new_active_id then raise exception 'FAIL: retry created a different active list'; end if;
+  select count(*) into v_active_count from public.grocery_lists where user_id = 'TEST_USER_A_ID'::uuid and status = 'active';
+  if v_active_count <> 1 then raise exception 'FAIL: retry left user_a with % active lists', v_active_count; end if;
+
+  -- 3. completed-trip immutability (server-side): every item mutation is rejected.
+  begin
+    insert into public.grocery_list_items (grocery_list_id, user_id, display_name, quantity, unit)
+      values (v_completed_id, 'TEST_USER_A_ID'::uuid, 'rls-trip-sneak', 1, 'item');
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: inserted an item into a completed trip'; end if;
+
+  begin
+    update public.grocery_list_items set quantity = 99 where grocery_list_id = v_completed_id;
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: edited an item in a completed trip'; end if;
+
+  begin
+    perform public.toggle_grocery_item((select id from public.grocery_list_items where grocery_list_id = v_completed_id limit 1));
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: toggled an item in a completed trip'; end if;
+
+  begin
+    delete from public.grocery_list_items where grocery_list_id = v_completed_id;
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: cleared items from a completed trip'; end if;
+
+  -- future recipe / meal-plan reconciliation shape must not touch history
+  -- (rls-trip-eggs is a source = 'meal_plan' row in the completed trip).
+  begin
+    delete from public.grocery_list_items where grocery_list_id = v_completed_id and source = 'meal_plan';
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: meal-plan reconciliation altered a historical trip'; end if;
+
+  -- 4. the grocery_lists row itself is frozen.
+  begin
+    update public.grocery_lists set title = 'renamed' where id = v_completed_id;
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: renamed a completed trip'; end if;
+
+  begin
+    update public.grocery_lists set status = 'archived' where id = v_completed_id;
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: changed the status of a completed trip'; end if;
+
+  -- 5. a client cannot self-complete a list by writing status directly
+  --    (the column grant was revoked - only complete_grocery_list may).
+  begin
+    update public.grocery_lists set status = 'completed' where id = v_new_active_id;
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then
+    -- if it somehow applied, at least it must not have stranded the user
+    select count(*) into v_active_count from public.grocery_lists where user_id = 'TEST_USER_A_ID'::uuid and status = 'active';
+    if v_active_count = 0 then raise exception 'FAIL: client self-completed a list and lost its active list'; end if;
+  end if;
+
+  raise notice 'PASS: user_a completes a trip atomically, idempotently; the completed trip is immutable';
+end $$;
+commit;
+
+-- Stash the completed / new-active ids for the cross-user + anon checks.
+begin;
+set local role postgres;
+update _rls_trip_a set
+  completed_id = before_active_id,
+  new_active_id = (select id from public.grocery_lists where user_id = 'TEST_USER_A_ID'::uuid and status = 'active' order by created_at asc limit 1),
+  completed_item_id = (select id from public.grocery_list_items where display_name = 'rls-trip-milk'),
+  completed_at = (select completed_at from public.grocery_lists where id = before_active_id);
+commit;
+
+-- --- user_b cannot complete or read user_a's trip ------------------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  v_completed uuid;
+  v_item uuid;
+  leaked int;
+  affected int;
+  succeeded boolean := false;
+begin
+  select completed_id, completed_item_id into v_completed, v_item from _rls_trip_a;
+
+  begin
+    perform public.complete_grocery_list(v_completed);
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: user_b completed user_a''s grocery list'; end if;
+
+  select count(*) into leaked from public.grocery_lists where id = v_completed;
+  if leaked <> 0 then raise exception 'FAIL: user_b can see user_a''s completed trip'; end if;
+
+  select count(*) into leaked from public.grocery_list_items where grocery_list_id = v_completed;
+  if leaked <> 0 then raise exception 'FAIL: user_b can see user_a''s historical trip items'; end if;
+
+  update public.grocery_list_items set is_checked = false where id = v_item;
+  get diagnostics affected = row_count;
+  if affected <> 0 then raise exception 'FAIL: user_b altered user_a''s historical trip item'; end if;
+
+  raise notice 'PASS: user_b cannot complete, read, or alter user_a''s shopping trip';
+end $$;
+commit;
+
+-- --- anonymous cannot complete or read trips ---------------------------------
+begin;
+set local role anon;
+select set_config('request.jwt.claims', '', true);
+
+do $$
+declare
+  v_completed uuid;
+  n int;
+  succeeded boolean := false;
+begin
+  select completed_id into v_completed from _rls_trip_a;
+
+  begin
+    perform public.complete_grocery_list(v_completed);
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: anon completed a grocery list'; end if;
+
+  begin
+    select count(*) into n from public.grocery_lists where status = 'completed';
+    if n <> 0 then raise exception 'FAIL: anon can read completed grocery lists (% rows)', n; end if;
+  exception when insufficient_privilege then null;
+  end;
+
+  raise notice 'PASS: anonymous role cannot complete or read shopping trips';
+end $$;
+commit;
+
+-- Verify (as postgres) the trip is still frozen and user_a has one active list.
+begin;
+set local role postgres;
+do $$
+declare
+  v_status text;
+  v_at timestamptz;
+  v_active int;
+  v_items int;
+begin
+  select status, completed_at into v_status, v_at
+  from public.grocery_lists where id = (select completed_id from _rls_trip_a);
+  if v_status <> 'completed' then raise exception 'FAIL: trip status changed to % after other-user attempts', v_status; end if;
+  if v_at <> (select completed_at from _rls_trip_a) then raise exception 'FAIL: completed_at changed after other-user attempts'; end if;
+
+  select count(*) into v_active from public.grocery_lists where user_id = 'TEST_USER_A_ID'::uuid and status = 'active';
+  if v_active <> 1 then raise exception 'FAIL: user_a has % active lists (expected 1)', v_active; end if;
+
+  select count(*) into v_items from public.grocery_list_items where grocery_list_id = (select completed_id from _rls_trip_a);
+  if v_items <> 3 then raise exception 'FAIL: completed trip has % items (expected 3)', v_items; end if;
+
+  raise notice 'PASS: shopping trip verified frozen + single active list as postgres';
+end $$;
+commit;
+
+-- --- Phase 8 cleanup -----------------------------------------------------
+begin;
+set local role postgres;
+delete from public.grocery_list_items where display_name like 'rls-trip-%';
+delete from public.grocery_lists where id in (
+  select completed_id from _rls_trip_a
+  union all
+  select new_active_id from _rls_trip_a
+);
+drop table if exists _rls_trip_a;
 commit;
 
 do $$

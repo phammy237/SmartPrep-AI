@@ -26,6 +26,9 @@ jest.mock('@/lib/supabase/repositories', () => ({
   deleteGroceryListItem: jest.fn(),
   deleteCheckedGroceryListItems: jest.fn(),
   deletePlanGeneratedGroceryItems: jest.fn(),
+  completeGroceryList: jest.fn(),
+  fetchGroceryHistory: jest.fn(),
+  fetchGroceryTrip: jest.fn(),
 }));
 
 const repo = repositories as jest.Mocked<typeof repositories>;
@@ -512,5 +515,116 @@ describe('applyPlanGroceryDemand - persistence, provenance, reconciliation', () 
       { ingredientId: 'ing-chicken-breast', contributions: [{ recipeVersionId: 'rv-A', quantity: 300, unit: 'g' }] },
     ]);
     await expect(groceryService.applyPlanGroceryDemand(plan)).rejects.toThrow('rls');
+  });
+});
+
+describe('shopping-trip lifecycle', () => {
+  const TRIP = {
+    id: 'trip-1',
+    status: 'completed' as const,
+    createdAt: '2026-09-01T00:00:00.000Z',
+    completedAt: '2026-09-06T18:00:00.000Z',
+  };
+
+  beforeEach(() => {
+    repo.completeGroceryList.mockResolvedValue({
+      completed: TRIP,
+      active: { id: 'list-2', createdAt: '2026-09-07T00:00:00.000Z' },
+    });
+  });
+
+  describe('getGroceryHistory', () => {
+    it('requires auth and delegates to the repository', async () => {
+      const rows = [{ id: 'trip-1', itemCount: 3 }];
+      repo.fetchGroceryHistory.mockResolvedValue(rows as never);
+      await expect(groceryService.getGroceryHistory()).resolves.toBe(rows);
+      expect(repo.fetchGroceryHistory).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects when signed out and never queries', async () => {
+      getUser.mockResolvedValue({ data: { user: null }, error: null });
+      await expect(groceryService.getGroceryHistory()).rejects.toThrow('Not signed in');
+      expect(repo.fetchGroceryHistory).not.toHaveBeenCalled();
+    });
+
+    it('propagates a repository failure', async () => {
+      repo.fetchGroceryHistory.mockRejectedValue(new Error('rls'));
+      await expect(groceryService.getGroceryHistory()).rejects.toThrow('rls');
+    });
+  });
+
+  describe('getGroceryTrip', () => {
+    it('delegates with the trip id', async () => {
+      repo.fetchGroceryTrip.mockResolvedValue({ id: 'trip-1', items: [] } as never);
+      await groceryService.getGroceryTrip('trip-1');
+      expect(repo.fetchGroceryTrip).toHaveBeenCalledWith('trip-1');
+    });
+
+    it('passes through a null (unknown / not owned / active) result', async () => {
+      repo.fetchGroceryTrip.mockResolvedValue(null);
+      await expect(groceryService.getGroceryTrip('x')).resolves.toBeNull();
+    });
+
+    it('requires auth', async () => {
+      getUser.mockResolvedValue({ data: { user: null }, error: null });
+      await expect(groceryService.getGroceryTrip('trip-1')).rejects.toThrow('Not signed in');
+    });
+  });
+
+  describe('completeShoppingTrip', () => {
+    it('resolves the active list, calls the RPC wrapper with its id, and returns trip + fresh list', async () => {
+      repo.fetchActiveGroceryList.mockResolvedValue({
+        id: 'list-1',
+        createdAt: LIST.createdAt,
+        items: [
+          item({ isChecked: true, pantryTransferStatus: 'transferred' }),
+          item({ isChecked: true, pantryTransferStatus: 'not_transferred' }),
+          item({ isChecked: false }),
+        ],
+      });
+
+      const result = await groceryService.completeShoppingTrip();
+
+      expect(repo.completeGroceryList).toHaveBeenCalledWith('list-1');
+      expect(result.completed).toMatchObject({
+        id: 'trip-1',
+        completedAt: '2026-09-06T18:00:00.000Z',
+        itemCount: 3,
+        acquiredCount: 2,
+        transferredCount: 1,
+      });
+      expect(result.active).toEqual({ id: 'list-2', createdAt: '2026-09-07T00:00:00.000Z', items: [] });
+    });
+
+    it('is retry-safe: an already-completed list returns the same trip with an unchanged completed_at', async () => {
+      repo.fetchActiveGroceryList.mockResolvedValue({ id: 'list-1', createdAt: LIST.createdAt, items: [] });
+      // RPC wrapper returns the SAME completed row + the current active list on a replay
+      repo.completeGroceryList.mockResolvedValue({
+        completed: TRIP,
+        active: { id: 'list-2', createdAt: '2026-09-07T00:00:00.000Z' },
+      });
+
+      const first = await groceryService.completeShoppingTrip();
+      const second = await groceryService.completeShoppingTrip();
+
+      expect(first.completed.completedAt).toBe('2026-09-06T18:00:00.000Z');
+      expect(second.completed.completedAt).toBe(first.completed.completedAt);
+      expect(repo.completeGroceryList).toHaveBeenCalledTimes(2);
+      // never a second list-creation path in the service - the RPC owns that
+      expect(repo.fetchOrCreateActiveGroceryList).not.toHaveBeenCalled();
+    });
+
+    it('requires auth and never touches the repository', async () => {
+      getUser.mockResolvedValue({ data: { user: null }, error: null });
+      await expect(groceryService.completeShoppingTrip()).rejects.toThrow('Not signed in');
+      expect(repo.fetchActiveGroceryList).not.toHaveBeenCalled();
+      expect(repo.completeGroceryList).not.toHaveBeenCalled();
+    });
+
+    it('propagates an RPC failure (cross-user / archived / network)', async () => {
+      repo.fetchActiveGroceryList.mockResolvedValue({ id: 'list-1', createdAt: LIST.createdAt, items: [] });
+      repo.completeGroceryList.mockRejectedValue(new Error('grocery list not found'));
+      await expect(groceryService.completeShoppingTrip()).rejects.toThrow('grocery list not found');
+    });
   });
 });

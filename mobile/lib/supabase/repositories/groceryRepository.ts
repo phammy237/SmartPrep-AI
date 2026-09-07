@@ -3,6 +3,8 @@ import {
   GroceryList,
   GroceryListItem,
   GroceryQuantityBasis,
+  GroceryTripDetail,
+  GroceryTripSummary,
   IngredientCategory,
   QuantityUnit,
 } from '@/types';
@@ -21,6 +23,26 @@ export interface GroceryListHeader {
 
 function mapListRow(row: GroceryListRow): GroceryListHeader {
   return { id: row.id, createdAt: row.created_at, status: row.status };
+}
+
+const TRIP_PREVIEW_LIMIT = 4;
+
+/** Derived counts + preview for a completed trip. `items` may be a partial projection. */
+function mapTripSummary(
+  row: Pick<GroceryListRow, 'id' | 'status' | 'created_at' | 'completed_at'>,
+  items: Pick<GroceryListItemRow, 'display_name' | 'is_checked' | 'pantry_transfer_status'>[],
+): GroceryTripSummary {
+  return {
+    id: row.id,
+    status: row.status,
+    createdAt: row.created_at,
+    // Completed trips always have completed_at (DB check). Fall back defensively.
+    completedAt: row.completed_at ?? row.created_at,
+    itemCount: items.length,
+    acquiredCount: items.filter((i) => i.is_checked).length,
+    transferredCount: items.filter((i) => i.pantry_transfer_status === 'transferred').length,
+    itemPreview: items.slice(0, TRIP_PREVIEW_LIMIT).map((i) => i.display_name),
+  };
 }
 
 function mapItemRow(row: GroceryListItemRow): GroceryListItem {
@@ -188,6 +210,10 @@ export async function deleteCheckedGroceryListItems(listId: string): Promise<voi
  * generation key - the reconciliation step that makes "Add Week to Grocery
  * List" idempotent. Never touches manual lines, checked lines, recipe-detail
  * lines, or another week's plan lines. Returns how many rows were removed.
+ *
+ * `listId` is always the caller's ACTIVE list (its only caller resolves it via
+ * get_or_create_active_grocery_list); the require-active-parent trigger (0010)
+ * additionally rejects any delete against a completed trip's rows.
  */
 export async function deletePlanGeneratedGroceryItems(
   listId: string,
@@ -203,4 +229,73 @@ export async function deletePlanGeneratedGroceryItems(
     .select('id');
   if (error) throw error;
   return data?.length ?? 0;
+}
+
+// --- Shopping-trip lifecycle (Phase 8) -------------------------------------
+
+export interface CompleteGroceryListResult {
+  completed: { id: string; status: GroceryListRow['status']; createdAt: string; completedAt: string | null };
+  active: { id: string; createdAt: string };
+}
+
+/**
+ * Atomically finishes the given active list (-> completed) and returns it plus
+ * the fresh replacement active list, via the security-definer
+ * `complete_grocery_list` RPC. Idempotent: a repeat call for an
+ * already-completed list returns that list + the current active one, unchanged.
+ */
+export async function completeGroceryList(listId: string): Promise<CompleteGroceryListResult> {
+  const { data, error } = await supabase.rpc('complete_grocery_list', { p_list_id: listId });
+  if (error) throw error;
+  const result = data as unknown as { completedList: GroceryListRow; activeList: GroceryListRow };
+  return {
+    completed: {
+      id: result.completedList.id,
+      status: result.completedList.status,
+      createdAt: result.completedList.created_at,
+      completedAt: result.completedList.completed_at,
+    },
+    active: { id: result.activeList.id, createdAt: result.activeList.created_at },
+  };
+}
+
+type TripJoinRow = GroceryListRow & {
+  grocery_list_items: Pick<GroceryListItemRow, 'display_name' | 'is_checked' | 'pantry_transfer_status'>[];
+};
+
+/** Completed shopping trips for the History list, newest first. RLS scopes to the owner. */
+export async function fetchGroceryHistory(): Promise<GroceryTripSummary[]> {
+  const { data, error } = await supabase
+    .from('grocery_lists')
+    .select('*, grocery_list_items(display_name, is_checked, pantry_transfer_status)')
+    .eq('status', 'completed')
+    .order('completed_at', { ascending: false });
+  if (error) throw error;
+  return (data as unknown as TripJoinRow[]).map((row) => mapTripSummary(row, row.grocery_list_items));
+}
+
+type TripDetailJoinRow = GroceryListRow & { grocery_list_items: GroceryListItemRow[] };
+
+/**
+ * One completed / archived trip with its full (read-only) item list. Returns
+ * null for an unknown id, one not owned by the caller, or the ACTIVE list
+ * (which is not a "trip").
+ */
+export async function fetchGroceryTrip(tripId: string): Promise<GroceryTripDetail | null> {
+  const { data, error } = await supabase
+    .from('grocery_lists')
+    .select('*, grocery_list_items(*)')
+    .eq('id', tripId)
+    .neq('status', 'active')
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  const row = data as unknown as TripDetailJoinRow;
+  const items = [...row.grocery_list_items]
+    .sort((a, b) => a.sort_order - b.sort_order || a.created_at.localeCompare(b.created_at))
+    .map(mapItemRow);
+  return {
+    ...mapTripSummary(row, row.grocery_list_items),
+    items,
+  };
 }

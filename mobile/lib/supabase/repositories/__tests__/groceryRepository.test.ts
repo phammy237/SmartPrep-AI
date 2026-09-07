@@ -1,9 +1,12 @@
 import { supabase } from '../../client';
 import {
+  completeGroceryList,
   deleteCheckedGroceryListItems,
   deleteGroceryListItem,
   deletePlanGeneratedGroceryItems,
+  fetchGroceryHistory,
   fetchGroceryListItems,
+  fetchGroceryTrip,
   fetchOrCreateActiveGroceryList,
   insertGroceryListItem,
   insertGroceryListItems,
@@ -21,7 +24,7 @@ type Result = { data: unknown; error: unknown };
  *  awaitable, and `.single()`/`.maybeSingle()` resolve too. */
 function makeChain(result: Result) {
   const chain: Record<string, jest.Mock> & { then?: unknown } = {};
-  for (const m of ['select', 'insert', 'update', 'delete', 'eq', 'order', 'filter']) {
+  for (const m of ['select', 'insert', 'update', 'delete', 'eq', 'neq', 'order', 'filter']) {
     chain[m] = jest.fn(() => chain);
   }
   chain.single = jest.fn(() => Promise.resolve(result));
@@ -38,6 +41,7 @@ const LIST_ROW = {
   status: 'active' as const,
   source: 'manual' as const,
   source_metadata: {},
+  completed_at: null,
   created_at: '2026-09-01T00:00:00.000Z',
   updated_at: '2026-09-01T00:00:00.000Z',
 };
@@ -297,5 +301,120 @@ describe('mapItemRow - pantry transfer state', () => {
     const [row] = await fetchGroceryListItems('list-1');
     expect(row.pantryTransferStatus).toBe('transferred');
     expect(row.pantryItemId).toBe('lot-9');
+  });
+});
+
+// --- Shopping-trip lifecycle (Phase 8) -----------------------------------
+
+const COMPLETED_ROW = {
+  ...LIST_ROW,
+  id: 'trip-1',
+  status: 'completed' as const,
+  completed_at: '2026-09-06T18:00:00.000Z',
+};
+
+describe('completeGroceryList', () => {
+  it('calls the RPC with the list id and maps both returned rows', async () => {
+    (supabase.rpc as jest.Mock).mockResolvedValue({
+      data: {
+        completedList: COMPLETED_ROW,
+        activeList: { ...LIST_ROW, id: 'list-2', created_at: '2026-09-07T00:00:00.000Z' },
+      },
+      error: null,
+    });
+
+    const result = await completeGroceryList('list-1');
+
+    expect(supabase.rpc).toHaveBeenCalledWith('complete_grocery_list', { p_list_id: 'list-1' });
+    expect(result).toEqual({
+      completed: {
+        id: 'trip-1',
+        status: 'completed',
+        createdAt: '2026-09-01T00:00:00.000Z',
+        completedAt: '2026-09-06T18:00:00.000Z',
+      },
+      active: { id: 'list-2', createdAt: '2026-09-07T00:00:00.000Z' },
+    });
+  });
+
+  it('propagates an RPC error (e.g. cross-user / archived)', async () => {
+    (supabase.rpc as jest.Mock).mockResolvedValue({ data: null, error: new Error('grocery list not found') });
+    await expect(completeGroceryList('nope')).rejects.toThrow('grocery list not found');
+  });
+});
+
+describe('fetchGroceryHistory', () => {
+  it('queries completed lists newest-first and derives counts + preview', async () => {
+    const chain = makeChain({
+      data: [
+        {
+          ...COMPLETED_ROW,
+          grocery_list_items: [
+            { display_name: 'Milk', is_checked: true, pantry_transfer_status: 'transferred' },
+            { display_name: 'Eggs', is_checked: true, pantry_transfer_status: 'not_transferred' },
+            { display_name: 'Kale', is_checked: false, pantry_transfer_status: 'not_transferred' },
+          ],
+        },
+      ],
+      error: null,
+    });
+    (supabase.from as jest.Mock).mockReturnValue(chain);
+
+    const [trip] = await fetchGroceryHistory();
+
+    expect(supabase.from).toHaveBeenCalledWith('grocery_lists');
+    expect(chain.eq).toHaveBeenCalledWith('status', 'completed');
+    expect(chain.order).toHaveBeenCalledWith('completed_at', { ascending: false });
+    expect(trip).toMatchObject({
+      id: 'trip-1',
+      completedAt: '2026-09-06T18:00:00.000Z',
+      itemCount: 3,
+      acquiredCount: 2,
+      transferredCount: 1,
+      itemPreview: ['Milk', 'Eggs', 'Kale'],
+    });
+  });
+
+  it('returns [] when there are no completed trips', async () => {
+    (supabase.from as jest.Mock).mockReturnValue(makeChain({ data: [], error: null }));
+    await expect(fetchGroceryHistory()).resolves.toEqual([]);
+  });
+
+  it('propagates a supabase error', async () => {
+    (supabase.from as jest.Mock).mockReturnValue(makeChain({ data: null, error: new Error('rls') }));
+    await expect(fetchGroceryHistory()).rejects.toThrow('rls');
+  });
+});
+
+describe('fetchGroceryTrip', () => {
+  it('fetches one non-active trip by id with its items, sorted', async () => {
+    const chain = makeChain({
+      data: {
+        ...COMPLETED_ROW,
+        grocery_list_items: [
+          { ...ITEM_ROW, id: 'b', display_name: 'B', sort_order: 2, created_at: '2026-09-01T00:00:02.000Z' },
+          { ...ITEM_ROW, id: 'a', display_name: 'A', sort_order: 1, created_at: '2026-09-01T00:00:01.000Z' },
+        ],
+      },
+      error: null,
+    });
+    (supabase.from as jest.Mock).mockReturnValue(chain);
+
+    const trip = await fetchGroceryTrip('trip-1');
+
+    expect(chain.eq).toHaveBeenCalledWith('id', 'trip-1');
+    expect(chain.neq).toHaveBeenCalledWith('status', 'active');
+    expect(trip?.items.map((i) => i.name)).toEqual(['A', 'B']);
+    expect(trip?.itemCount).toBe(2);
+  });
+
+  it('returns null for an unknown / not-owned / still-active id', async () => {
+    (supabase.from as jest.Mock).mockReturnValue(makeChain({ data: null, error: null }));
+    await expect(fetchGroceryTrip('x')).resolves.toBeNull();
+  });
+
+  it('propagates a supabase error', async () => {
+    (supabase.from as jest.Mock).mockReturnValue(makeChain({ data: null, error: new Error('boom') }));
+    await expect(fetchGroceryTrip('x')).rejects.toThrow('boom');
   });
 });
