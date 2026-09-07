@@ -38,8 +38,11 @@ function computeMatchScore(covered: number, total: number): number {
  * pantry and the shared conversion engine. `isOwned` is kept as a convenience
  * boolean = (coverage.status === 'covered'). `smartMatchScore` is the share of
  * fully-covered ingredients.
+ *
+ * Exported so the recommendation engine can reuse the exact same coverage
+ * hydration against a pantry snapshot it already holds (no extra fetch).
  */
-function hydrateRecipe(
+export function hydrateRecipe(
   recipe: Recipe,
   pantry: PantryItem[],
   conversionMeta: Map<string, IngredientConversionMeta>,

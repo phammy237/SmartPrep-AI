@@ -37,7 +37,7 @@ function shortfallHint(coverage: IngredientCoverage): string {
 
 export function RecipeDetailScreen() {
   const theme = useTheme();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, reason } = useLocalSearchParams<{ id: string; reason?: string }>();
   const recipeQuery = useRecipe(id);
   const addShortfalls = useAddRecipeShortfallsToGroceryList();
   const nutritionCoverage = useRecipeNutritionCoverage(recipeQuery.data);
@@ -106,6 +106,11 @@ export function RecipeDetailScreen() {
               {formatMinutes(recipe.prepTimeMinutes + recipe.cookTimeMinutes)} · {capitalize(recipe.difficulty)}
               {recipe.additionalCostEstimate > 0 ? ` · ~${formatCurrency(recipe.additionalCostEstimate)} to shop` : ''}
             </Text>
+            {reason ? (
+              <Text style={[theme.typography.footnote, { color: theme.colors.freshness.useSoon, marginTop: 2 }]}>
+                Recommended — {reason.toLowerCase()}
+              </Text>
+            ) : null}
           </View>
           <View style={{ alignItems: 'center', gap: 2 }}>
             <ProgressRing progress={recipe.smartMatchScore} size={56} strokeWidth={6}>

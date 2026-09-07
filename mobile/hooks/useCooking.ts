@@ -21,6 +21,7 @@ function useInvalidateAfterCooking() {
     queryClient.invalidateQueries({ queryKey: queryKeys.readyToCookCount });
     queryClient.invalidateQueries({ queryKey: queryKeys.preparedMeals });
     queryClient.invalidateQueries({ queryKey: queryKeys.mealPlan });
+    queryClient.invalidateQueries({ queryKey: queryKeys.recommendations });
     queryClient.invalidateQueries({ queryKey: ['mealLogs'] });
   };
 }

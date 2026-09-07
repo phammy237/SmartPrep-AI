@@ -54,6 +54,8 @@ function useInvalidatePantry() {
     queryClient.invalidateQueries({ queryKey: queryKeys.recipes });
     queryClient.invalidateQueries({ queryKey: queryKeys.recipeCollections });
     queryClient.invalidateQueries({ queryKey: queryKeys.readyToCookCount });
+    // Use-Soon recommendations derive from pantry expiry + coverage.
+    queryClient.invalidateQueries({ queryKey: queryKeys.recommendations });
   };
 }
 

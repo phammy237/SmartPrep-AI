@@ -13,3 +13,4 @@ export * from './savedRecipe';
 export * from './cooking';
 export * from './preparedMeal';
 export * from './mealLog';
+export * from './recommendation';

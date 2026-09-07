@@ -33,7 +33,11 @@ function useInvalidateMealPlan() {
   const queryClient = useQueryClient();
   // queryKeys.mealPlan is a prefix of every queryKeys.mealPlanWeek(...) key,
   // so this invalidates every cached week, not just the current one.
-  return () => queryClient.invalidateQueries({ queryKey: queryKeys.mealPlan });
+  return () => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.mealPlan });
+    // "Already planned" / "planned too late" recommendation context.
+    queryClient.invalidateQueries({ queryKey: queryKeys.recommendations });
+  };
 }
 
 export function useAddMealPlanEntry() {

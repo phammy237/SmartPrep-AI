@@ -8,6 +8,7 @@ export * from './mealLogService';
 export * from './groceryService';
 export * from './groceryTransferService';
 export * from './nutritionService';
+export * from './recommendationService';
 export * from './scanService';
 export * from './userService';
 export * from './impactService';

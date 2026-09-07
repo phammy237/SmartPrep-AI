@@ -4,7 +4,16 @@ import { Text, View } from 'react-native';
 
 import { EmptyState, LoadingState, Screen, SectionHeader } from '@/components';
 import { RecipeCarousel } from '@/features/recipes/components/RecipeCarousel';
-import { useKitchenImpact, useMealLogs, useMealPlanWeek, usePantry, useRecipeCollections, useRecipes, useUser } from '@/hooks';
+import {
+  useKitchenImpact,
+  useMealLogs,
+  useMealPlanWeek,
+  usePantry,
+  useRecipeCollections,
+  useRecipes,
+  useUseSoonRecommendations,
+  useUser,
+} from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
 import { countIngredientsNeedingAttention, getRecipeAvailability } from '@/services';
 import { todayIsoDateInTimeZone } from '@/utils/expiration';
@@ -16,6 +25,7 @@ import { NutritionCard } from '../components/NutritionCard';
 import { ScanHeroCard } from '../components/ScanHeroCard';
 import { TonightCard } from '../components/TonightCard';
 import { UseFirstSection } from '../components/UseFirstSection';
+import { UseSoonSection } from '../components/UseSoonSection';
 import { WeeklyPlanPreview } from '../components/WeeklyPlanPreview';
 
 export function HomeScreen() {
@@ -26,6 +36,7 @@ export function HomeScreen() {
   const recipesQuery = useRecipes();
   const mealPlanQuery = useMealPlanWeek();
   const impactQuery = useKitchenImpact();
+  const useSoonQuery = useUseSoonRecommendations();
   const timeZone = userQuery.data?.timezone ?? 'UTC';
   const today = todayIsoDateInTimeZone(timeZone);
   const mealLogsQuery = useMealLogs(today, today);
@@ -125,6 +136,12 @@ export function HomeScreen() {
       <ScanHeroCard />
 
       <UseFirstSection items={useFirstItems} />
+
+      <UseSoonSection
+        recommendations={useSoonQuery.data ?? []}
+        isLoading={useSoonQuery.isLoading}
+        ready={!pantryQuery.isLoading}
+      />
 
       {tonightRecipe ? (
         <View style={{ gap: theme.spacing.sm }}>

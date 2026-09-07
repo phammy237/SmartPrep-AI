@@ -13,6 +13,9 @@ export const queryKeys = {
   cookingEvent: (id: string) => ['cookingEvent', id] as const,
   preparedMeals: ['preparedMeals'] as const,
   mealLogs: (startDate: string, endDate: string) => ['mealLogs', startDate, endDate] as const,
+  recommendations: ['recommendations'] as const,
+  useSoonRecommendations: (timeZone: string, limit: number) =>
+    ['recommendations', 'use-soon', timeZone, limit] as const,
   groceryList: ['groceryList'] as const,
   groceryHistory: ['groceryHistory'] as const,
   groceryTrip: (id: string) => ['groceryHistory', id] as const,
