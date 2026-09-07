@@ -28,7 +28,7 @@ describe('allocateIngredientRequirementToLots - single lot', () => {
       quantityUnresolved: false,
       hasUrgentLot: true,
     });
-    expect(a.lotsUsed).toEqual([{ lotId: 'L1', takenQuantity: 200, unit: 'g', expiryState: 'critical' }]);
+    expect(a.lotsUsed).toEqual([{ lotId: 'L1', takenQuantity: 200, unit: 'g', expiryState: 'critical', lotUnitTaken: 200 }]);
   });
 
   it('reports the remainder when one lot is not enough', () => {
@@ -46,8 +46,8 @@ describe('allocateIngredientRequirementToLots - multiple lots / FEFO', () => {
   it('uses the earliest-expiring lot first, spanning into the later one', () => {
     const a = allocateIngredientRequirementToLots(300, 'g', [later, urgent]); // deliberately out of order
     expect(a.lotsUsed).toEqual([
-      { lotId: 'A', takenQuantity: 200, unit: 'g', expiryState: 'critical' },
-      { lotId: 'B', takenQuantity: 100, unit: 'g', expiryState: 'fresh' },
+      { lotId: 'A', takenQuantity: 200, unit: 'g', expiryState: 'critical', lotUnitTaken: 200 },
+      { lotId: 'B', takenQuantity: 100, unit: 'g', expiryState: 'fresh', lotUnitTaken: 100 },
     ]);
     expect(a.urgentQuantityUtilized).toBe(200); // only the critical lot counts
     expect(a.coveredQuantity).toBe(300);
@@ -62,13 +62,13 @@ describe('allocateIngredientRequirementToLots - multiple lots / FEFO', () => {
 
   it('fully consumes the urgent lot when the requirement matches it exactly', () => {
     const a = allocateIngredientRequirementToLots(200, 'g', [urgent, later]);
-    expect(a.lotsUsed).toEqual([{ lotId: 'A', takenQuantity: 200, unit: 'g', expiryState: 'critical' }]);
+    expect(a.lotsUsed).toEqual([{ lotId: 'A', takenQuantity: 200, unit: 'g', expiryState: 'critical', lotUnitTaken: 200 }]);
     expect(a.urgentQuantityUtilized).toBe(200);
   });
 
   it('partially consumes the urgent lot when the requirement is smaller', () => {
     const a = allocateIngredientRequirementToLots(120, 'g', [urgent, later]);
-    expect(a.lotsUsed).toEqual([{ lotId: 'A', takenQuantity: 120, unit: 'g', expiryState: 'critical' }]);
+    expect(a.lotsUsed).toEqual([{ lotId: 'A', takenQuantity: 120, unit: 'g', expiryState: 'critical', lotUnitTaken: 120 }]);
     expect(a.urgentQuantityUtilized).toBe(120);
   });
 

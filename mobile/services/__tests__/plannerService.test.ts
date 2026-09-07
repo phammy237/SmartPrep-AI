@@ -20,9 +20,10 @@ jest.mock('../nutritionService', () => ({
   nutritionService: { getConversionMetaMap: jest.fn() },
 }));
 
-jest.mock('../recipeService', () => ({
-  recipeService: { getRecipes: jest.fn(), countReadyToCookRecipes: jest.fn() },
-}));
+// plannerService now imports the pure `hydrateRecipe` from recipeService; keep
+// the real (pure) implementation, only its Supabase-touching parts are covered
+// by the repository / client mocks above.
+jest.mock('../recipeService', () => jest.requireActual('../recipeService'));
 
 const repo = repositories as jest.Mocked<typeof repositories>;
 const getUser = supabase.auth.getUser as jest.Mock;
@@ -201,5 +202,125 @@ describe('plannerService.getPlanGroceryDemand', () => {
   it('propagates a Supabase error from the meal-plan fetch', async () => {
     repo.fetchMealPlanEntries.mockRejectedValue(new Error('rls'));
     await expect(plannerService.getPlanGroceryDemand('2026-09-07', '2026-09-13', 'UTC')).rejects.toThrow('rls');
+  });
+});
+
+describe('plannerService.generateWeek', () => {
+  const WEEK_START = '2026-09-07'; // Monday
+  const WEEK_END = '2026-09-09'; // 3-day window for brevity
+
+  beforeEach(() => {
+    repo.createMealPlanEntry.mockImplementation(async (_userId, input) =>
+      entry({
+        scheduledDate: input.scheduledDate,
+        recipeVersionId: input.recipeVersionId,
+        plannedServings: input.plannedServings,
+      }),
+    );
+    repo.deletePlannedEntriesInRange.mockResolvedValue(undefined);
+  });
+
+  it('requires a session', async () => {
+    getUser.mockResolvedValue({ data: { user: null }, error: null });
+    await expect(plannerService.generateWeek(WEEK_START, WEEK_END, 'UTC')).rejects.toThrow('Not signed in');
+    expect(repo.deletePlannedEntriesInRange).not.toHaveBeenCalled();
+  });
+
+  it('empty recipe catalog is a no-op: returns existing entries, writes nothing', async () => {
+    repo.fetchRecipeVersions.mockResolvedValue([]);
+    repo.fetchMealPlanEntries.mockResolvedValue([entry()]);
+
+    const result = await plannerService.generateWeek(WEEK_START, WEEK_END, 'UTC');
+
+    expect(result.entries).toHaveLength(1);
+    expect(result.summary).toEqual({
+      urgentIngredientCount: 0,
+      recipesUsingUrgentStock: 0,
+      estimatedShortfallCount: 0,
+      expiryWarnings: [],
+    });
+    expect(repo.deletePlannedEntriesInRange).not.toHaveBeenCalled();
+    expect(repo.createMealPlanEntry).not.toHaveBeenCalled();
+  });
+
+  it('clears only still-planned dinners in range, then creates one dinner per day', async () => {
+    repo.fetchRecipeVersions.mockResolvedValue([recipe('rv-A', [ing({ quantity: 200 })])]);
+    repo.fetchPantryItems.mockResolvedValue([]);
+
+    const result = await plannerService.generateWeek(WEEK_START, WEEK_END, 'UTC');
+
+    expect(repo.deletePlannedEntriesInRange).toHaveBeenCalledWith('user-1', 'dinner', WEEK_START, WEEK_END);
+    expect(repo.createMealPlanEntry).toHaveBeenCalledTimes(3);
+    expect(result.entries).toHaveLength(3);
+    for (const call of repo.createMealPlanEntry.mock.calls) {
+      expect(call[1]).toMatchObject({ mealSlot: 'dinner', timezone: 'UTC', plannedServings: 2 });
+    }
+    expect(repo.createMealPlanEntry.mock.calls.map((c) => c[1].scheduledDate)).toEqual([
+      '2026-09-07',
+      '2026-09-08',
+      '2026-09-09',
+    ]);
+  });
+
+  it('loads conversion metadata exactly once and never mutates the pantry snapshot', async () => {
+    const pantry = [pantryItem({ id: 'c', quantity: 500, estimatedExpirationDate: '2026-09-08', expirationConfidence: 'high' })];
+    repo.fetchRecipeVersions.mockResolvedValue([recipe('rv-A', [ing({ quantity: 300 })])]);
+    repo.fetchPantryItems.mockResolvedValue(pantry);
+
+    await plannerService.generateWeek(WEEK_START, WEEK_END, 'UTC');
+
+    expect(getConversionMetaMap).toHaveBeenCalledTimes(1);
+    expect(pantry[0].quantity).toBe(500); // planning never touches real pantry
+  });
+
+  it('prioritizes a recipe that uses an expiring pantry ingredient (summary reflects it)', async () => {
+    repo.fetchRecipeVersions.mockResolvedValue([
+      recipe('rv-fresh', [ing({ ingredientId: 'ing-rice', name: 'Rice', quantity: 100, unit: 'g' })]),
+      recipe('rv-urgent', [ing({ ingredientId: 'ing-chicken-breast', name: 'Chicken', quantity: 200 })]),
+    ]);
+    repo.fetchPantryItems.mockResolvedValue([
+      pantryItem({ id: 'c', ingredientId: 'ing-chicken-breast', quantity: 500, estimatedExpirationDate: '2026-09-08', expirationConfidence: 'high' }),
+      pantryItem({ id: 'r', ingredientId: 'ing-rice', name: 'Rice', quantity: 2000, unit: 'g', estimatedExpirationDate: '2027-01-01', expirationConfidence: 'high' }),
+    ]);
+
+    const result = await plannerService.generateWeek(WEEK_START, WEEK_END, 'UTC');
+
+    // the urgent recipe lands on the first day
+    expect(result.entries[0].recipeVersionId).toBe('rv-urgent');
+    expect(result.summary.urgentIngredientCount).toBe(1);
+    expect(result.summary.recipesUsingUrgentStock).toBeGreaterThanOrEqual(1);
+  });
+
+  it('surfaces an expiry-conflict warning when the ingredient date is already past', async () => {
+    repo.fetchRecipeVersions.mockResolvedValue([recipe('rv-A', [ing({ ingredientId: 'ing-chicken-breast', name: 'Chicken', quantity: 200 })])]);
+    repo.fetchPantryItems.mockResolvedValue([
+      pantryItem({ id: 'c', quantity: 500, estimatedExpirationDate: '2020-01-01', expirationConfidence: 'high' }),
+    ]);
+
+    const result = await plannerService.generateWeek(WEEK_START, WEEK_END, 'UTC');
+    expect(result.summary.expiryWarnings).toEqual([
+      { ingredientName: 'Chicken', expirationDate: '2020-01-01', plannedDate: '2026-09-07' },
+    ]);
+  });
+
+  it('is deterministic for the same inputs', async () => {
+    const recipes = [
+      recipe('rv-a', [ing({ ingredientId: 'ing-chicken-breast', name: 'Chicken', quantity: 200 })]),
+      recipe('rv-b', [ing({ ingredientId: 'ing-spinach', name: 'Spinach', quantity: 100, unit: 'g' })]),
+    ];
+    repo.fetchRecipeVersions.mockResolvedValue(recipes);
+    repo.fetchPantryItems.mockResolvedValue([
+      pantryItem({ id: 'c', ingredientId: 'ing-chicken-breast', quantity: 500, estimatedExpirationDate: '2026-09-08', expirationConfidence: 'high' }),
+      pantryItem({ id: 's', ingredientId: 'ing-spinach', name: 'Spinach', quantity: 300, estimatedExpirationDate: '2026-09-11', expirationConfidence: 'high' }),
+    ]);
+
+    const a = await plannerService.generateWeek(WEEK_START, WEEK_END, 'UTC');
+    const b = await plannerService.generateWeek(WEEK_START, WEEK_END, 'UTC');
+    expect(a.entries.map((e) => e.recipeVersionId)).toEqual(b.entries.map((e) => e.recipeVersionId));
+  });
+
+  it('propagates a Supabase failure from the recipe fetch', async () => {
+    repo.fetchRecipeVersions.mockRejectedValue(new Error('catalog rls'));
+    await expect(plannerService.generateWeek(WEEK_START, WEEK_END, 'UTC')).rejects.toThrow('catalog rls');
   });
 });

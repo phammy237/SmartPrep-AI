@@ -2,6 +2,8 @@ import {
   RecommendationCandidate,
   UrgentIngredientDetail,
   rankRecommendations,
+  recommendationTierOf,
+  scoreRecommendationCandidate,
 } from '../recommendationRanking';
 
 const TODAY = '2026-06-10';
@@ -179,5 +181,42 @@ describe('rankRecommendations - determinism & filtering', () => {
     const p = candidate({ ...base, recipeVersionId: 'rv-zzz' });
     const q = candidate({ ...base, recipeVersionId: 'rv-aaa' });
     expect(rank([p, q]).map((r) => r.recipeVersionId)).toEqual(['rv-aaa', 'rv-zzz']);
+  });
+});
+
+describe('scoreRecommendationCandidate - the single shared score (Home + Generate My Week)', () => {
+  it('is exactly the number rankRecommendations sorts by', () => {
+    const c = candidate({ urgentIngredients: [urgent({ expiryState: 'critical' })], missingIngredientCount: 1, coveredCount: 3, totalCount: 4 });
+    expect(rank([c])[0].rankScore).toBe(scoreRecommendationCandidate(c));
+  });
+
+  it('scores fresh-only candidates too (no urgent ingredients) - on coverage / shortfall', () => {
+    const covered = { ...candidate({ urgentIngredients: [] }), coveredCount: 4, totalCount: 4, missingIngredientCount: 0 };
+    const halfMissing = { ...candidate({ urgentIngredients: [] }), coveredCount: 2, totalCount: 4, missingIngredientCount: 2 };
+    expect(scoreRecommendationCandidate(covered)).toBeGreaterThan(scoreRecommendationCandidate(halfMissing));
+  });
+
+  it('Home ordering and planner ordering use the SAME urgency rule (critical > use_soon regardless of caller)', () => {
+    const crit = candidate({ recipeVersionId: 'rv-crit', urgentIngredients: [urgent({ expiryState: 'critical' })] });
+    const soon = candidate({ recipeVersionId: 'rv-soon', urgentIngredients: [urgent({ expiryState: 'use_soon', daysUntilExpiry: 3 })] });
+
+    // Home path
+    const homeOrder = rank([soon, crit]).map((r) => r.recipeVersionId);
+    // planner path (raw score, no urgent-only filter)
+    const plannerOrder = [crit, soon]
+      .map((c) => ({ id: c.recipeVersionId, s: scoreRecommendationCandidate(c) }))
+      .sort((a, b) => b.s - a.s)
+      .map((x) => x.id);
+
+    expect(homeOrder).toEqual(['rv-crit', 'rv-soon']);
+    expect(plannerOrder).toEqual(['rv-crit', 'rv-soon']);
+  });
+
+  it('recommendationTierOf matches the tiers rankRecommendations assigns', () => {
+    expect(recommendationTierOf(0)).toBe('ready_now');
+    expect(recommendationTierOf(2)).toBe('almost_ready');
+    expect(recommendationTierOf(3)).toBe('use_soon_match');
+    expect(rank([candidate({ missingIngredientCount: 0 })])[0].tier).toBe(recommendationTierOf(0));
+    expect(rank([candidate({ missingIngredientCount: 4, coveredCount: 1, totalCount: 5 })])[0].tier).toBe(recommendationTierOf(4));
   });
 });

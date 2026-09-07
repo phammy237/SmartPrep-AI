@@ -124,7 +124,37 @@ export function PlannerScreen() {
       </Text>
 
       <View style={{ gap: theme.spacing.sm }}>
-        <Button label="Generate My Week" onPress={() => generateWeek.mutate()} loading={generateWeek.isPending} fullWidth />
+        <Button
+          label="Generate My Week"
+          onPress={() =>
+            generateWeek.mutate(undefined, {
+              onSuccess: ({ summary }) => {
+                const lines: string[] = [];
+                if (summary.urgentIngredientCount > 0) {
+                  lines.push(
+                    `Your week prioritizes ${summary.urgentIngredientCount} ingredient${
+                      summary.urgentIngredientCount === 1 ? '' : 's'
+                    } that should be used soon.`,
+                  );
+                } else {
+                  lines.push('Your week is ranked by what you already have on hand.');
+                }
+                if (summary.expiryWarnings.length > 0) {
+                  lines.push(
+                    `${summary.expiryWarnings.length} ingredient${
+                      summary.expiryWarnings.length === 1 ? '' : 's'
+                    } may need attention before ${
+                      summary.expiryWarnings.length === 1 ? 'its' : 'their'
+                    } planned meal.`,
+                  );
+                }
+                Alert.alert('Week generated', lines.join('\n\n'));
+              },
+            })
+          }
+          loading={generateWeek.isPending}
+          fullWidth
+        />
         <Button
           label="Add Week to Grocery List"
           variant="secondary"

@@ -1,3 +1,4 @@
+import { generatePlan } from '@/lib/planner';
 import {
   PlanDemandContribution,
   PlanGroceryDemandIngredientInput,
@@ -16,10 +17,11 @@ import {
   updateMealPlanEntry,
 } from '@/lib/supabase/repositories';
 import { CreateMealPlanEntryInput, UpdateMealPlanEntryInput } from '@/lib/validation/plannerSchemas';
-import { MealPlanEntry, PantryItem, Recipe } from '@/types';
+import { MealPlanEntry, Recipe } from '@/types';
+import { todayIsoDateInTimeZone } from '@/utils/expiration';
 import { nutritionService } from './nutritionService';
+import { hydrateRecipe } from './recipeService';
 import { requireUserId } from './requireUserId';
-import { recipeService } from './recipeService';
 
 async function getMealPlanForWeek(weekStart: string, weekEnd: string): Promise<MealPlanEntry[]> {
   const userId = await requireUserId();
@@ -40,18 +42,6 @@ async function removeMealPlanEntry(id: string): Promise<void> {
   return deleteMealPlanEntry(id);
 }
 
-/** Higher = more urgent to cook soon, based on Prioritize/Use Soon pantry items it uses - same deterministic heuristic the mock planner used, now against real data. */
-function recipeUrgency(recipe: Recipe, pantry: PantryItem[]): number {
-  const pantryByIngredient = new Map(pantry.map((item) => [item.ingredientId, item]));
-  return recipe.ingredients.reduce((score, ingredient) => {
-    const pantryItem = pantryByIngredient.get(ingredient.ingredientId);
-    if (!pantryItem) return score;
-    if (pantryItem.freshness.label === 'prioritize') return score + 2;
-    if (pantryItem.freshness.label === 'use_soon') return score + 1;
-    return score;
-  }, 0);
-}
-
 function eachDateInRange(startDate: string, endDate: string): string[] {
   const [sy, sm, sd] = startDate.split('-').map(Number);
   const cursor = new Date(Date.UTC(sy, sm - 1, sd));
@@ -64,40 +54,98 @@ function eachDateInRange(startDate: string, endDate: string): string[] {
   return dates;
 }
 
+/** Service-facing summary of a generated week. No raw ranking scores are exposed. */
+export interface GenerateWeekSummary {
+  /** Distinct urgent pantry ingredients the generated week draws on. */
+  urgentIngredientCount: number;
+  /** How many of the generated dinners target expiring stock. */
+  recipesUsingUrgentStock: number;
+  /** Rough grocery burden: Σ of non-staple ingredients with no matching stock across the generated dinners. */
+  estimatedShortfallCount: number;
+  /** An urgent ingredient's tracked date falls before the day its recipe was scheduled - no arrangement fixed it. */
+  expiryWarnings: { ingredientName: string; expirationDate: string; plannedDate: string }[];
+}
+
+export interface GenerateWeekResult {
+  entries: MealPlanEntry[];
+  summary: GenerateWeekSummary;
+}
+
+const EMPTY_SUMMARY: GenerateWeekSummary = {
+  urgentIngredientCount: 0,
+  recipesUsingUrgentStock: 0,
+  estimatedShortfallCount: 0,
+  expiryWarnings: [],
+};
+
 /**
- * Regenerates the week's dinners, front-loading recipes that use
- * Prioritize/Use Soon ingredients - clears only still-planned dinner entries
- * in this range first (never touches completed/skipped/cancelled history),
- * then creates one real meal_plan_items row per day.
+ * Regenerates the week's dinners using the deterministic Smart Expiry / Use
+ * Soon engine: recipes are scored (via the SAME `scoreRecommendationCandidate`
+ * that powers Home "Use Soon") against a generation-time VIRTUAL pantry, one
+ * day at a time, earliest first. Each pick virtually consumes its FEFO lot
+ * allocation so the next day ranks against what's left (no double-counting the
+ * same stock across the week). Real `pantry_items` are never touched.
+ *
+ * Preserved from the previous implementation: only still-`planned` dinner
+ * entries in the range are cleared first (completed/skipped/cancelled history
+ * is untouched); exactly one dinner per day; `plannedServings = recipe.servings`;
+ * an empty recipe catalog is a no-op that returns the existing entries;
+ * fully deterministic for a given pantry / catalog / date / timezone.
  */
-async function generateWeek(weekStart: string, weekEnd: string, timeZone: string): Promise<MealPlanEntry[]> {
+async function generateWeek(
+  weekStart: string,
+  weekEnd: string,
+  timeZone: string,
+): Promise<GenerateWeekResult> {
   const userId = await requireUserId();
-  const [recipes, pantry] = await Promise.all([recipeService.getRecipes(), fetchPantryItems(userId, timeZone)]);
-  if (recipes.length === 0) {
-    return fetchMealPlanEntries(userId, weekStart, weekEnd);
+  const now = new Date();
+  const today = todayIsoDateInTimeZone(timeZone, now);
+
+  const [recipesRaw, pantry] = await Promise.all([
+    fetchRecipeVersions(),
+    fetchPantryItems(userId, timeZone),
+  ]);
+  const dates = eachDateInRange(weekStart, weekEnd);
+
+  if (recipesRaw.length === 0 || dates.length === 0) {
+    const entries = await fetchMealPlanEntries(userId, weekStart, weekEnd);
+    return { entries, summary: EMPTY_SUMMARY };
   }
 
-  const ranked = [...recipes].sort(
-    (a, b) => recipeUrgency(b, pantry) - recipeUrgency(a, pantry) || b.smartMatchScore - a.smartMatchScore,
+  const ingredientIds = Array.from(
+    new Set(recipesRaw.flatMap((r) => r.ingredients.map((i) => i.ingredientId))),
   );
+  const conversionMeta = await nutritionService.getConversionMetaMap(ingredientIds);
+  const recipes = recipesRaw.map((r) => hydrateRecipe(r, pantry, conversionMeta));
+
+  const plan = generatePlan({ dates, today, timeZone, now, recipes, pantry, conversionMeta });
 
   await deletePlannedEntriesInRange(userId, 'dinner', weekStart, weekEnd);
-
-  const dates = eachDateInRange(weekStart, weekEnd);
-  const created = await Promise.all(
-    dates.map((date, index) => {
-      const recipe = ranked[index % ranked.length];
-      return createMealPlanEntry(userId, {
-        scheduledDate: date,
+  const entries = await Promise.all(
+    plan.slots.map((s) =>
+      createMealPlanEntry(userId, {
+        scheduledDate: s.date,
         timezone: timeZone,
         mealSlot: 'dinner',
-        recipeVersionId: recipe.recipeVersionId ?? recipe.id,
-        plannedServings: recipe.servings,
-      });
-    }),
+        recipeVersionId: s.recipeVersionId,
+        plannedServings: s.plannedServings,
+      }),
+    ),
   );
 
-  return created;
+  return {
+    entries,
+    summary: {
+      urgentIngredientCount: plan.urgentIngredientsTargeted.length,
+      recipesUsingUrgentStock: plan.recipesUsingUrgentStock,
+      estimatedShortfallCount: plan.estimatedShortfallCount,
+      expiryWarnings: plan.warnings.map((w) => ({
+        ingredientName: w.ingredientName,
+        expirationDate: w.expirationDate,
+        plannedDate: w.plannedDate,
+      })),
+    },
+  };
 }
 
 /**

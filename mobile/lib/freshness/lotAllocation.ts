@@ -27,9 +27,17 @@ export interface ExpiringLot {
 
 export interface LotUse {
   lotId: string;
+  /** Amount taken, expressed in `LotAllocation.coveredUnit` (the requirement unit, or 'g' on the grams path). */
   takenQuantity: number;
   unit: string;
   expiryState: ExpiryState;
+  /**
+   * Same amount taken, expressed in THIS lot's own unit. Equal to `takenQuantity`
+   * on the same-unit path; back-converted proportionally on the grams path.
+   * Lets a caller (e.g. planner virtual pantry) decrement the lot without a
+   * second conversion.
+   */
+  lotUnitTaken: number;
 }
 
 export interface LotAllocation {
@@ -112,7 +120,14 @@ export function allocateIngredientRequirementToLots(
 
   // ---- Same-unit path (no metadata needed; works for count units too) ----
   if (ordered.every((l) => (normalizeUnit(l.unit) ?? l.unit) === reqKey)) {
-    return walk(ordered, requiredQuantity, reqKey, (l) => l.quantity, hasUrgentLot);
+    return walk(
+      ordered,
+      requiredQuantity,
+      reqKey,
+      (l) => l.quantity,
+      (_l, taken) => taken, // same unit -> lot-unit amount equals covered-unit amount
+      hasUrgentLot,
+    );
   }
 
   // ---- Grams path (every quantity must resolve to grams) ----
@@ -126,6 +141,12 @@ export function allocateIngredientRequirementToLots(
       (l) => {
         const found = lotG.find((x) => x.lot.lotId === l.lotId);
         return found && found.g.status === 'converted' ? found.g.grams : 0;
+      },
+      (l, takenGrams) => {
+        const found = lotG.find((x) => x.lot.lotId === l.lotId);
+        const lotGrams = found && found.g.status === 'converted' ? found.g.grams : 0;
+        // proportional back-conversion (all supported conversions are linear)
+        return lotGrams > 0 ? roundGrams((takenGrams * l.quantity) / lotGrams) : 0;
       },
       hasUrgentLot,
     );
@@ -141,6 +162,7 @@ function walk(
   required: number,
   unit: string,
   lotAmount: (l: ExpiringLot) => number,
+  lotUnitAmount: (l: ExpiringLot, takenInCoveredUnit: number) => number,
   hasUrgentLot: boolean,
 ): LotAllocation {
   let remaining = required;
@@ -157,7 +179,13 @@ function walk(
     remaining = roundGrams(remaining - taken);
     covered = roundGrams(covered + taken);
     if (isUrgentExpiryState(lot.expiry.state)) urgentUsed = roundGrams(urgentUsed + taken);
-    lotsUsed.push({ lotId: lot.lotId, takenQuantity: taken, unit, expiryState: lot.expiry.state });
+    lotsUsed.push({
+      lotId: lot.lotId,
+      takenQuantity: taken,
+      unit,
+      expiryState: lot.expiry.state,
+      lotUnitTaken: roundGrams(Math.min(lot.quantity, lotUnitAmount(lot, taken))),
+    });
   }
 
   return {

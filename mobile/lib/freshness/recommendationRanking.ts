@@ -153,9 +153,13 @@ function expiringPhrase(u: UrgentIngredientDetail): string {
   return `Uses ${name} that should be used soon`;
 }
 
-function tierOf(missing: number, almostReadyMax: number): RecommendationTier {
+/**
+ * Tier from non-staple missing count. Exported so the meal-plan generator uses
+ * the exact same thresholds as Home recommendations.
+ */
+export function recommendationTierOf(missing: number, almostReadyMaxMissing = 2): RecommendationTier {
   if (missing === 0) return 'ready_now';
-  if (missing <= almostReadyMax) return 'almost_ready';
+  if (missing <= almostReadyMaxMissing) return 'almost_ready';
   return 'use_soon_match';
 }
 
@@ -203,7 +207,14 @@ function cap(s: string): string {
   return s.length === 0 ? s : s[0].toUpperCase() + s.slice(1);
 }
 
-function scoreOf(c: RecommendationCandidate): number {
+/**
+ * The one deterministic candidate score. Used by `rankRecommendations` for
+ * Home "Use Soon" AND by the meal-plan generator for `Generate My Week`, so
+ * the two features can never disagree on what "more urgent to cook" means.
+ * Works for candidates with or without urgent ingredients (a fresh-only
+ * candidate just gets `urgency = 0` and is ranked on coverage / shortfall).
+ */
+export function scoreRecommendationCandidate(c: RecommendationCandidate): number {
   const urgency = c.urgentIngredients.reduce((sum, u) => sum + STATE_WEIGHT[u.expiryState] * utilizationFactor(u), 0);
   const coverage = c.totalCount > 0 ? (COVERAGE_WEIGHT * c.coveredCount) / c.totalCount : COVERAGE_WEIGHT;
   const missingPenalty = Math.min(MISSING_PENALTY_CAP, MISSING_PENALTY * c.missingIngredientCount);
@@ -233,8 +244,8 @@ export function rankRecommendations(
   return candidates
     .filter((c) => c.urgentIngredients.length > 0)
     .map((c) => {
-      const tier = tierOf(c.missingIngredientCount, almostReadyMax);
-      return { ...c, rankScore: scoreOf(c), tier, reasons: reasonsFor(c, tier, opts) };
+      const tier = recommendationTierOf(c.missingIngredientCount, almostReadyMax);
+      return { ...c, rankScore: scoreRecommendationCandidate(c), tier, reasons: reasonsFor(c, tier, opts) };
     })
     .sort((a, b) => {
       if (b.rankScore !== a.rankScore) return b.rankScore - a.rankScore;
