@@ -10,9 +10,11 @@
 -- begin/link/finalize confirmation RPCs and pantry_items.source_scan_detection_id),
 -- Phase 7 grocery->pantry transfer (transfer_grocery_item_to_pantry +
 -- pantry_items.source_grocery_item_id + grocery_list_items transfer state),
--- and Phase 8 grocery shopping-trip lifecycle (complete_grocery_list +
--- grocery_lists.completed_at + completed-trip immutability triggers).
--- Run migrations 0001-0010 first.
+-- Phase 8 grocery shopping-trip lifecycle (complete_grocery_list +
+-- grocery_lists.completed_at + completed-trip immutability triggers), and
+-- Phase 8b grocery_list_items least-privilege column grants (0011:
+-- server-controlled columns are not client-writable; is_checked is RPC-only).
+-- Run migrations 0001-0011 first.
 --
 -- Run this in the Supabase SQL editor or via `psql` against your linked
 -- project. It does NOT create test users itself - auth.users rows can only
@@ -2610,14 +2612,19 @@ select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID
 do $$
 declare
   v_list uuid;
+  v_eggs uuid;
 begin
   v_list := (public.get_or_create_active_grocery_list()).id;
 
-  insert into public.grocery_list_items (grocery_list_id, user_id, display_name, category, quantity, unit, source, is_checked)
-  values (v_list, 'TEST_USER_A_ID'::uuid, 'rls-transfer-eggs', 'protein', 12, 'item', 'manual', true);
+  -- is_checked is not a client-writable column (0011): insert, then acquire
+  -- via the toggle RPC - the real path.
+  insert into public.grocery_list_items (grocery_list_id, user_id, display_name, category, quantity, unit, source)
+  values (v_list, 'TEST_USER_A_ID'::uuid, 'rls-transfer-eggs', 'protein', 12, 'item', 'manual')
+  returning id into v_eggs;
+  perform public.toggle_grocery_item(v_eggs);
 
-  insert into public.grocery_list_items (grocery_list_id, user_id, display_name, category, quantity, unit, source, is_checked)
-  values (v_list, 'TEST_USER_A_ID'::uuid, 'rls-transfer-unchecked', 'produce', 1, 'bag', 'manual', false);
+  insert into public.grocery_list_items (grocery_list_id, user_id, display_name, category, quantity, unit, source)
+  values (v_list, 'TEST_USER_A_ID'::uuid, 'rls-transfer-unchecked', 'produce', 1, 'bag', 'manual');
 end $$;
 commit;
 
@@ -2768,10 +2775,18 @@ begin
   select count(*) into leaked from public.pantry_items where source_grocery_item_id = v_gi;
   if leaked <> 0 then raise exception 'FAIL: user_b can see the pantry lot from user_a''s transfer'; end if;
 
-  -- a raw update of user_a's transfer state hits nothing (RLS-filtered)
-  update public.grocery_list_items set pantry_transfer_status = 'not_transferred' where id = v_gi;
-  get diagnostics affected = row_count;
-  if affected <> 0 then raise exception 'FAIL: user_b altered user_a''s grocery transfer state'; end if;
+  -- a raw update of user_a's transfer state must not change anything: 0011
+  -- revoked pantry_transfer_status from the client (permission denied), and
+  -- RLS would filter it to 0 rows even if it were granted. Only an actually
+  -- applied change is a failure.
+  succeeded := false;
+  begin
+    update public.grocery_list_items set pantry_transfer_status = 'not_transferred' where id = v_gi;
+    get diagnostics affected = row_count;
+    succeeded := (affected <> 0);
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: user_b altered user_a''s grocery transfer state'; end if;
 
   raise notice 'PASS: user_b cannot see, transfer, or alter user_a''s grocery line or its pantry lot';
 end $$;
@@ -2849,14 +2864,24 @@ select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID
 do $$
 declare
   v_active_before uuid;
+  v_milk uuid;
+  v_eggs uuid;
 begin
   v_active_before := (public.get_or_create_active_grocery_list()).id;
 
-  insert into public.grocery_list_items (grocery_list_id, user_id, display_name, category, quantity, unit, source, is_checked)
-  values
-    (v_active_before, 'TEST_USER_A_ID'::uuid, 'rls-trip-milk',  'dairy',   1, 'container', 'manual',    true),
-    (v_active_before, 'TEST_USER_A_ID'::uuid, 'rls-trip-eggs',  'protein', 1, 'package',   'meal_plan', true),
-    (v_active_before, 'TEST_USER_A_ID'::uuid, 'rls-trip-kale',  'produce', 1, 'bag',       'manual',    false);
+  -- is_checked is not client-writable (0011): insert unchecked, then acquire
+  -- milk + eggs via the toggle RPC (kale stays unchecked).
+  insert into public.grocery_list_items (grocery_list_id, user_id, display_name, category, quantity, unit, source)
+  values (v_active_before, 'TEST_USER_A_ID'::uuid, 'rls-trip-milk', 'dairy', 1, 'container', 'manual')
+  returning id into v_milk;
+  insert into public.grocery_list_items (grocery_list_id, user_id, display_name, category, quantity, unit, source)
+  values (v_active_before, 'TEST_USER_A_ID'::uuid, 'rls-trip-eggs', 'protein', 1, 'package', 'meal_plan')
+  returning id into v_eggs;
+  insert into public.grocery_list_items (grocery_list_id, user_id, display_name, category, quantity, unit, source)
+  values (v_active_before, 'TEST_USER_A_ID'::uuid, 'rls-trip-kale', 'produce', 1, 'bag', 'manual');
+
+  perform public.toggle_grocery_item(v_milk);
+  perform public.toggle_grocery_item(v_eggs);
 end $$;
 commit;
 
@@ -3032,9 +3057,16 @@ begin
   select count(*) into leaked from public.grocery_list_items where grocery_list_id = v_completed;
   if leaked <> 0 then raise exception 'FAIL: user_b can see user_a''s historical trip items'; end if;
 
-  update public.grocery_list_items set is_checked = false where id = v_item;
-  get diagnostics affected = row_count;
-  if affected <> 0 then raise exception 'FAIL: user_b altered user_a''s historical trip item'; end if;
+  -- is_checked is not client-writable (0011) -> permission denied; and RLS
+  -- would filter it to 0 rows anyway. Only an applied change is a failure.
+  succeeded := false;
+  begin
+    update public.grocery_list_items set is_checked = false where id = v_item;
+    get diagnostics affected = row_count;
+    succeeded := (affected <> 0);
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: user_b altered user_a''s historical trip item'; end if;
 
   raise notice 'PASS: user_b cannot complete, read, or alter user_a''s shopping trip';
 end $$;
@@ -3105,6 +3137,163 @@ delete from public.grocery_lists where id in (
   select new_active_id from _rls_trip_a
 );
 drop table if exists _rls_trip_a;
+commit;
+
+-- ============================================================================
+-- Phase 8b: least-privilege column grants on grocery_list_items (migration
+-- 0011). Server-controlled columns must not be directly writable by a raw
+-- authenticated client on an ACTIVE grocery item; the legitimate paths must
+-- still work.
+-- ============================================================================
+
+-- --- user_a: legitimate active-list writes still succeed -----------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  v_list uuid;
+  v_manual uuid;
+  v_gen uuid;
+  v_checked boolean;
+  v_qty numeric;
+  v_name text;
+  v_norm text;
+begin
+  v_list := (public.get_or_create_active_grocery_list()).id;
+
+  -- ordinary manual add (INSERT-granted columns only)
+  insert into public.grocery_list_items (grocery_list_id, user_id, display_name, category, quantity, unit)
+  values (v_list, 'TEST_USER_A_ID'::uuid, 'rls-priv-milk', 'dairy', 1, 'container')
+  returning id, normalized_name into v_manual, v_norm;
+  if v_norm <> 'rls-priv-milk' then raise exception 'FAIL: normalized_name trigger did not run on insert'; end if;
+
+  -- generated (recipe / meal_plan) insert - provenance columns are granted
+  insert into public.grocery_list_items (
+    grocery_list_id, user_id, display_name, quantity, unit,
+    source, source_recipe_version_ids, source_metadata, quantity_basis
+  )
+  values (
+    v_list, 'TEST_USER_A_ID'::uuid, 'rls-priv-generated', 2, 'lb',
+    'meal_plan', array['rv-x'], '{"planGenerationKey":"k"}'::jsonb, 'recipe_requirement'
+  )
+  returning id into v_gen;
+
+  -- permitted active-list edits
+  update public.grocery_list_items
+  set display_name = 'rls-priv-milk 2%', category = 'dairy', quantity = 3, unit = 'bottle'
+  where id = v_manual;
+  select display_name, quantity into v_name, v_qty from public.grocery_list_items where id = v_manual;
+  if v_name <> 'rls-priv-milk 2%' or v_qty <> 3 then raise exception 'FAIL: permitted edit did not apply'; end if;
+
+  -- recipe-merge reconciliation edit
+  update public.grocery_list_items
+  set source_recipe_version_ids = array['rv-x','rv-y'], quantity_basis = 'uncovered_shortfall'
+  where id = v_gen;
+
+  -- acquire via the RPC (is_checked is not directly writable)
+  perform public.toggle_grocery_item(v_manual);
+  select is_checked into v_checked from public.grocery_list_items where id = v_manual;
+  if not v_checked then raise exception 'FAIL: toggle_grocery_item did not acquire the item'; end if;
+
+  -- delete + "Clear Checked" shape
+  delete from public.grocery_list_items where id = v_gen;
+  delete from public.grocery_list_items where grocery_list_id = v_list and is_checked = true;
+  if exists (select 1 from public.grocery_list_items where id = v_manual) then
+    raise exception 'FAIL: Clear Checked did not remove the acquired item';
+  end if;
+
+  raise notice 'PASS: legitimate active-list insert / edit / toggle / delete still work under 0011';
+end $$;
+commit;
+
+-- --- user_a: raw writes to server-controlled columns are DENIED ----------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  v_list uuid;
+  v_id uuid;
+  v_before public.grocery_list_items;
+  v_after public.grocery_list_items;
+  col text;
+  stmt text;
+  denied boolean;
+begin
+  v_list := (public.get_or_create_active_grocery_list()).id;
+  insert into public.grocery_list_items (grocery_list_id, user_id, display_name, quantity, unit)
+  values (v_list, 'TEST_USER_A_ID'::uuid, 'rls-priv-locked', 1, 'item')
+  returning id into v_id;
+  select * into v_before from public.grocery_list_items where id = v_id;
+
+  -- Each of these columns is trigger- / default- / RPC-owned and NOT in the
+  -- 0011 UPDATE column grant, so a raw client UPDATE must be refused.
+  foreach col in array array[
+    'pantry_transfer_status', 'pantry_transferred_at', 'pantry_item_id',
+    'user_id', 'checked_at', 'normalized_name', 'sort_order',
+    'is_checked', 'grocery_list_id', 'source', 'source_metadata',
+    'image_uri', 'catalog_ingredient_id', 'estimated_price'
+  ]
+  loop
+    stmt := case col
+      when 'pantry_transfer_status' then 'update public.grocery_list_items set pantry_transfer_status = ''transferred'' where id = $1'
+      when 'pantry_transferred_at'  then 'update public.grocery_list_items set pantry_transferred_at = now() where id = $1'
+      when 'pantry_item_id'         then 'update public.grocery_list_items set pantry_item_id = gen_random_uuid() where id = $1'
+      when 'user_id'                then 'update public.grocery_list_items set user_id = gen_random_uuid() where id = $1'
+      when 'checked_at'             then 'update public.grocery_list_items set checked_at = now() where id = $1'
+      when 'normalized_name'        then 'update public.grocery_list_items set normalized_name = ''hacked'' where id = $1'
+      when 'sort_order'             then 'update public.grocery_list_items set sort_order = 999 where id = $1'
+      when 'is_checked'             then 'update public.grocery_list_items set is_checked = true where id = $1'
+      when 'grocery_list_id'        then 'update public.grocery_list_items set grocery_list_id = gen_random_uuid() where id = $1'
+      when 'source'                 then 'update public.grocery_list_items set source = ''recipe'' where id = $1'
+      when 'source_metadata'        then 'update public.grocery_list_items set source_metadata = ''{"x":1}''::jsonb where id = $1'
+      when 'image_uri'              then 'update public.grocery_list_items set image_uri = ''x'' where id = $1'
+      when 'catalog_ingredient_id' then 'update public.grocery_list_items set catalog_ingredient_id = ''ing-x'' where id = $1'
+      when 'estimated_price'        then 'update public.grocery_list_items set estimated_price = 9.99 where id = $1'
+    end;
+    denied := false;
+    begin
+      execute stmt using v_id;
+    exception when others then denied := true;  -- permission denied / FK / trigger
+    end;
+    if not denied then
+      raise exception 'FAIL: raw client UPDATE of grocery_list_items.% was allowed', col;
+    end if;
+  end loop;
+
+  -- the row is byte-for-byte unchanged
+  select * into v_after from public.grocery_list_items where id = v_id;
+  if v_after is distinct from v_before then
+    raise exception 'FAIL: a server-controlled column changed despite the denied writes';
+  end if;
+
+  -- raw INSERT naming a non-granted column is refused too
+  denied := false;
+  begin
+    insert into public.grocery_list_items (grocery_list_id, user_id, display_name, quantity, unit, is_checked)
+    values (v_list, 'TEST_USER_A_ID'::uuid, 'rls-priv-sneak', 1, 'item', true);
+  exception when others then denied := true;
+  end;
+  if not denied then raise exception 'FAIL: raw INSERT set is_checked directly'; end if;
+
+  delete from public.grocery_list_items where id = v_id;
+  raise notice 'PASS: server-controlled grocery_list_items columns are not client-writable';
+end $$;
+commit;
+
+-- Verify (as postgres) nothing leaked from the denied-write block.
+begin;
+set local role postgres;
+do $$
+declare n int;
+begin
+  select count(*) into n from public.grocery_list_items where display_name like 'rls-priv-%';
+  if n <> 0 then raise exception 'FAIL: % rls-priv-* rows survived (expected 0)', n; end if;
+  raise notice 'PASS: privilege-hardening scratch rows cleaned up';
+end $$;
 commit;
 
 do $$

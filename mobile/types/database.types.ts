@@ -1,5 +1,5 @@
 /**
- * Hand-authored to match supabase/migrations/0001-0010. STILL A STAND-IN -
+ * Hand-authored to match supabase/migrations/0001-0011. STILL A STAND-IN -
  * regenerate from a live project once linked:
  *   npx supabase gen types typescript --linked > types/database.types.ts
  *
@@ -529,14 +529,12 @@ export interface Database {
           created_at: string;
           updated_at: string;
         };
-        // Created via get_or_create_active_grocery_list() in practice; a plain
-        // insert is still RLS-legal for the owner.
+        // 0011 narrowed INSERT to (user_id) only - get_or_create_active_grocery_list()
+        // is the real creation path; complete_grocery_list() (security definer)
+        // makes the replacement list. status / completed_at / source / title are
+        // not client-insertable.
         Insert: {
           user_id: string;
-          title?: string;
-          status?: 'active' | 'completed' | 'archived';
-          source?: 'manual' | 'meal_plan' | 'recipe' | 'pantry_shortage';
-          source_metadata?: Json;
         };
         // 0010 revoked the blanket UPDATE grant: a client may only rename its
         // own ACTIVE list. status / completed_at move exclusively through
@@ -576,8 +574,11 @@ export interface Database {
           created_at: string;
           updated_at: string;
         };
-        // normalized_name / checked_at / sort_order are set by triggers - not
-        // sent by the client.
+        // Column grants (migration 0011) are the authoritative boundary; these
+        // shapes are trimmed to match them for developer ergonomics only.
+        // INSERT-granted columns only. normalized_name / is_checked / checked_at
+        // / pantry_transfer_* / estimated_price / swap_suggestion / waste_note /
+        // id / timestamps are trigger- / default- / RPC-owned and not grantable.
         Insert: {
           grocery_list_id: string;
           user_id: string;
@@ -588,30 +589,22 @@ export interface Database {
           quantity?: number;
           unit: PantryQuantityUnit;
           quantity_basis?: 'as_entered' | 'recipe_requirement' | 'uncovered_shortfall';
-          is_checked?: boolean;
           source?: 'manual' | 'recipe' | 'meal_plan' | 'pantry_shortage';
           source_recipe_version_ids?: string[];
           source_metadata?: Json;
-          estimated_price?: number | null;
-          swap_suggestion?: string | null;
-          waste_note?: string | null;
           sort_order?: number;
         };
+        // UPDATE-granted columns only (active-list editing + recipe-merge
+        // reconciliation). is_checked -> toggle_grocery_item; pantry_transfer_*
+        // -> transfer_grocery_item_to_pantry; everything else is
+        // immutable-after-insert or trigger-owned.
         Update: {
-          catalog_ingredient_id?: string | null;
           display_name?: string;
-          image_uri?: string;
           category?: 'produce' | 'protein' | 'dairy' | 'pantry' | 'frozen' | 'other' | null;
           quantity?: number;
           unit?: PantryQuantityUnit;
-          quantity_basis?: 'as_entered' | 'recipe_requirement' | 'uncovered_shortfall';
-          is_checked?: boolean;
           source_recipe_version_ids?: string[];
-          source_metadata?: Json;
-          estimated_price?: number | null;
-          swap_suggestion?: string | null;
-          waste_note?: string | null;
-          sort_order?: number;
+          quantity_basis?: 'as_entered' | 'recipe_requirement' | 'uncovered_shortfall';
         };
         Relationships: [];
       };
