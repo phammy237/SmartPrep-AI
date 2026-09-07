@@ -1,9 +1,23 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { DeductionInput } from '@/lib/validation/cookingSchemas';
-import { cookingService } from '@/services';
+import { cookingService, nutritionService } from '@/services';
 import { haptics } from '@/utils/haptics';
 import { queryKeys } from './queryKeys';
+
+/**
+ * Merged unit-conversion metadata (catalog default + user overrides) for a set
+ * of canonical ingredient ids - fetched ONCE for the whole cooking screen so
+ * the FEFO deduction proposal never does an N+1 lookup per recipe ingredient.
+ */
+export function useConversionMeta(ingredientIds: string[]) {
+  const ids = Array.from(new Set(ingredientIds)).sort();
+  return useQuery({
+    queryKey: queryKeys.conversionMeta(ids),
+    queryFn: () => nutritionService.getConversionMetaMap(ids),
+    enabled: ids.length > 0,
+  });
+}
 
 /**
  * After cooking completion: pantry (quantities changed), recipes/collections/

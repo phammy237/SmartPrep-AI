@@ -11,6 +11,7 @@ export const queryKeys = {
   mealPlan: ['mealPlan'] as const,
   mealPlanWeek: (weekStart: string, weekEnd: string) => ['mealPlan', weekStart, weekEnd] as const,
   cookingEvent: (id: string) => ['cookingEvent', id] as const,
+  conversionMeta: (ingredientIds: string[]) => ['conversionMeta', ingredientIds.join(',')] as const,
   preparedMeals: ['preparedMeals'] as const,
   mealLogs: (startDate: string, endDate: string) => ['mealLogs', startDate, endDate] as const,
   recommendations: ['recommendations'] as const,

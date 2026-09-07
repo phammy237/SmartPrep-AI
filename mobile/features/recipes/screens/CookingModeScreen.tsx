@@ -3,33 +3,39 @@ import React, { useState } from 'react';
 import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
 
 import { Button, Chip, EmptyState, IngredientAvatar, LoadingState, Screen, Stepper, TextField } from '@/components';
-import { useCancelCookingEvent, useCompleteCookingEvent, usePantry, useRecipe, useStartCookingEvent } from '@/hooks';
+import {
+  useCancelCookingEvent,
+  useCompleteCookingEvent,
+  useConversionMeta,
+  usePantry,
+  useRecipe,
+  useStartCookingEvent,
+  useUser,
+} from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
+import {
+  IngredientDeductionPlan,
+  applyPartialConfirmation,
+  applySkip,
+  buildCookingPantryIndex,
+  cookingLotsForIngredient,
+  proposeIngredientDeduction,
+  rescaleForServings,
+} from '@/lib/cooking';
+import { ExpiryState } from '@/lib/freshness';
+import { IngredientConversionMeta } from '@/lib/nutrition/conversion';
 import { DeductionInput } from '@/lib/validation/cookingSchemas';
 import { CookingEvent, MealType, PantryItem } from '@/types';
 import { haptics } from '@/utils/haptics';
 import { generateId } from '@/utils/id';
-import {
-  autoResolvePantryMatch,
-  confirmPartialDeduction,
-  PantryDeductionRowState,
-  PantryMatchCandidate,
-  rescalePantryMatch,
-  scaleRequestedQuantity,
-  skipPantryDeduction,
-  validateDeduction,
-} from '@/utils/nutritionSnapshot';
+import { scaleRequestedQuantity, validateDeduction } from '@/utils/nutritionSnapshot';
 import { PantryItemPickerModal } from '../components/PantryItemPickerModal';
 
 type ScreenState = 'intro' | 'steps' | 'review';
 
 interface DeductionRow {
-  recipeIngredientId: string;
-  ingredientId: string;
-  ingredientName: string;
   imageUri: string;
-  requiredUnit?: string;
-  match: PantryDeductionRowState;
+  plan: IngredientDeductionPlan;
 }
 
 const MEAL_TYPE_OPTIONS: { value: MealType; label: string }[] = [
@@ -43,15 +49,13 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-function toCandidate(item: PantryItem): PantryMatchCandidate {
-  return { id: item.id, ingredientId: item.ingredientId, quantity: item.quantity, unit: item.unit, status: item.status ?? 'active' };
-}
-
 export function CookingModeScreen() {
   const theme = useTheme();
   const { id, planItemId } = useLocalSearchParams<{ id: string; planItemId?: string }>();
   const recipeQuery = useRecipe(id);
   const pantryQuery = usePantry();
+  const timeZone = useUser().data?.timezone ?? 'UTC';
+  const conversionMetaQuery = useConversionMeta(recipeQuery.data?.ingredients.map((i) => i.ingredientId) ?? []);
   const startCooking = useStartCookingEvent();
   const cancelCooking = useCancelCookingEvent();
   const completeCooking = useCompleteCookingEvent();
@@ -67,10 +71,12 @@ export function CookingModeScreen() {
   const [remapRowIndex, setRemapRowIndex] = useState<number | null>(null);
 
   // Stable for the lifetime of this screen instance - reused on retry so a
-  // dropped response after "Start Cooking" never creates a duplicate event.
+  // dropped response after "Start Cooking" never creates a duplicate event,
+  // and gives the FEFO expiry math one fixed "now".
   const [idempotencyKey] = useState(() => generateId('cooking-event'));
+  const [now] = useState(() => new Date());
 
-  if (recipeQuery.isLoading || pantryQuery.isLoading) {
+  if (recipeQuery.isLoading || pantryQuery.isLoading || conversionMetaQuery.isLoading) {
     return (
       <Screen>
         <LoadingState fullscreen message="Loading recipe..." />
@@ -88,21 +94,31 @@ export function CookingModeScreen() {
 
   const recipe = recipeQuery.data;
   const pantry = pantryQuery.data ?? [];
+  const conversionMeta: Map<string, IngredientConversionMeta> = conversionMetaQuery.data ?? new Map();
   const steps = recipe.steps;
   const recipeVersionId = recipe.recipeVersionId ?? recipe.id;
   const nonStapleIngredients = recipe.ingredients.filter((ingredient) => !ingredient.isPantryStaple);
 
-  function buildDeductionRows(servingsPrepared: number): DeductionRow[] {
+  const buildIndex = () => buildCookingPantryIndex(pantry, timeZone, now);
+
+  // FEFO proposal, one plan per non-staple recipe ingredient. The pantry index
+  // + conversion metadata are built ONCE here, never per ingredient.
+  function buildPlans(servingsPrepared: number): DeductionRow[] {
+    const index = buildIndex();
     return nonStapleIngredients.map((ingredient) => {
       const requiredQuantity = scaleRequestedQuantity(ingredient.quantity, recipe.servings, servingsPrepared);
-      const autoMatch = pantry.find((p) => p.status === 'active' && p.ingredientId === ingredient.ingredientId);
+      const lots = cookingLotsForIngredient(ingredient, index);
       return {
-        recipeIngredientId: ingredient.recipeIngredientId ?? ingredient.ingredientId,
-        ingredientId: ingredient.ingredientId,
-        ingredientName: ingredient.name,
         imageUri: ingredient.imageUri,
-        requiredUnit: ingredient.unit,
-        match: autoResolvePantryMatch(requiredQuantity, ingredient.unit, ingredient.ingredientId, autoMatch ? toCandidate(autoMatch) : null),
+        plan: proposeIngredientDeduction({
+          recipeIngredientId: ingredient.recipeIngredientId ?? ingredient.ingredientId,
+          ingredientId: ingredient.ingredientId,
+          ingredientName: ingredient.name,
+          requiredQuantity,
+          requiredUnit: ingredient.unit,
+          lots,
+          conversionMeta: conversionMeta.get(ingredient.ingredientId),
+        }),
       };
     });
   }
@@ -119,7 +135,7 @@ export function CookingModeScreen() {
         onSuccess: (event) => {
           setCookingEvent(event);
           setActualServingsPrepared(recipe.servings);
-          setDeductionRows(buildDeductionRows(recipe.servings));
+          setDeductionRows(buildPlans(recipe.servings));
           setServingsConsumedNow(Math.min(1, recipe.servings));
           setScreenState('steps');
         },
@@ -143,100 +159,144 @@ export function CookingModeScreen() {
     ]);
   };
 
-  // Recalculates the required quantity for every row and re-resolves each
-  // against the SAME pantry item it currently has (an intentional manual
-  // remap is preserved, never silently reverted) - but a previous 'partial'
-  // confirmation is never carried forward as-is: rescalePantryMatch always
-  // recomputes fresh, so if the new amount is still short, the row drops
-  // back to 'needs_decision' and must be explicitly reconfirmed.
+  // Recomputes every plan for the new batch size. A deliberate skip survives; a
+  // manual lot choice is re-run against THAT lot only (never reverted to the
+  // FEFO auto-pick); every other plan is recomputed fresh, so a stale partial
+  // confirmation drops back to a decision if it no longer covers the amount.
   const updateServingsPrepared = (value: number) => {
     setActualServingsPrepared(value);
+    const index = buildIndex();
     setDeductionRows((rows) =>
       rows.map((row, i) => {
         const ingredient = nonStapleIngredients[i];
         const requiredQuantity = scaleRequestedQuantity(ingredient.quantity, recipe.servings, value);
-        const selected = row.match.pantryItemId ? pantry.find((p) => p.id === row.match.pantryItemId) : undefined;
-        return { ...row, match: rescalePantryMatch(row.match, requiredQuantity, row.requiredUnit, row.ingredientId, selected ? toCandidate(selected) : null) };
+        const lots = cookingLotsForIngredient(ingredient, index);
+        return { ...row, plan: rescaleForServings(row.plan, requiredQuantity, lots, conversionMeta.get(ingredient.ingredientId)) };
       }),
     );
     setServingsConsumedNow((current) => Math.min(current, value));
   };
 
-  const skipRow = (index: number) => {
-    setDeductionRows((rows) => rows.map((row, i) => (i === index ? { ...row, match: skipPantryDeduction(row.match) } : row)));
+  const skipRow = (rowIndex: number) => {
+    setDeductionRows((rows) => rows.map((row, i) => (i === rowIndex ? { ...row, plan: applySkip(row.plan) } : row)));
   };
 
-  const confirmPartialForRow = (index: number) => {
-    const row = deductionRows[index];
-    if (!row || row.match.resolution !== 'needs_decision') return;
+  const confirmPartialForRow = (rowIndex: number) => {
+    const row = deductionRows[rowIndex];
+    if (!row || row.plan.status !== 'needs_decision') return;
     Alert.alert(
       'Use a partial amount?',
-      `Only ${row.match.availableQuantity} ${row.match.pantryUnit} of ${row.ingredientName} is available (need ${row.match.requiredQuantity} ${row.requiredUnit}). ` +
-        `The ${round2(row.match.requiredQuantity - (row.match.availableQuantity ?? 0))} ${row.requiredUnit} shortfall will be recorded as sourced from elsewhere, not deducted from your pantry.`,
+      `Only ${round2(row.plan.coveredQuantity)} ${row.plan.coveredUnit} of ${row.plan.ingredientName} is available (need ${round2(row.plan.requiredQuantity)} ${row.plan.requiredUnit ?? ''}). ` +
+        `The ${round2(row.plan.uncoveredQuantity)} ${row.plan.coveredUnit} shortfall will be recorded as sourced from elsewhere, not deducted from your pantry.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Confirm Partial Amount',
           onPress: () =>
-            setDeductionRows((rows) => rows.map((r, i) => (i === index ? { ...r, match: confirmPartialDeduction(r.match) } : r))),
+            setDeductionRows((rows) =>
+              rows.map((r, i) => (i === rowIndex ? { ...r, plan: applyPartialConfirmation(r.plan) } : r)),
+            ),
         },
       ],
     );
   };
 
-  // Revalidates compatibility and live stock against the newly-selected item
-  // from scratch - never trusts the previous row's state.
-  const remapRow = (index: number, item: PantryItem | null) => {
+  // User hand-picks a replacement pantry lot. We re-run the FEFO proposal
+  // restricted to that lot (deterministic, still respects unit rules) and flag
+  // it as a manual override so a later servings change won't silently revert it.
+  const remapRow = (rowIndex: number, item: PantryItem | null) => {
+    const ingredient = nonStapleIngredients[rowIndex];
+    if (!ingredient) return;
+    const index = buildIndex();
+    const lots = cookingLotsForIngredient(ingredient, index);
     setDeductionRows((rows) =>
-      rows.map((row, i) => (i === index ? { ...row, match: autoResolvePantryMatch(row.match.requiredQuantity, row.requiredUnit, row.ingredientId, item ? toCandidate(item) : null) } : row)),
+      rows.map((row, i) => {
+        if (i !== rowIndex) return row;
+        if (!item) return { ...row, plan: applySkip({ ...row.plan, manualOverride: true }) };
+        return {
+          ...row,
+          plan: proposeIngredientDeduction({
+            recipeIngredientId: row.plan.recipeIngredientId,
+            ingredientId: ingredient.ingredientId,
+            ingredientName: ingredient.name,
+            requiredQuantity: row.plan.requiredQuantity,
+            requiredUnit: ingredient.unit,
+            lots,
+            conversionMeta: conversionMeta.get(ingredient.ingredientId),
+            restrictToLotIds: [item.id],
+            manualOverride: true,
+          }),
+        };
+      }),
     );
   };
 
   const handleFinishCooking = () => {
     if (!cookingEvent) return;
 
-    const unresolved = deductionRows.filter((row) => row.match.resolution === 'needs_decision');
+    const unresolved = deductionRows.filter(
+      (row) => row.plan.status === 'needs_decision' || row.plan.status === 'unresolved_unit',
+    );
     if (unresolved.length > 0) {
       Alert.alert(
         'Pantry amounts need a decision',
-        `${unresolved.map((r) => r.ingredientName).join(', ')}: choose a different pantry item, use the available partial amount, skip it, or reduce servings prepared above before finishing.`,
+        `${unresolved.map((r) => r.plan.ingredientName).join(', ')}: choose a different pantry item, use the available partial amount, skip it, or reduce servings prepared above before finishing.`,
       );
       return;
     }
 
-    // Only the final, user-confirmed resolution for each row is sent.
-    const deductions: DeductionInput[] = deductionRows.map((row) => {
-      const m = row.match;
-      const wasSkipped = m.resolution === 'skipped' || m.resolution === 'unmatched' || m.resolution === 'incompatible';
-      return {
-        recipeIngredientId: row.recipeIngredientId,
-        pantryItemId: m.pantryItemId,
-        requestedQuantity: m.requiredQuantity,
-        requestedUnit: row.requiredUnit,
-        deductedQuantity: wasSkipped ? 0 : m.deductedQuantity,
-        deductedUnit: wasSkipped ? undefined : m.pantryUnit,
-        matchConfidence: m.matchConfidence,
-        userConfirmed: !wasSkipped,
-        wasSkipped,
-      };
+    // One deduction row per pantry lot actually used - complete_cooking_event
+    // accepts multiple rows for the same recipe ingredient and applies them all
+    // inside one transaction.
+    const deductions: DeductionInput[] = deductionRows.flatMap((row): DeductionInput[] => {
+      const plan = row.plan;
+      if (plan.status === 'skipped' || plan.status === 'unmatched') {
+        return [
+          {
+            recipeIngredientId: plan.recipeIngredientId,
+            pantryItemId: undefined,
+            requestedQuantity: plan.requiredQuantity,
+            requestedUnit: plan.requiredUnit,
+            deductedQuantity: 0,
+            deductedUnit: undefined,
+            userConfirmed: false,
+            wasSkipped: true,
+          },
+        ];
+      }
+      return plan.allocations.map((alloc, i) => ({
+        recipeIngredientId: plan.recipeIngredientId,
+        pantryItemId: alloc.pantryItemId,
+        // Attribute the recipe's ask to the first row only, so the ledger never
+        // double-counts the requirement across a multi-lot deduction.
+        requestedQuantity: i === 0 ? plan.requiredQuantity : 0,
+        requestedUnit: plan.requiredUnit,
+        deductedQuantity: alloc.proposedDeduction,
+        deductedUnit: alloc.unit,
+        matchConfidence: alloc.matchConfidence,
+        userConfirmed: true,
+        wasSkipped: false,
+      }));
     });
 
     for (const row of deductionRows) {
-      const m = row.match;
-      const wasSkipped = m.resolution === 'skipped' || m.resolution === 'unmatched' || m.resolution === 'incompatible';
-      const result = validateDeduction({
-        wasSkipped,
-        notSourcedFromPantry: m.resolution === 'unmatched',
-        pantryItemId: m.pantryItemId,
-        availableQuantity: m.availableQuantity,
-        pantryUnit: m.pantryUnit,
-        deductedQuantity: m.deductedQuantity,
-        deductedUnit: wasSkipped ? undefined : m.pantryUnit,
-        userConfirmed: !wasSkipped,
-      });
-      if (!result.ok) {
-        Alert.alert('Check pantry amounts', `${row.ingredientName}: ${result.reason}`);
-        return;
+      const plan = row.plan;
+      if (plan.status === 'skipped' || plan.status === 'unmatched') continue;
+      for (const alloc of plan.allocations) {
+        const result = validateDeduction({
+          wasSkipped: false,
+          notSourcedFromPantry: false,
+          pantryItemId: alloc.pantryItemId,
+          availableQuantity: alloc.availableQuantity,
+          pantryUnit: alloc.unit,
+          deductedQuantity: alloc.proposedDeduction,
+          deductedUnit: alloc.unit,
+          userConfirmed: true,
+        });
+        if (!result.ok) {
+          Alert.alert('Check pantry amounts', `${plan.ingredientName}: ${result.reason}`);
+          return;
+        }
       }
     }
 
@@ -262,11 +322,11 @@ export function CookingModeScreen() {
             router.replace('/(tabs)/home');
             return;
           }
-          // The server independently re-validates live stock at completion
-          // time and rejects the WHOLE transaction if anything (including a
-          // remapped/partially-confirmed row) now exceeds what's actually on
-          // hand - e.g. it changed after this screen loaded. Surface that
-          // plainly rather than pretending it partially succeeded.
+          // The server independently re-validates live stock at completion time
+          // and rejects the WHOLE transaction if any single lot (including a
+          // remapped or partially-confirmed one) now exceeds what's actually on
+          // hand - e.g. another session changed it after this screen loaded.
+          // Surface that plainly rather than pretending it partially succeeded.
           Alert.alert('Could not finish cooking', message);
         },
       },
@@ -346,6 +406,11 @@ export function CookingModeScreen() {
 
   // screenState === 'review'
   const remapTarget = remapRowIndex != null ? deductionRows[remapRowIndex] : null;
+  const freshnessColor = (state: ExpiryState): string => {
+    if (state === 'expired' || state === 'critical') return theme.colors.freshness.prioritize;
+    if (state === 'use_soon') return theme.colors.freshness.useSoon;
+    return theme.colors.textTertiary;
+  };
 
   return (
     <Screen scroll contentContainerStyle={{ padding: theme.spacing.xl, gap: theme.spacing.xl }}>
@@ -373,73 +438,85 @@ export function CookingModeScreen() {
       <View style={{ gap: theme.spacing.sm }}>
         <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Pantry ingredients used</Text>
         <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>
-          Review before finishing - only confirmed amounts are deducted from your pantry.
+          SmartPrep proposes the items that should be used first. Review before finishing - only confirmed amounts are deducted.
         </Text>
         {deductionRows.length === 0 ? (
           <Text style={[theme.typography.body, { color: theme.colors.textSecondary }]}>Nothing from your pantry to update.</Text>
         ) : (
           deductionRows.map((row, index) => {
-            const m = row.match;
-            const isProblem = m.resolution === 'needs_decision';
+            const plan = row.plan;
+            const dimmed = plan.status === 'skipped' || plan.status === 'unmatched';
             return (
               <View
-                key={row.recipeIngredientId}
+                key={plan.recipeIngredientId}
                 style={{
                   gap: 8,
                   paddingVertical: theme.spacing.sm,
                   borderBottomWidth: 1,
                   borderBottomColor: theme.colors.border,
-                  opacity: m.resolution === 'skipped' || m.resolution === 'unmatched' || m.resolution === 'incompatible' ? 0.55 : 1,
+                  opacity: dimmed ? 0.55 : 1,
                 }}
               >
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                   <IngredientAvatar imageUri={row.imageUri} variant="row" />
                   <View style={{ flex: 1, gap: 2 }}>
-                    <Text style={[theme.typography.body, { color: theme.colors.textPrimary }]}>{row.ingredientName}</Text>
+                    <Text style={[theme.typography.body, { color: theme.colors.textPrimary }]}>{plan.ingredientName}</Text>
                     <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>
-                      Needs {m.requiredQuantity} {row.requiredUnit}
+                      Needs {round2(plan.requiredQuantity)} {plan.requiredUnit}
                     </Text>
                   </View>
                 </View>
 
-                {m.resolution === 'unmatched' ? (
-                  <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>Not in your pantry - skipped</Text>
-                ) : null}
-                {m.resolution === 'incompatible' ? (
+                {plan.allocations.map((alloc) => (
+                  <View key={alloc.pantryItemId} style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                    <Text style={[theme.typography.caption, { color: theme.colors.textPrimary }]}>
+                      {round2(alloc.proposedDeduction)} {alloc.unit}
+                    </Text>
+                    <Text style={[theme.typography.caption, { color: freshnessColor(alloc.freshnessState) }]}>
+                      · {alloc.freshnessPhrase}
+                    </Text>
+                  </View>
+                ))}
+
+                {plan.allocations.length > 1 || (plan.fefoApplied && plan.status === 'ready') ? (
                   <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>
-                    Unit mismatch (have {m.pantryUnit}) - skipped
-                  </Text>
-                ) : null}
-                {m.resolution === 'skipped' ? (
-                  <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>Skipped - not deducted</Text>
-                ) : null}
-                {m.resolution === 'full' ? (
-                  <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>
-                    Deducting {m.deductedQuantity} {m.pantryUnit} · {m.availableQuantity} {m.pantryUnit} available
-                  </Text>
-                ) : null}
-                {m.resolution === 'partial' ? (
-                  <Text style={[theme.typography.caption, { color: theme.colors.freshness.useSoon }]}>
-                    Partial: deducting {m.deductedQuantity} of {m.requiredQuantity} {row.requiredUnit} · {m.uncoveredQuantity} {row.requiredUnit} from elsewhere
-                  </Text>
-                ) : null}
-                {isProblem ? (
-                  <Text style={[theme.typography.footnote, { color: theme.colors.freshness.prioritize }]}>
-                    Only {m.availableQuantity} {m.pantryUnit} available - short by {m.shortfall} {row.requiredUnit}. Choose an option below.
+                    SmartPrep selected the items that should be used first.
                   </Text>
                 ) : null}
 
+                {plan.status === 'partial' ? (
+                  <Text style={[theme.typography.caption, { color: theme.colors.freshness.useSoon }]}>
+                    {round2(plan.uncoveredQuantity)} {plan.coveredUnit} will come from elsewhere - not deducted from your pantry.
+                  </Text>
+                ) : null}
+                {plan.status === 'needs_decision' ? (
+                  <Text style={[theme.typography.footnote, { color: theme.colors.freshness.prioritize }]}>
+                    Short by {round2(plan.uncoveredQuantity)} {plan.coveredUnit}. Choose an option below.
+                  </Text>
+                ) : null}
+                {plan.status === 'unresolved_unit' ? (
+                  <Text style={[theme.typography.footnote, { color: theme.colors.freshness.prioritize }]}>
+                    Can't compare {plan.requiredUnit} to what's in your pantry confidently - pick a lot or skip it.
+                  </Text>
+                ) : null}
+                {plan.status === 'unmatched' ? (
+                  <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>Not in your pantry - nothing to deduct.</Text>
+                ) : null}
+                {plan.status === 'skipped' ? (
+                  <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>Skipped - not deducted.</Text>
+                ) : null}
+
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
-                  <Pressable onPress={() => setRemapRowIndex(index)} accessibilityRole="button" accessibilityLabel={`Change pantry match for ${row.ingredientName}`}>
+                  <Pressable onPress={() => setRemapRowIndex(index)} accessibilityRole="button" accessibilityLabel={`Change pantry match for ${plan.ingredientName}`}>
                     <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>Change Item</Text>
                   </Pressable>
-                  {isProblem ? (
-                    <Pressable onPress={() => confirmPartialForRow(index)} accessibilityRole="button" accessibilityLabel={`Use available partial amount for ${row.ingredientName}`}>
+                  {plan.status === 'needs_decision' ? (
+                    <Pressable onPress={() => confirmPartialForRow(index)} accessibilityRole="button" accessibilityLabel={`Use available partial amount for ${plan.ingredientName}`}>
                       <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>Use Partial Amount</Text>
                     </Pressable>
                   ) : null}
-                  {m.resolution !== 'skipped' ? (
-                    <Pressable onPress={() => skipRow(index)} accessibilityRole="button" accessibilityLabel={`Skip ${row.ingredientName}`}>
+                  {plan.status !== 'skipped' ? (
+                    <Pressable onPress={() => skipRow(index)} accessibilityRole="button" accessibilityLabel={`Skip ${plan.ingredientName}`}>
                       <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>Skip</Text>
                     </Pressable>
                   ) : null}
@@ -484,9 +561,9 @@ export function CookingModeScreen() {
 
       <PantryItemPickerModal
         visible={remapRowIndex != null}
-        ingredientName={remapTarget?.ingredientName ?? ''}
-        requestedQuantity={remapTarget?.match.requiredQuantity ?? 0}
-        requestedUnit={remapTarget?.requiredUnit}
+        ingredientName={remapTarget?.plan.ingredientName ?? ''}
+        requestedQuantity={remapTarget?.plan.requiredQuantity ?? 0}
+        requestedUnit={remapTarget?.plan.requiredUnit}
         pantryItems={pantry}
         onClose={() => setRemapRowIndex(null)}
         onSelect={(item) => {
