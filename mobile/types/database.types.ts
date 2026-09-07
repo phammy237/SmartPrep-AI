@@ -1,5 +1,5 @@
 /**
- * Hand-authored to match supabase/migrations/0001-0008. STILL A STAND-IN -
+ * Hand-authored to match supabase/migrations/0001-0009. STILL A STAND-IN -
  * regenerate from a live project once linked:
  *   npx supabase gen types typescript --linked > types/database.types.ts
  *
@@ -167,8 +167,10 @@ export interface Database {
           expiration_confidence: 'high' | 'medium' | 'low' | 'unknown';
           storage_location: 'fridge' | 'freezer' | 'pantry' | 'counter' | 'other' | null;
           scan_source: 'manual' | 'scan' | 'grocery';
-          // Set only for scan-confirmed items; UNIQUE. See migration 0008.
+          // Set only for scan-confirmed items; UNIQUE per user. See migration 0008.
           source_scan_detection_id: string | null;
+          // Set only for grocery-transferred items; UNIQUE per user. See migration 0009.
+          source_grocery_item_id: string | null;
           notes: string | null;
           status: 'active' | 'depleted';
           last_confirmed_at: string | null;
@@ -560,6 +562,11 @@ export interface Database {
           source: 'manual' | 'recipe' | 'meal_plan' | 'pantry_shortage';
           source_recipe_version_ids: string[];
           source_metadata: Json;
+          // Transfer state - set only by transfer_grocery_item_to_pantry (see
+          // migration 0009), deliberately kept out of Insert/Update below.
+          pantry_transfer_status: 'not_transferred' | 'transferred';
+          pantry_transferred_at: string | null;
+          pantry_item_id: string | null;
           estimated_price: number | null;
           swap_suggestion: string | null;
           waste_note: string | null;
@@ -703,6 +710,26 @@ export interface Database {
           p_expiration_confidence: string | null;
           p_source: string | null;
           p_source_scan_detection_id: string | null;
+          p_source_grocery_item_id: string | null;
+        };
+        Returns: Database['public']['Tables']['pantry_items']['Row'];
+      };
+      transfer_grocery_item_to_pantry: {
+        Args: {
+          p_grocery_item_id: string;
+          p_ingredient_id: string;
+          p_display_name: string;
+          p_image_uri: string;
+          p_category: string;
+          p_quantity: number;
+          p_unit: string;
+          p_storage_location: string | null;
+          p_notes: string | null;
+          p_purchase_date: string | null;
+          p_user_provided_date: string | null;
+          p_user_provided_date_type: string | null;
+          p_estimated_expiration_date: string | null;
+          p_expiration_confidence: string | null;
         };
         Returns: Database['public']['Tables']['pantry_items']['Row'];
       };

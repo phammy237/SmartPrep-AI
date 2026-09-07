@@ -70,7 +70,9 @@ export function GroceryItemRow({ item, isLast, onToggle, onDelete }: GroceryItem
           {item.name}
           {label ? ` ${label}` : ''}
         </Text>
-        {item.wasteNote ? (
+        {item.pantryTransferStatus === 'transferred' ? (
+          <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>Added to pantry</Text>
+        ) : item.wasteNote ? (
           <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>Low-waste: {item.wasteNote}</Text>
         ) : item.swapSuggestion ? (
           <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>{item.swapSuggestion}</Text>

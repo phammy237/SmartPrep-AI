@@ -10,13 +10,16 @@ import {
   useGroceryList,
   useRemoveGroceryItem,
   useToggleGroceryItem,
+  useTransferGroceryItemsToPantry,
   useUser,
 } from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
+import { groceryTransferService } from '@/services';
 import { GroceryListItem, IngredientCategory } from '@/types';
 import { AddGroceryItemModal } from '../components/AddGroceryItemModal';
 import { GroceryBudgetTiles } from '../components/GroceryBudgetTiles';
 import { GroceryItemRow } from '../components/GroceryItemRow';
+import { TransferToPantryModal } from '../components/TransferToPantryModal';
 
 const CATEGORY_ORDER: IngredientCategory[] = ['produce', 'dairy', 'protein', 'pantry', 'frozen', 'other'];
 const CATEGORY_LABELS: Record<IngredientCategory, string> = {
@@ -36,7 +39,9 @@ export function GroceryScreen() {
   const remove = useRemoveGroceryItem();
   const add = useAddGroceryItem();
   const clearChecked = useClearCheckedGroceryItems();
+  const transferToPantry = useTransferGroceryItemsToPantry();
   const [showAdd, setShowAdd] = useState(false);
+  const [showTransfer, setShowTransfer] = useState(false);
   const [collapsedCategories, setCollapsedCategories] = useState<Set<IngredientCategory>>(new Set());
 
   const itemsByCategory = useMemo(() => {
@@ -68,6 +73,14 @@ export function GroceryScreen() {
     () => (listQuery.data?.items ?? []).filter((item) => item.isChecked).length,
     [listQuery.data],
   );
+
+  const transferCandidates = useMemo(
+    () => groceryTransferService.getTransferableGroceryItems(listQuery.data?.items ?? []),
+    [listQuery.data],
+  );
+
+  // Checked items the user hasn't put in the pantry (and might not want to).
+  const untransferredCheckedCount = transferCandidates.length;
 
   const toggleCategoryCollapsed = (category: IngredientCategory) => {
     setCollapsedCategories((prev) => {
@@ -155,16 +168,31 @@ export function GroceryScreen() {
             />
           ) : null}
 
+          {transferCandidates.length > 0 ? (
+            <Button
+              label={`Add Purchased Items to Pantry (${transferCandidates.length})`}
+              variant="secondary"
+              onPress={() => setShowTransfer(true)}
+              fullWidth
+            />
+          ) : null}
+
           {checkedCount > 0 ? (
             <Button
               label={`Clear Checked (${checkedCount})`}
               variant="ghost"
               loading={clearChecked.isPending}
               onPress={() =>
-                Alert.alert('Clear checked items?', `This removes ${checkedCount} acquired item(s) from your list.`, [
-                  { text: 'Cancel', style: 'cancel' },
-                  { text: 'Clear', style: 'destructive', onPress: () => clearChecked.mutate() },
-                ])
+                Alert.alert(
+                  'Clear checked items?',
+                  untransferredCheckedCount > 0
+                    ? `This removes ${checkedCount} acquired item(s) from your list. ${untransferredCheckedCount} of them ${untransferredCheckedCount === 1 ? "hasn't" : "haven't"} been added to your pantry yet.`
+                    : `This removes ${checkedCount} acquired item(s) from your list.`,
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Clear', style: 'destructive', onPress: () => clearChecked.mutate() },
+                  ],
+                )
               }
               fullWidth
             />
@@ -175,6 +203,28 @@ export function GroceryScreen() {
       <Button label="+ Add Item" variant="ghost" onPress={() => setShowAdd(true)} />
 
       <AddGroceryItemModal visible={showAdd} onClose={() => setShowAdd(false)} onAdd={(input) => add.mutate(input)} />
+
+      <TransferToPantryModal
+        visible={showTransfer}
+        candidates={transferCandidates}
+        isPending={transferToPantry.isPending}
+        onClose={() => setShowTransfer(false)}
+        onConfirm={async (inputs) => {
+          try {
+            const result = await transferToPantry.mutateAsync(inputs);
+            if (result.failed.length === 0) {
+              Alert.alert(
+                'Added to pantry',
+                `${result.transferred.length} item${result.transferred.length === 1 ? '' : 's'} added. They stay checked on your list, marked "Added to pantry".`,
+              );
+            }
+            return result.failed.map((f) => f.groceryItemId);
+          } catch {
+            Alert.alert("Couldn't add items", 'Something went wrong. Please try again.');
+            return inputs.map((i) => i.groceryItemId);
+          }
+        }}
+      />
     </Screen>
   );
 }

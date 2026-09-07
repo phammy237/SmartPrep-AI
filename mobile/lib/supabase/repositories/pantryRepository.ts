@@ -107,6 +107,58 @@ export async function createPantryItem(params: CreatePantryItemParams, timeZone:
     p_expiration_confidence: params.expirationConfidence ?? 'unknown',
     p_source: params.source ?? 'manual',
     p_source_scan_detection_id: params.sourceScanDetectionId ?? null,
+    // Grocery transfers go through transfer_grocery_item_to_pantry, which sets
+    // this itself; a direct manual/scan create never carries a grocery source.
+    p_source_grocery_item_id: null,
+  });
+  if (error) throw error;
+  return mapRow(data, timeZone);
+}
+
+export interface TransferGroceryItemParams {
+  /** The grocery line being transferred - the idempotency anchor. */
+  groceryItemId: string;
+  ingredientId: string;
+  imageUri: string;
+  displayName: string;
+  category: IngredientCategory;
+  quantity: number;
+  unit: QuantityUnit;
+  storageLocation?: StorageLocation;
+  notes?: string;
+  purchaseDate?: string;
+  userProvidedDate?: string;
+  userProvidedDateType?: UserProvidedDateType;
+  estimatedExpirationDate?: string;
+  expirationConfidence?: PantryItem['expirationConfidence'];
+}
+
+/**
+ * Atomic, idempotent transfer of one acquired grocery line into a pantry lot,
+ * via the security-definer transfer_grocery_item_to_pantry RPC (which verifies
+ * ownership + acquisition, creates the lot through the shared create_pantry_item
+ * invariant, links it back, and marks the line transferred). A retry returns
+ * the same pantry item - never a duplicate row or ledger event.
+ */
+export async function transferGroceryItemToPantry(
+  params: TransferGroceryItemParams,
+  timeZone: string,
+): Promise<PantryItem> {
+  const { data, error } = await supabase.rpc('transfer_grocery_item_to_pantry', {
+    p_grocery_item_id: params.groceryItemId,
+    p_ingredient_id: params.ingredientId,
+    p_display_name: params.displayName,
+    p_image_uri: params.imageUri,
+    p_category: params.category,
+    p_quantity: params.quantity,
+    p_unit: params.unit,
+    p_storage_location: params.storageLocation ?? null,
+    p_notes: params.notes ?? null,
+    p_purchase_date: params.purchaseDate ?? null,
+    p_user_provided_date: params.userProvidedDate ?? null,
+    p_user_provided_date_type: params.userProvidedDateType ?? null,
+    p_estimated_expiration_date: params.estimatedExpirationDate ?? null,
+    p_expiration_confidence: params.expirationConfidence ?? 'unknown',
   });
   if (error) throw error;
   return mapRow(data, timeZone);

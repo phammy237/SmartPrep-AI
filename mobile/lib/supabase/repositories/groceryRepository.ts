@@ -43,6 +43,8 @@ function mapItemRow(row: GroceryListItemRow): GroceryListItem {
     // A generated line whose pantry comparison couldn't be resolved carries the
     // conservative full requirement - flag it so Grocery can ask for a check.
     needsQuantityCheck: meta.coverage === 'unresolved' ? true : undefined,
+    pantryTransferStatus: row.pantry_transfer_status,
+    pantryItemId: row.pantry_item_id ?? undefined,
     estimatedPrice: row.estimated_price ?? undefined,
     swapSuggestion: row.swap_suggestion ?? undefined,
     wasteNote: row.waste_note ?? undefined,

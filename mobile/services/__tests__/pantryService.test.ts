@@ -11,6 +11,7 @@ jest.mock('@/lib/supabase/repositories', () => ({
   fetchPantryItems: jest.fn(),
   fetchPantryItem: jest.fn(),
   createPantryItem: jest.fn(),
+  transferGroceryItemToPantry: jest.fn(),
   updatePantryItemMetadata: jest.fn(),
   adjustPantryQuantity: jest.fn(),
   depletePantryItem: jest.fn(),
@@ -43,6 +44,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   (supabase.auth.getUser as jest.Mock).mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null });
   (repositories.createPantryItem as jest.Mock).mockImplementation(async (params) => ({ ...CURRENT_ITEM, ...params }));
+  (repositories.transferGroceryItemToPantry as jest.Mock).mockImplementation(async (params) => ({ ...CURRENT_ITEM, ...params, source: 'grocery' }));
 });
 
 describe('shared identity resolution on create', () => {
@@ -105,6 +107,72 @@ describe('shared identity resolution on create', () => {
     );
     const [params] = (repositories.createPantryItem as jest.Mock).mock.calls[0];
     expect(params.sourceScanDetectionId).toBeUndefined();
+  });
+
+  it('createGroceryTransferItem routes through the SAME identity + expiration path, tags the grocery id', async () => {
+    await pantryService.createGroceryTransferItem(
+      {
+        groceryItemId: 'gi-1',
+        ingredientId: 'ing-chicken-breast',
+        displayName: 'Chicken Breast',
+        imageUri: 'x',
+        category: 'protein',
+        quantity: 1,
+        unit: 'lb',
+      },
+      'UTC',
+    );
+    const [params, tz] = (repositories.transferGroceryItemToPantry as jest.Mock).mock.calls[0];
+    expect(params).toMatchObject({
+      groceryItemId: 'gi-1',
+      ingredientId: 'ing-chicken-breast', // catalog id preserved
+      // no dates given -> no fabricated expiration, confidence unknown
+      expirationConfidence: 'unknown',
+    });
+    expect(params.estimatedExpirationDate).toBeUndefined();
+    expect(tz).toBe('UTC');
+    // creation never goes through the manual/scan create path
+    expect(repositories.createPantryItem).not.toHaveBeenCalled();
+  });
+
+  it('createGroceryTransferItem resolves identity by name when the line had no catalog id', async () => {
+    await pantryService.createGroceryTransferItem(
+      { groceryItemId: 'gi-2', displayName: 'Chicken Breast', imageUri: 'x', category: 'protein', quantity: 2, unit: 'lb' },
+      'UTC',
+    );
+    const [params] = (repositories.transferGroceryItemToPantry as jest.Mock).mock.calls[0];
+    expect(params.ingredientId).toBe('ing-chicken-breast');
+  });
+
+  it('createGroceryTransferItem keeps a synthetic id when nothing resolves, and never fabricates nutrition/USDA', async () => {
+    await pantryService.createGroceryTransferItem(
+      { groceryItemId: 'gi-3', displayName: 'Homemade Chili Crisp', imageUri: '', category: 'other', quantity: 1, unit: 'container' },
+      'UTC',
+    );
+    const [params] = (repositories.transferGroceryItemToPantry as jest.Mock).mock.calls[0];
+    expect(params.ingredientId).toMatch(/^ing-(grocery|manual)/);
+    expect(params).not.toHaveProperty('fdcId');
+    expect(resolveQuantityNutrition).not.toHaveBeenCalled();
+  });
+
+  it('createGroceryTransferItem passes a purchase date through to the category expiration heuristic (medium)', async () => {
+    await pantryService.createGroceryTransferItem(
+      {
+        groceryItemId: 'gi-4',
+        ingredientId: 'ing-chicken-breast',
+        displayName: 'Chicken Breast',
+        imageUri: 'x',
+        category: 'protein',
+        quantity: 1,
+        unit: 'lb',
+        purchaseDate: '2026-09-06',
+      },
+      'UTC',
+    );
+    const [params] = (repositories.transferGroceryItemToPantry as jest.Mock).mock.calls[0];
+    expect(params.purchaseDate).toBe('2026-09-06');
+    expect(params.expirationConfidence).toBe('medium');
+    expect(params.estimatedExpirationDate).toBe('2026-09-10'); // protein shelf life = 4 days
   });
 });
 

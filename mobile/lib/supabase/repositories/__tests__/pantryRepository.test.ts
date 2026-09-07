@@ -7,6 +7,7 @@ import {
   fetchPantryItem,
   fetchPantryItems,
   restorePantryItem,
+  transferGroceryItemToPantry,
   updatePantryItemMetadata,
 } from '../pantryRepository';
 
@@ -218,6 +219,63 @@ describe('adjustPantryQuantity / depletePantryItem / restorePantryItem / confirm
     await expect(adjustPantryQuantity('item-1', -100, 'consumed', undefined, 'UTC')).rejects.toThrow(
       'quantity cannot go below zero',
     );
+  });
+});
+
+describe('transferGroceryItemToPantry', () => {
+  it('calls transfer_grocery_item_to_pantry with the reviewed values and the grocery id, and maps the row', async () => {
+    (supabase.rpc as jest.Mock).mockResolvedValue({
+      data: { ...BASE_ROW, id: 'lot-1', scan_source: 'grocery' },
+      error: null,
+    });
+
+    const result = await transferGroceryItemToPantry(
+      {
+        groceryItemId: 'gi-1',
+        ingredientId: 'ing-chicken-breast',
+        imageUri: 'https://example.com/c.jpg',
+        displayName: 'Chicken Breast',
+        category: 'protein',
+        quantity: 1,
+        unit: 'lb',
+        purchaseDate: '2026-09-06',
+        estimatedExpirationDate: '2026-09-10',
+        expirationConfidence: 'medium',
+      },
+      'UTC',
+    );
+
+    expect(supabase.rpc).toHaveBeenCalledWith('transfer_grocery_item_to_pantry', {
+      p_grocery_item_id: 'gi-1',
+      p_ingredient_id: 'ing-chicken-breast',
+      p_display_name: 'Chicken Breast',
+      p_image_uri: 'https://example.com/c.jpg',
+      p_category: 'protein',
+      p_quantity: 1,
+      p_unit: 'lb',
+      p_storage_location: null,
+      p_notes: null,
+      p_purchase_date: '2026-09-06',
+      p_user_provided_date: null,
+      p_user_provided_date_type: null,
+      p_estimated_expiration_date: '2026-09-10',
+      p_expiration_confidence: 'medium',
+    });
+    expect(result.id).toBe('lot-1');
+    expect(result.source).toBe('grocery');
+  });
+
+  it('propagates a Supabase / RPC error (e.g. "grocery item is not marked as acquired")', async () => {
+    (supabase.rpc as jest.Mock).mockResolvedValue({
+      data: null,
+      error: new Error('grocery item is not marked as acquired'),
+    });
+    await expect(
+      transferGroceryItemToPantry(
+        { groceryItemId: 'gi-1', ingredientId: 'i', imageUri: '', displayName: 'X', category: 'other', quantity: 1, unit: 'item' },
+        'UTC',
+      ),
+    ).rejects.toThrow('not marked as acquired');
   });
 });
 

@@ -28,6 +28,14 @@ export interface GroceryListItem {
   isManuallyAdded?: boolean;
   /** Generated line whose pantry comparison was unresolved - carries the conservative full requirement. */
   needsQuantityCheck?: boolean;
+  /**
+   * Whether this acquired line has been turned into a pantry lot. Independent of
+   * `isChecked` ("acquired" and "in pantry" are separate facts). Set only via
+   * the transfer flow (transfer_grocery_item_to_pantry).
+   */
+  pantryTransferStatus?: 'not_transferred' | 'transferred';
+  /** The pantry lot this line produced, once transferred. */
+  pantryItemId?: string;
   estimatedPrice?: number;
   /** e.g. "Swap: Cucumber" - a lower-waste substitution suggestion. */
   swapSuggestion?: string;

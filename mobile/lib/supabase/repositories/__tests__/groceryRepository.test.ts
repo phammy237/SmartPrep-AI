@@ -59,6 +59,9 @@ const ITEM_ROW = {
   source: 'recipe' as const,
   source_recipe_version_ids: ['rv-1'],
   source_metadata: {},
+  pantry_transfer_status: 'not_transferred' as const,
+  pantry_transferred_at: null,
+  pantry_item_id: null,
   estimated_price: null,
   swap_suggestion: null,
   waste_note: null,
@@ -273,5 +276,26 @@ describe('mapItemRow - needsQuantityCheck from source_metadata', () => {
     (supabase.from as jest.Mock).mockReturnValue(chain);
     const [row] = await fetchGroceryListItems('list-1');
     expect(row.needsQuantityCheck).toBeUndefined();
+  });
+});
+
+describe('mapItemRow - pantry transfer state', () => {
+  it('maps not-transferred lines', async () => {
+    (supabase.from as jest.Mock).mockReturnValue(makeChain({ data: [ITEM_ROW], error: null }));
+    const [row] = await fetchGroceryListItems('list-1');
+    expect(row.pantryTransferStatus).toBe('not_transferred');
+    expect(row.pantryItemId).toBeUndefined();
+  });
+
+  it('maps a transferred line with its pantry lot id', async () => {
+    (supabase.from as jest.Mock).mockReturnValue(
+      makeChain({
+        data: [{ ...ITEM_ROW, is_checked: true, pantry_transfer_status: 'transferred', pantry_item_id: 'lot-9', pantry_transferred_at: '2026-09-06T00:00:00.000Z' }],
+        error: null,
+      }),
+    );
+    const [row] = await fetchGroceryListItems('list-1');
+    expect(row.pantryTransferStatus).toBe('transferred');
+    expect(row.pantryItemId).toBe('lot-9');
   });
 });

@@ -298,10 +298,11 @@ async function applyPlanGroceryDemand(plan: PlanWeekGroceryDemand): Promise<Appl
 
 /**
  * Grocery <-> pantry boundary: checking a grocery item means "acquired /
- * done", NOT "now in my pantry". Nothing in this service reads or writes
- * pantry_items / pantry_events. The previous mock service did not cross this
- * line either, so there is no implicit pantry mutation to remove - an
- * explicit "add purchased items to pantry" flow is future work.
+ * done", NOT "now in my pantry". Nothing in THIS service reads or writes
+ * pantry_items / pantry_events - that boundary is intentional. The explicit,
+ * user-reviewed "add purchased items to pantry" flow lives in the separate
+ * groceryTransferService (grocery line -> pantryService -> pantry), and it
+ * never toggles is_checked or mutates grocery quantities here.
  */
 export const groceryService = {
   getGroceryList,

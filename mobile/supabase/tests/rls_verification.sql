@@ -5,10 +5,12 @@
 -- (grocery_lists, grocery_list_items), Phase 4 kitchen impact
 -- (get_kitchen_impact_summary, derived from pantry_events / cooking_events),
 -- Phase 4 nutrition normalization (usda_foods,
--- canonical_ingredient_nutrition, user_ingredient_overrides), and Phase 6
+-- canonical_ingredient_nutrition, user_ingredient_overrides), Phase 6
 -- scan history (scans, scan_sections, scan_detections + the idempotent
--- begin/link/finalize confirmation RPCs and pantry_items.source_scan_detection_id).
--- Run migrations 0001-0008 first.
+-- begin/link/finalize confirmation RPCs and pantry_items.source_scan_detection_id),
+-- and Phase 7 grocery->pantry transfer (transfer_grocery_item_to_pantry +
+-- pantry_items.source_grocery_item_id + grocery_list_items transfer state).
+-- Run migrations 0001-0009 first.
 --
 -- Run this in the Supabase SQL editor or via `psql` against your linked
 -- project. It does NOT create test users itself - auth.users rows can only
@@ -2591,6 +2593,245 @@ delete from public.pantry_events where pantry_item_id in (
 delete from public.pantry_items where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid) and source_scan_detection_id is not null;
 delete from public.scans where client_scan_id = 'rls-scan-a';
 drop table if exists _rls_scan_a;
+commit;
+
+-- ============================================================================
+-- Phase 7: grocery -> pantry transfer (transfer_grocery_item_to_pantry +
+-- pantry_items.source_grocery_item_id + grocery_list_items transfer state).
+-- ============================================================================
+
+-- --- user_a acquires two grocery lines (one checked, one not) --------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  v_list uuid;
+begin
+  v_list := (public.get_or_create_active_grocery_list()).id;
+
+  insert into public.grocery_list_items (grocery_list_id, user_id, display_name, category, quantity, unit, source, is_checked)
+  values (v_list, 'TEST_USER_A_ID'::uuid, 'rls-transfer-eggs', 'protein', 12, 'item', 'manual', true);
+
+  insert into public.grocery_list_items (grocery_list_id, user_id, display_name, category, quantity, unit, source, is_checked)
+  values (v_list, 'TEST_USER_A_ID'::uuid, 'rls-transfer-unchecked', 'produce', 1, 'bag', 'manual', false);
+end $$;
+commit;
+
+-- Stash the two grocery-line ids (as postgres, RLS-free) for the cross-user checks.
+begin;
+set local role postgres;
+drop table if exists _rls_gi_a;
+create temp table _rls_gi_a as
+  select
+    (select id from public.grocery_list_items where user_id = 'TEST_USER_A_ID'::uuid and display_name = 'rls-transfer-eggs') as checked_id,
+    (select id from public.grocery_list_items where user_id = 'TEST_USER_A_ID'::uuid and display_name = 'rls-transfer-unchecked') as unchecked_id;
+do $$
+begin
+  if (select checked_id from _rls_gi_a) is null or (select unchecked_id from _rls_gi_a) is null then
+    raise exception 'FAIL: could not stash user_a grocery line ids';
+  end if;
+end $$;
+commit;
+
+-- --- user_a transfers the checked line; retry is idempotent ---------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  v_gi uuid;
+  v_gi_unchecked uuid;
+  v_item public.pantry_items;
+  v_item_again public.pantry_items;
+  v_items int;
+  v_events int;
+  v_status text;
+  v_linked uuid;
+  succeeded boolean := false;
+begin
+  select checked_id, unchecked_id into v_gi, v_gi_unchecked from _rls_gi_a;
+
+  -- 1. first transfer: one pantry lot + one 'added' event, line marked transferred.
+  v_item := public.transfer_grocery_item_to_pantry(
+    p_grocery_item_id := v_gi,
+    p_ingredient_id := 'ing-eggs',
+    p_display_name := 'Eggs',
+    p_image_uri := '',
+    p_category := 'protein',
+    p_quantity := 12,
+    p_unit := 'item'
+  );
+  if v_item.scan_source <> 'grocery' then raise exception 'FAIL: transferred item scan_source is % (expected grocery)', v_item.scan_source; end if;
+
+  select count(*) into v_items from public.pantry_items where user_id = 'TEST_USER_A_ID'::uuid and source_grocery_item_id = v_gi;
+  if v_items <> 1 then raise exception 'FAIL: expected exactly 1 pantry item for the grocery line, got %', v_items; end if;
+
+  select count(*) into v_events from public.pantry_events where pantry_item_id = v_item.id and event_type = 'added';
+  if v_events <> 1 then raise exception 'FAIL: expected exactly 1 added event, got %', v_events; end if;
+
+  select pantry_transfer_status, pantry_item_id into v_status, v_linked
+  from public.grocery_list_items where id = v_gi;
+  if v_status <> 'transferred' or v_linked is distinct from v_item.id then
+    raise exception 'FAIL: grocery line not marked transferred / linked (status %, link %)', v_status, v_linked;
+  end if;
+
+  -- 2. retry: same lot, still exactly one row + one 'added' event.
+  v_item_again := public.transfer_grocery_item_to_pantry(
+    p_grocery_item_id := v_gi,
+    p_ingredient_id := 'ing-eggs',
+    p_display_name := 'Eggs',
+    p_image_uri := '',
+    p_category := 'protein',
+    p_quantity := 6,   -- even with a different reviewed quantity, the first lot wins
+    p_unit := 'item'
+  );
+  if v_item_again.id <> v_item.id then
+    raise exception 'FAIL: retry created a DIFFERENT pantry item (% vs %)', v_item_again.id, v_item.id;
+  end if;
+  select count(*) into v_items from public.pantry_items where user_id = 'TEST_USER_A_ID'::uuid and source_grocery_item_id = v_gi;
+  select count(*) into v_events from public.pantry_events where pantry_item_id = v_item.id and event_type = 'added';
+  if v_items <> 1 or v_events <> 1 then
+    raise exception 'FAIL: retry duplicated a row/event (items %, events %)', v_items, v_events;
+  end if;
+
+  -- 3. the unique partial index blocks a raw duplicate source linkage.
+  begin
+    insert into public.pantry_items (
+      user_id, ingredient_id, normalized_name, display_name, image_uri, category, quantity, unit, source_grocery_item_id
+    ) values ('TEST_USER_A_ID'::uuid, 'ing-eggs', 'eggs', 'Eggs', '', 'protein', 6, 'item', v_gi);
+    raise exception 'FAIL: pantry_items_source_grocery_item_uq did not block a duplicate source linkage';
+  exception
+    when unique_violation then null;
+    when insufficient_privilege then null; -- no client insert grant is also fine
+  end;
+
+  -- 4. an unchecked grocery line cannot transfer.
+  begin
+    perform public.transfer_grocery_item_to_pantry(
+      p_grocery_item_id := v_gi_unchecked,
+      p_ingredient_id := 'ing-lettuce',
+      p_display_name := 'Lettuce',
+      p_image_uri := '',
+      p_category := 'produce',
+      p_quantity := 1,
+      p_unit := 'bag'
+    );
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: transferred a grocery line that was not marked acquired'; end if;
+
+  raise notice 'PASS: user_a grocery transfer is atomic, idempotent, and requires acquisition';
+end $$;
+commit;
+
+-- --- user_b cannot transfer or alter user_a's grocery line ---------------
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
+
+do $$
+declare
+  v_gi uuid;
+  leaked int;
+  affected int;
+  succeeded boolean := false;
+begin
+  select checked_id into v_gi from _rls_gi_a;
+
+  -- cannot even see user_a's grocery line
+  select count(*) into leaked from public.grocery_list_items where id = v_gi;
+  if leaked <> 0 then raise exception 'FAIL: user_b can see user_a''s grocery line'; end if;
+
+  -- cannot transfer it
+  begin
+    perform public.transfer_grocery_item_to_pantry(
+      p_grocery_item_id := v_gi,
+      p_ingredient_id := 'ing-eggs',
+      p_display_name := 'Eggs',
+      p_image_uri := '',
+      p_category := 'protein',
+      p_quantity := 12,
+      p_unit := 'item'
+    );
+    succeeded := true;
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: user_b transferred user_a''s grocery line'; end if;
+
+  -- cannot see the pantry lot it produced
+  select count(*) into leaked from public.pantry_items where source_grocery_item_id = v_gi;
+  if leaked <> 0 then raise exception 'FAIL: user_b can see the pantry lot from user_a''s transfer'; end if;
+
+  -- a raw update of user_a's transfer state hits nothing (RLS-filtered)
+  update public.grocery_list_items set pantry_transfer_status = 'not_transferred' where id = v_gi;
+  get diagnostics affected = row_count;
+  if affected <> 0 then raise exception 'FAIL: user_b altered user_a''s grocery transfer state'; end if;
+
+  raise notice 'PASS: user_b cannot see, transfer, or alter user_a''s grocery line or its pantry lot';
+end $$;
+commit;
+
+-- --- anonymous cannot transfer -----------------------------------------------
+begin;
+set local role anon;
+select set_config('request.jwt.claims', '', true);
+
+do $$
+declare
+  v_gi uuid;
+  succeeded boolean := false;
+begin
+  select checked_id into v_gi from _rls_gi_a;
+  begin
+    perform public.transfer_grocery_item_to_pantry(
+      p_grocery_item_id := v_gi,
+      p_ingredient_id := 'ing-eggs',
+      p_display_name := 'Eggs',
+      p_image_uri := '',
+      p_category := 'protein',
+      p_quantity := 12,
+      p_unit := 'item'
+    );
+    succeeded := true;
+  exception when others then succeeded := false;  -- 'not authenticated' or permission denied both pass
+  end;
+  if succeeded then raise exception 'FAIL: anonymous role transferred a grocery line'; end if;
+  raise notice 'PASS: anonymous role cannot transfer a grocery line';
+end $$;
+commit;
+
+-- Verify (as postgres) user_a still has exactly one pantry lot for the line.
+begin;
+set local role postgres;
+do $$
+declare v_items int; v_events int;
+begin
+  select count(*) into v_items from public.pantry_items
+  where user_id = 'TEST_USER_A_ID'::uuid and source_grocery_item_id = (select checked_id from _rls_gi_a);
+  select count(*) into v_events from public.pantry_events
+  where event_type = 'added' and pantry_item_id in (
+    select id from public.pantry_items where user_id = 'TEST_USER_A_ID'::uuid and source_grocery_item_id = (select checked_id from _rls_gi_a)
+  );
+  if v_items <> 1 or v_events <> 1 then
+    raise exception 'FAIL: after user_b/anon attempts user_a has % lots / % added events (expected 1 / 1)', v_items, v_events;
+  end if;
+  raise notice 'PASS: user_a grocery-transferred pantry lot verified single as postgres';
+end $$;
+commit;
+
+-- --- Phase 7 cleanup -------------------------------------------------------
+begin;
+set local role postgres;
+delete from public.pantry_events where pantry_item_id in (
+  select id from public.pantry_items where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid) and source_grocery_item_id is not null
+);
+delete from public.pantry_items where user_id in ('TEST_USER_A_ID'::uuid, 'TEST_USER_B_ID'::uuid) and source_grocery_item_id is not null;
+delete from public.grocery_list_items where display_name in ('rls-transfer-eggs', 'rls-transfer-unchecked');
+drop table if exists _rls_gi_a;
 commit;
 
 do $$

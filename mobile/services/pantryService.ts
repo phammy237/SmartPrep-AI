@@ -9,9 +9,11 @@ import {
   fetchPantryItem,
   fetchPantryItems,
   restorePantryItem,
+  transferGroceryItemToPantry,
   updatePantryItemMetadata,
 } from '@/lib/supabase/repositories';
 import { supabase } from '@/lib/supabase/client';
+import { GroceryTransferItemInput } from '@/lib/validation/grocerySchemas';
 import { CreatePantryItemInput, EditPantryItemMetadataInput } from '@/lib/validation/pantrySchemas';
 import { IngredientCategory, PantryItem, QuantityUnit } from '@/types';
 import { estimateExpiration } from '@/utils/expiration';
@@ -137,6 +139,50 @@ async function createScanItem(input: ScanPantryItemInput, timeZone: string): Pro
 }
 
 /**
+ * Creates a pantry lot from a reviewed, ACQUIRED grocery line through the SAME
+ * identity + expiration + creation path as a manual add - only the provenance
+ * (`source = 'grocery'`, `source_grocery_item_id`) and the idempotency anchor
+ * differ. The user's reviewed quantity/unit/name/dates are used verbatim; a
+ * retry returns the already-created lot (DB-enforced), it does not re-apply
+ * edits. Nutrition is NOT resolved here - a transferred item enriches at read
+ * time exactly like any other pantry item.
+ */
+async function createGroceryTransferItem(input: GroceryTransferItemInput, timeZone: string): Promise<PantryItem> {
+  const identity = resolvePantryIdentity({
+    hintId: input.ingredientId,
+    name: input.displayName,
+    fallbackImageUri: input.imageUri || ingredientPhotoUri(generateId('ing-grocery'), input.displayName),
+  });
+  // Same rule as addManualPantryItem: a printed date wins ('high'); else a
+  // purchase date drives the category heuristic ('medium'); with neither,
+  // confidence stays 'unknown' and no date is fabricated.
+  const estimate = estimateExpiration({
+    category: input.category,
+    purchaseDate: input.purchaseDate,
+    userProvidedDate: input.userProvidedDate,
+  });
+  return transferGroceryItemToPantry(
+    {
+      groceryItemId: input.groceryItemId,
+      ingredientId: identity.ingredientId,
+      imageUri: identity.imageUri,
+      displayName: input.displayName,
+      category: input.category,
+      quantity: input.quantity,
+      unit: input.unit,
+      storageLocation: input.storageLocation,
+      notes: input.notes,
+      purchaseDate: input.purchaseDate,
+      userProvidedDate: input.userProvidedDate,
+      userProvidedDateType: input.userProvidedDateType,
+      estimatedExpirationDate: estimate.estimatedExpirationDate,
+      expirationConfidence: estimate.confidence,
+    },
+    timeZone,
+  );
+}
+
+/**
  * Read-time nutrition enrichment for a pantry item. Secondary to persistence:
  * returns an explicit `unresolved` resolution (not an error) when the item's
  * quantity/unit cannot be converted or no reference exists - never fabricates
@@ -214,6 +260,7 @@ export const pantryService = {
   getPantryItem,
   addManualPantryItem,
   createScanItem,
+  createGroceryTransferItem,
   resolveItemNutrition,
   updateItemMetadata,
   adjustQuantity,

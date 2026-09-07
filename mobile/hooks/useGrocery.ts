@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { groceryService, ManualGroceryItemInput, UpdateGroceryItemInput } from '@/services';
+import { groceryService, groceryTransferService, ManualGroceryItemInput, UpdateGroceryItemInput } from '@/services';
 import type { RecipeShortfall } from '@/services';
+import { GroceryTransferItemInput } from '@/lib/validation/grocerySchemas';
 import { queryKeys } from './queryKeys';
 
 export function useGroceryList() {
@@ -60,5 +61,21 @@ export function useAddRecipeShortfallsToGroceryList() {
     mutationFn: ({ recipeId, shortfalls }: { recipeId: string; shortfalls: RecipeShortfall[] }) =>
       groceryService.addRecipeShortfallsToGroceryList(recipeId, shortfalls),
     onSuccess: invalidate,
+  });
+}
+
+/**
+ * Transfers a reviewed set of acquired grocery lines into the pantry. Retry-safe
+ * (idempotent per grocery line); invalidates both the grocery list (transfer
+ * state) and the pantry (new lots).
+ */
+export function useTransferGroceryItemsToPantry() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (inputs: GroceryTransferItemInput[]) => groceryTransferService.transferItemsToPantry(inputs),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.groceryList });
+      queryClient.invalidateQueries({ queryKey: queryKeys.pantry });
+    },
   });
 }
