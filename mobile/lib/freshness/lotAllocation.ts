@@ -64,8 +64,14 @@ function positive(n: unknown): n is number {
 /**
  * FEFO sort: soonest-expiring first. `daysUntilExpiry` null (unknown) sorts
  * after all dated lots. Ties broken by `lotId` so the result never depends on
- * input array order.
+ * input array order. Exported as `fefoSortExpiringLots` so callers that only
+ * need the ORDER (e.g. the cooking picker) reuse this one implementation rather
+ * than writing their own.
  */
+export function fefoSortExpiringLots(lots: ExpiringLot[]): ExpiringLot[] {
+  return fefoSort(lots);
+}
+
 function fefoSort(lots: ExpiringLot[]): ExpiringLot[] {
   return [...lots].sort((a, b) => {
     const ra = expiryStateRank(a.expiry.state);

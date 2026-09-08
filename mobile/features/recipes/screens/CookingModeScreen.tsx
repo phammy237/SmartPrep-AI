@@ -19,13 +19,15 @@ import {
   applySkip,
   buildCookingPantryIndex,
   cookingLotsForIngredient,
+  describeSelectableLots,
   proposeIngredientDeduction,
   rescaleForServings,
+  summarizeUrgentDeductions,
 } from '@/lib/cooking';
 import { ExpiryState } from '@/lib/freshness';
 import { IngredientConversionMeta } from '@/lib/nutrition/conversion';
 import { DeductionInput } from '@/lib/validation/cookingSchemas';
-import { CookingEvent, MealType, PantryItem } from '@/types';
+import { CookingEvent, MealType } from '@/types';
 import { haptics } from '@/utils/haptics';
 import { generateId } from '@/utils/id';
 import { scaleRequestedQuantity, validateDeduction } from '@/utils/nutritionSnapshot';
@@ -201,10 +203,11 @@ export function CookingModeScreen() {
     );
   };
 
-  // User hand-picks a replacement pantry lot. We re-run the FEFO proposal
-  // restricted to that lot (deterministic, still respects unit rules) and flag
+  // User hand-picks the allowed lot set. We re-run the SAME FEFO proposal
+  // restricted to those ids (deterministic, still respects unit rules) and flag
   // it as a manual override so a later servings change won't silently revert it.
-  const remapRow = (rowIndex: number, item: PantryItem | null) => {
+  // An empty set means "don't deduct" (skip).
+  const confirmLots = (rowIndex: number, selectedLotIds: string[]) => {
     const ingredient = nonStapleIngredients[rowIndex];
     if (!ingredient) return;
     const index = buildIndex();
@@ -212,7 +215,9 @@ export function CookingModeScreen() {
     setDeductionRows((rows) =>
       rows.map((row, i) => {
         if (i !== rowIndex) return row;
-        if (!item) return { ...row, plan: applySkip({ ...row.plan, manualOverride: true }) };
+        if (selectedLotIds.length === 0) {
+          return { ...row, plan: applySkip({ ...row.plan, manualOverride: true, manualLotIds: [] }) };
+        }
         return {
           ...row,
           plan: proposeIngredientDeduction({
@@ -223,11 +228,37 @@ export function CookingModeScreen() {
             requiredUnit: ingredient.unit,
             lots,
             conversionMeta: conversionMeta.get(ingredient.ingredientId),
-            restrictToLotIds: [item.id],
+            restrictToLotIds: selectedLotIds,
             manualOverride: true,
           }),
         };
       }),
+    );
+  };
+
+  // "Use SmartPrep picks": drop the manual restriction and re-run global FEFO.
+  const resetRow = (rowIndex: number) => {
+    const ingredient = nonStapleIngredients[rowIndex];
+    if (!ingredient) return;
+    const index = buildIndex();
+    const lots = cookingLotsForIngredient(ingredient, index);
+    setDeductionRows((rows) =>
+      rows.map((row, i) =>
+        i === rowIndex
+          ? {
+              ...row,
+              plan: proposeIngredientDeduction({
+                recipeIngredientId: row.plan.recipeIngredientId,
+                ingredientId: ingredient.ingredientId,
+                ingredientName: ingredient.name,
+                requiredQuantity: row.plan.requiredQuantity,
+                requiredUnit: ingredient.unit,
+                lots,
+                conversionMeta: conversionMeta.get(ingredient.ingredientId),
+              }),
+            }
+          : row,
+      ),
     );
   };
 
@@ -300,6 +331,22 @@ export function CookingModeScreen() {
       }
     }
 
+    // Factual line about the expiring stock this cook ACTUALLY used - derived
+    // from the confirmed per-lot allocations, so a user override that swapped an
+    // urgent lot for a fresh one changes what it says (or drops it entirely).
+    const urgencySummary = summarizeUrgentDeductions(
+      deductionRows
+        .filter((row) => row.plan.status === 'ready' || row.plan.status === 'partial')
+        .flatMap((row) =>
+          row.plan.allocations.map((alloc) => ({
+            ingredientName: row.plan.ingredientName,
+            expiryState: alloc.freshnessState,
+            freshnessPhrase: alloc.freshnessPhrase,
+            deductedQuantity: alloc.proposedDeduction,
+          })),
+        ),
+    );
+
     completeCooking.mutate(
       {
         cookingEventId: cookingEvent.id,
@@ -312,7 +359,13 @@ export function CookingModeScreen() {
       {
         onSuccess: () => {
           haptics.success();
-          router.replace('/(tabs)/home');
+          if (urgencySummary) {
+            Alert.alert('Cooking logged', urgencySummary, [
+              { text: 'OK', onPress: () => router.replace('/(tabs)/home') },
+            ]);
+          } else {
+            router.replace('/(tabs)/home');
+          }
         },
         onError: (error) => {
           const message = error instanceof Error ? error.message : 'Please try again.';
@@ -406,6 +459,17 @@ export function CookingModeScreen() {
 
   // screenState === 'review'
   const remapTarget = remapRowIndex != null ? deductionRows[remapRowIndex] : null;
+  const remapIngredient = remapRowIndex != null ? nonStapleIngredients[remapRowIndex] : null;
+  const remapLots =
+    remapTarget && remapIngredient
+      ? describeSelectableLots({
+          requiredUnit: remapIngredient.unit,
+          lots: cookingLotsForIngredient(remapIngredient, buildIndex()),
+          conversionMeta: conversionMeta.get(remapIngredient.ingredientId),
+          selectedLotIds:
+            remapTarget.plan.manualLotIds ?? remapTarget.plan.allocations.map((a) => a.pantryItemId),
+        })
+      : [];
   const freshnessColor = (state: ExpiryState): string => {
     if (state === 'expired' || state === 'critical') return theme.colors.freshness.prioritize;
     if (state === 'use_soon') return theme.colors.freshness.useSoon;
@@ -467,20 +531,27 @@ export function CookingModeScreen() {
                   </View>
                 </View>
 
-                {plan.allocations.map((alloc) => (
-                  <View key={alloc.pantryItemId} style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-                    <Text style={[theme.typography.caption, { color: theme.colors.textPrimary }]}>
-                      {round2(alloc.proposedDeduction)} {alloc.unit}
-                    </Text>
-                    <Text style={[theme.typography.caption, { color: freshnessColor(alloc.freshnessState) }]}>
-                      · {alloc.freshnessPhrase}
-                    </Text>
-                  </View>
-                ))}
+                {plan.allocations.map((alloc) => {
+                  const differentUnit = alloc.unit !== alloc.coveredUnit;
+                  return (
+                    <View key={alloc.pantryItemId} style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                      <Text style={[theme.typography.caption, { color: theme.colors.textPrimary }]}>
+                        {differentUnit
+                          ? `${round2(alloc.coveredAmount)} ${alloc.coveredUnit} from ${round2(alloc.availableQuantity)} ${alloc.unit}`
+                          : `${round2(alloc.proposedDeduction)} ${alloc.unit}`}
+                      </Text>
+                      <Text style={[theme.typography.caption, { color: freshnessColor(alloc.freshnessState) }]}>
+                        · {alloc.freshnessPhrase}
+                      </Text>
+                    </View>
+                  );
+                })}
 
                 {plan.allocations.length > 1 || (plan.fefoApplied && plan.status === 'ready') ? (
                   <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>
-                    SmartPrep selected the items that should be used first.
+                    {plan.manualOverride
+                      ? 'SmartPrep split your selected lots freshest-expiring first.'
+                      : 'SmartPrep selected the items that should be used first.'}
                   </Text>
                 ) : null}
 
@@ -489,7 +560,11 @@ export function CookingModeScreen() {
                     {round2(plan.uncoveredQuantity)} {plan.coveredUnit} will come from elsewhere - not deducted from your pantry.
                   </Text>
                 ) : null}
-                {plan.status === 'needs_decision' ? (
+                {plan.status === 'needs_decision' && plan.unresolvedReason === 'lot_unavailable' ? (
+                  <Text style={[theme.typography.footnote, { color: theme.colors.freshness.prioritize }]}>
+                    A pantry lot you picked is no longer available - choose lots again or skip.
+                  </Text>
+                ) : plan.status === 'needs_decision' ? (
                   <Text style={[theme.typography.footnote, { color: theme.colors.freshness.prioritize }]}>
                     Short by {round2(plan.uncoveredQuantity)} {plan.coveredUnit}. Choose an option below.
                   </Text>
@@ -507,10 +582,15 @@ export function CookingModeScreen() {
                 ) : null}
 
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
-                  <Pressable onPress={() => setRemapRowIndex(index)} accessibilityRole="button" accessibilityLabel={`Change pantry match for ${plan.ingredientName}`}>
-                    <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>Change Item</Text>
+                  <Pressable onPress={() => setRemapRowIndex(index)} accessibilityRole="button" accessibilityLabel={`Change pantry lots for ${plan.ingredientName}`}>
+                    <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>Change lots</Text>
                   </Pressable>
-                  {plan.status === 'needs_decision' ? (
+                  {plan.manualOverride ? (
+                    <Pressable onPress={() => resetRow(index)} accessibilityRole="button" accessibilityLabel={`Use SmartPrep picks for ${plan.ingredientName}`}>
+                      <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>Use SmartPrep picks</Text>
+                    </Pressable>
+                  ) : null}
+                  {plan.status === 'needs_decision' && plan.allocations.length > 0 ? (
                     <Pressable onPress={() => confirmPartialForRow(index)} accessibilityRole="button" accessibilityLabel={`Use available partial amount for ${plan.ingredientName}`}>
                       <Text style={[theme.typography.caption, { color: theme.colors.accent }]}>Use Partial Amount</Text>
                     </Pressable>
@@ -562,12 +642,12 @@ export function CookingModeScreen() {
       <PantryItemPickerModal
         visible={remapRowIndex != null}
         ingredientName={remapTarget?.plan.ingredientName ?? ''}
-        requestedQuantity={remapTarget?.plan.requiredQuantity ?? 0}
-        requestedUnit={remapTarget?.plan.requiredUnit}
-        pantryItems={pantry}
+        requiredQuantity={remapTarget?.plan.requiredQuantity ?? 0}
+        requiredUnit={remapTarget?.plan.requiredUnit}
+        lots={remapLots}
         onClose={() => setRemapRowIndex(null)}
-        onSelect={(item) => {
-          if (remapRowIndex != null) remapRow(remapRowIndex, item);
+        onConfirm={(ids) => {
+          if (remapRowIndex != null) confirmLots(remapRowIndex, ids);
         }}
       />
     </Screen>

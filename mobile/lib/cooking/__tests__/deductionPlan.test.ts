@@ -7,8 +7,10 @@ import {
   applySkip,
   buildCookingPantryIndex,
   cookingLotsForIngredient,
+  describeSelectableLots,
   proposeIngredientDeduction,
   rescaleForServings,
+  summarizeUrgentDeductions,
 } from '../deductionPlan';
 
 const NOW = new Date('2026-06-10T12:00:00Z'); // today (UTC) = 2026-06-10
@@ -358,6 +360,289 @@ describe('buildCookingPantryIndex / cookingLotsForIngredient', () => {
     const [l] = cookingLotsForIngredient({ ingredientId: CHICKEN, name: 'Chicken Breast' }, index);
     expect(l.expiry.state).toBe('critical');
     expect(l.expiry.phrase).toBe('Expires tomorrow');
+  });
+});
+
+function manual(lots: CookingPantryLot[], requiredQuantity: number, restrictToLotIds: string[], requiredUnit = 'g', conversionMeta?: IngredientConversionMeta) {
+  return proposeIngredientDeduction({
+    recipeIngredientId: 'ri-1',
+    ingredientId: CHICKEN,
+    ingredientName: 'Chicken Breast',
+    requiredQuantity,
+    requiredUnit,
+    lots,
+    conversionMeta,
+    restrictToLotIds,
+    manualOverride: true,
+  });
+}
+
+function pickerRows(lots: CookingPantryLot[], selectedLotIds: string[] = [], requiredUnit = 'g', conversionMeta?: IngredientConversionMeta) {
+  return describeSelectableLots({ requiredUnit, lots, conversionMeta, selectedLotIds });
+}
+
+// ---------------------------------------------------------------------------
+// Manual picker domain (§19)
+// ---------------------------------------------------------------------------
+
+describe('describeSelectableLots - the manual picker rows', () => {
+  it('lists every matching lot FEFO-ordered, regardless of input array order', () => {
+    const lots = [
+      datedLot('fresh', 500, '2026-07-01'),
+      lot({ pantryItemId: 'nodate', quantity: 200 }),
+      datedLot('critical', 200, '2026-06-11'),
+    ];
+    const a = pickerRows(lots).map((r) => r.pantryItemId);
+    const b = pickerRows([...lots].reverse()).map((r) => r.pantryItemId);
+    expect(a).toEqual(['critical', 'fresh', 'nodate']);
+    expect(b).toEqual(['critical', 'fresh', 'nodate']);
+  });
+
+  it('marks selected rows from the passed-in id set', () => {
+    const rows = pickerRows([datedLot('a', 200, '2026-06-11'), datedLot('b', 200, '2026-06-25')], ['b']);
+    expect(rows.find((r) => r.pantryItemId === 'a')?.selected).toBe(false);
+    expect(rows.find((r) => r.pantryItemId === 'b')?.selected).toBe(true);
+  });
+
+  it('exact-unit lots are selectable with no conversion preview', () => {
+    const [row] = pickerRows([datedLot('g', 300, '2026-06-25')], [], 'g');
+    expect(row).toMatchObject({ selectable: true, convertible: true, approxInRequiredUnit: undefined });
+  });
+
+  it('g/kg lots are selectable and show an approx preview in the recipe unit', () => {
+    const [row] = pickerRows([datedLot('kg', 0.5, '2026-06-25', 'high', { unit: 'kg' })], [], 'g');
+    expect(row.selectable).toBe(true);
+    expect(row.approxInRequiredUnit).toBeCloseTo(500, 3);
+  });
+
+  it('oz/lb lots are selectable', () => {
+    const [row] = pickerRows([datedLot('oz', 8, '2026-06-25', 'high', { unit: 'oz' })], [], 'g');
+    expect(row.selectable).toBe(true);
+    expect(row.approxInRequiredUnit).toBeCloseTo(226.796, 2);
+  });
+
+  it('density-backed volume lots are selectable when metadata exists', () => {
+    const [row] = pickerRows([datedLot('ml', 500, '2026-06-25', 'high', { unit: 'ml' })], [], 'g', { densityGPerMl: 1 });
+    expect(row.selectable).toBe(true);
+    expect(row.approxInRequiredUnit).toBeCloseTo(500, 3);
+  });
+
+  it('count lots are selectable when per-unit weight metadata exists', () => {
+    const [row] = pickerRows([datedLot('items', 3, '2026-06-25', 'high', { unit: 'item' })], [], 'g', { gramsPerUnit: { item: 150 } });
+    expect(row.selectable).toBe(true);
+    expect(row.approxInRequiredUnit).toBeCloseTo(450, 3);
+  });
+
+  it('an unresolvable lot is shown honestly but NOT selectable', () => {
+    const [row] = pickerRows([datedLot('bag', 1, '2026-06-11', 'high', { unit: 'bag' })], [], 'g');
+    expect(row).toMatchObject({ selectable: false, convertible: false, unresolvedReason: 'unit_mismatch' });
+    expect(row.freshnessPhrase).toBe('Expires tomorrow'); // freshness still shown
+  });
+
+  it('carries the centralized freshness phrase verbatim', () => {
+    const rows = pickerRows([
+      datedLot('c', 100, '2026-06-11', 'medium'),
+      datedLot('p', 100, '2026-06-08'),
+      lot({ pantryItemId: 'u', quantity: 100 }),
+    ]);
+    expect(rows.map((r) => r.freshnessPhrase)).toEqual([
+      'Past its date — check before using',
+      'Estimated to expire tomorrow',
+      'No tracked date',
+    ]);
+  });
+});
+
+describe('FEFO within a manually selected set', () => {
+  it('allocates in FEFO order across ONLY the selected lots', () => {
+    const lots = [
+      datedLot('critical', 150, '2026-06-11'),
+      datedLot('soon', 150, '2026-06-13'),
+      datedLot('fresh', 999, '2026-07-01'),
+    ];
+    // User allows only soon + fresh (NOT the critical lot).
+    const plan = manual(lots, 200, ['fresh', 'soon']);
+    expect(plan.status).toBe('ready');
+    expect(plan.allocations.map((a) => a.pantryItemId)).toEqual(['soon', 'fresh']); // FEFO inside the chosen set
+    expect(plan.allocations[0].proposedDeduction).toBe(150);
+    expect(plan.allocations[1].proposedDeduction).toBe(50);
+  });
+
+  it('result is independent of the restrictToLotIds order', () => {
+    const lots = [datedLot('a', 100, '2026-06-13'), datedLot('b', 100, '2026-06-11')];
+    const x = manual(lots, 150, ['a', 'b']).allocations.map((a) => a.pantryItemId);
+    const y = manual(lots, 150, ['b', 'a']).allocations.map((a) => a.pantryItemId);
+    expect(x).toEqual(['b', 'a']);
+    expect(y).toEqual(['b', 'a']);
+  });
+
+  it('selecting a single lot works (one-lot manual override)', () => {
+    const lots = [datedLot('urgent', 400, '2026-06-11'), datedLot('frozen', 900, '2026-07-15')];
+    const plan = manual(lots, 300, ['frozen']);
+    expect(plan.allocations.map((a) => a.pantryItemId)).toEqual(['frozen']);
+    expect(plan.manualLotIds).toEqual(['frozen']);
+  });
+
+  it('a selected set that is convertible-unit still allocates (g requirement, kg + g lots)', () => {
+    const lots = [
+      datedLot('kg', 0.2, '2026-06-11', 'high', { unit: 'kg' }),
+      datedLot('g', 500, '2026-06-25', 'high', { unit: 'g' }),
+    ];
+    const plan = manual(lots, 300, ['kg', 'g'], 'g');
+    expect(plan.status).toBe('ready');
+    expect(plan.allocations[0]).toMatchObject({ pantryItemId: 'kg', unit: 'kg' });
+    expect(plan.allocations[0].proposedDeduction).toBeCloseTo(0.2, 5); // lot decremented in ITS unit
+    expect(plan.allocations[0].coveredAmount).toBeCloseTo(200, 3); // shown in the recipe unit
+    expect(plan.allocations[1].pantryItemId).toBe('g');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// User intent (§20)
+// ---------------------------------------------------------------------------
+
+describe('manual selection preserves user intent', () => {
+  const lots = () => [
+    datedLot('urgent', 400, '2026-06-11'),
+    datedLot('frozen', 900, '2026-07-15'),
+  ];
+
+  it('stores the selected ids as durable manual intent (not derived from allocations)', () => {
+    const plan = manual(lots(), 300, ['frozen']);
+    expect(plan.manualOverride).toBe(true);
+    expect(plan.manualLotIds).toEqual(['frozen']);
+  });
+
+  it('a serving INCREASE recomputes within the same selected set', () => {
+    const plan = manual(lots(), 300, ['frozen']);
+    const bigger = rescaleForServings(plan, 800, lots());
+    expect(bigger.allocations.map((a) => a.pantryItemId)).toEqual(['frozen']);
+    expect(bigger.status).toBe('ready');
+    expect(bigger.allocations[0].proposedDeduction).toBe(800);
+  });
+
+  it('a serving DECREASE recomputes within the same selected set', () => {
+    const plan = manual(lots(), 300, ['frozen']);
+    const smaller = rescaleForServings(plan, 100, lots());
+    expect(smaller.allocations.map((a) => a.pantryItemId)).toEqual(['frozen']);
+    expect(smaller.allocations[0].proposedDeduction).toBe(100);
+  });
+
+  it('global FEFO never silently replaces the manual choice on a serving change', () => {
+    const plan = manual(lots(), 300, ['frozen']); // deliberately NOT the urgent lot
+    const rescaled = rescaleForServings(plan, 500, lots());
+    expect(rescaled.allocations.some((a) => a.pantryItemId === 'urgent')).toBe(false);
+  });
+
+  it('resetting (no restrict, manualOverride false) restores the global FEFO pick', () => {
+    const reset = proposeIngredientDeduction({
+      recipeIngredientId: 'ri-1',
+      ingredientId: CHICKEN,
+      ingredientName: 'Chicken Breast',
+      requiredQuantity: 300,
+      requiredUnit: 'g',
+      lots: lots(),
+      manualOverride: false,
+    });
+    expect(reset.manualOverride).toBe(false);
+    expect(reset.manualLotIds).toBeUndefined();
+    expect(reset.allocations[0].pantryItemId).toBe('urgent'); // FEFO again
+  });
+
+  it('a selected lot that has disappeared forces needs_decision (no silent substitution)', () => {
+    const plan = manual(lots(), 300, ['frozen', 'urgent']);
+    expect(plan.status).toBe('ready');
+    // "frozen" is gone from the pantry on the next recompute.
+    const rescaled = rescaleForServings(plan, 300, [datedLot('urgent', 400, '2026-06-11')]);
+    expect(rescaled.status).toBe('needs_decision');
+    expect(rescaled.missingSelectedLotIds).toEqual(['frozen']);
+    expect(rescaled.unresolvedReason).toBe('lot_unavailable');
+  });
+
+  it('a selected subset that is insufficient -> needs_decision', () => {
+    const plan = manual([datedLot('a', 120, '2026-06-11'), datedLot('b', 900, '2026-07-15')], 500, ['a']);
+    expect(plan.status).toBe('needs_decision');
+    expect(plan.uncoveredQuantity).toBe(380);
+  });
+
+  it('a selected subset that becomes sufficient after a serving decrease -> ready', () => {
+    const set = [datedLot('a', 120, '2026-06-11'), datedLot('b', 900, '2026-07-15')];
+    const plan = manual(set, 500, ['a']);
+    expect(plan.status).toBe('needs_decision');
+    const smaller = rescaleForServings(plan, 100, set);
+    expect(smaller.status).toBe('ready');
+    expect(smaller.allocations[0].pantryItemId).toBe('a');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Post-cook urgency summary (§21)
+// ---------------------------------------------------------------------------
+
+describe('summarizeUrgentDeductions', () => {
+  it('counts an actually-deducted critical lot', () => {
+    expect(
+      summarizeUrgentDeductions([
+        { ingredientName: 'Chicken', expiryState: 'critical', freshnessPhrase: 'Expires tomorrow', deductedQuantity: 200 },
+      ]),
+    ).toBe('Used Chicken · Expires tomorrow.');
+  });
+
+  it('counts a use_soon lot', () => {
+    expect(
+      summarizeUrgentDeductions([
+        { ingredientName: 'Spinach', expiryState: 'use_soon', freshnessPhrase: 'Best used within 3 days', deductedQuantity: 80 },
+      ]),
+    ).toBe('Used Spinach · Best used within 3 days.');
+  });
+
+  it('does NOT count fresh or unknown lots', () => {
+    expect(
+      summarizeUrgentDeductions([
+        { ingredientName: 'Rice', expiryState: 'fresh', freshnessPhrase: 'Fresh', deductedQuantity: 100 },
+        { ingredientName: 'Oil', expiryState: 'unknown', freshnessPhrase: 'No tracked date', deductedQuantity: 15 },
+      ]),
+    ).toBeNull();
+  });
+
+  it('keeps estimated wording estimated', () => {
+    expect(
+      summarizeUrgentDeductions([
+        { ingredientName: 'Chicken', expiryState: 'critical', freshnessPhrase: 'Estimated to expire tomorrow', deductedQuantity: 200 },
+      ]),
+    ).toBe('Used Chicken · Estimated to expire tomorrow.');
+  });
+
+  it('ignores a lot with zero deducted quantity', () => {
+    expect(
+      summarizeUrgentDeductions([
+        { ingredientName: 'Chicken', expiryState: 'critical', freshnessPhrase: 'Expires tomorrow', deductedQuantity: 0 },
+      ]),
+    ).toBeNull();
+  });
+
+  it('a multi-lot cook counts only the actually-deducted urgent lots', () => {
+    const line = summarizeUrgentDeductions([
+      { ingredientName: 'Chicken', expiryState: 'critical', freshnessPhrase: 'Expires tomorrow', deductedQuantity: 200 },
+      { ingredientName: 'Chicken', expiryState: 'use_soon', freshnessPhrase: 'Best used within 5 days', deductedQuantity: 100 },
+      { ingredientName: 'Chicken', expiryState: 'fresh', freshnessPhrase: 'Fresh', deductedQuantity: 300 },
+    ]);
+    expect(line).toBe('You used 2 pantry items that were due soon.');
+  });
+
+  it('never uses "waste avoided" / "food saved" phrasing', () => {
+    const line = summarizeUrgentDeductions([
+      { ingredientName: 'Chicken', expiryState: 'critical', freshnessPhrase: 'Expires tomorrow', deductedQuantity: 200 },
+    ]);
+    expect(line).not.toMatch(/waste|saved|prevent/i);
+  });
+
+  it('reflects a user override: SmartPrep proposed the urgent lot, user cooked the fresh one', () => {
+    // The summary is built from what was ACTUALLY deducted, so a fresh-only cook has no urgency line.
+    const confirmedFreshOnly = [
+      { ingredientName: 'Chicken', expiryState: 'fresh' as const, freshnessPhrase: 'Fresh', deductedQuantity: 300 },
+    ];
+    expect(summarizeUrgentDeductions(confirmedFreshOnly)).toBeNull();
   });
 });
 

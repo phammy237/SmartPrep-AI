@@ -27,9 +27,11 @@ import {
   ExpiryState,
   allocateIngredientRequirementToLots,
   assessPantryItemExpiry,
+  fefoSortExpiringLots,
   isUrgentExpiryState,
 } from '@/lib/freshness';
-import { IngredientConversionMeta } from '@/lib/nutrition/conversion';
+import { IngredientConversionMeta, convertQuantity } from '@/lib/nutrition/conversion';
+import { normalizeUnit } from '@/lib/nutrition/units';
 import { ExpirationConfidence, PantryItem } from '@/types';
 
 const EPS = 0.001;
@@ -135,6 +137,10 @@ export interface ProposedAllocation {
   unit: string;
   /** How much to take from THIS lot, in `unit`. */
   proposedDeduction: number;
+  /** The same draw expressed in the plan's `coveredUnit` (requirement unit, or 'g') - for the "100 g from 0.5 kg" card copy. */
+  coveredAmount: number;
+  /** Unit `coveredAmount` is in (mirrors `IngredientDeductionPlan.coveredUnit`). */
+  coveredUnit: string;
   freshnessState: ExpiryState;
   expirationDate?: string;
   expirationConfidence?: ExpirationConfidence;
@@ -163,11 +169,15 @@ export interface IngredientDeductionPlan {
   coveredQuantity: number;
   /** Requirement not met by the proposed lots (in `coveredUnit`). 0 when fully covered. */
   uncoveredQuantity: number;
-  unresolvedReason?: 'unit_mismatch';
+  unresolvedReason?: 'unit_mismatch' | 'lot_unavailable';
   /** True when FEFO ordering meaningfully shaped the proposal (an urgent lot is used, or the draw spans multiple lots) - drives the subtle "SmartPrep selected the items that should be used first" line. */
   fefoApplied: boolean;
   /** True once the user has hand-picked the lot(s) - a servings change must re-run against THEIR choice, not silently revert to the auto FEFO pick. */
   manualOverride: boolean;
+  /** The lot ids the user picked (manual override only). This - not the derived allocations - is the durable manual intent that survives a servings change. */
+  manualLotIds?: string[];
+  /** Picked lot ids that are no longer in the pantry (removed / depleted). Forces `needs_decision` - never a silent substitution. */
+  missingSelectedLotIds?: string[];
 }
 
 interface ProposeArgs {
@@ -190,6 +200,8 @@ function toExpiringLot(l: CookingPantryLot): ExpiringLot {
 function allocationFromLotUse(
   lot: CookingPantryLot,
   takenInLotUnit: number,
+  takenInCoveredUnit: number,
+  coveredUnit: string,
   ingredientId: string,
 ): ProposedAllocation {
   return {
@@ -198,6 +210,8 @@ function allocationFromLotUse(
     availableQuantity: lot.quantity,
     unit: lot.unit,
     proposedDeduction: takenInLotUnit,
+    coveredAmount: round3(takenInCoveredUnit),
+    coveredUnit,
     freshnessState: lot.expiry.state,
     expirationDate: lot.expiry.expirationDate,
     expirationConfidence: lot.expirationConfidence,
@@ -230,9 +244,13 @@ export function proposeIngredientDeduction(args: ProposeArgs): IngredientDeducti
   } = args;
 
   let lots = args.lots;
+  let missingSelectedLotIds: string[] | undefined;
   if (restrictToLotIds) {
     const wanted = new Set(restrictToLotIds);
     lots = lots.filter((l) => wanted.has(l.pantryItemId));
+    const present = new Set(lots.map((l) => l.pantryItemId));
+    const missing = restrictToLotIds.filter((id) => !present.has(id));
+    if (missing.length > 0) missingSelectedLotIds = missing;
   }
 
   const base = {
@@ -242,6 +260,8 @@ export function proposeIngredientDeduction(args: ProposeArgs): IngredientDeducti
     requiredQuantity,
     requiredUnit,
     manualOverride,
+    manualLotIds: manualOverride && restrictToLotIds ? restrictToLotIds : undefined,
+    missingSelectedLotIds,
   };
 
   if (!(requiredQuantity > 0)) {
@@ -258,13 +278,17 @@ export function proposeIngredientDeduction(args: ProposeArgs): IngredientDeducti
   }
 
   if (lots.length === 0) {
+    // A manual selection whose every lot has since vanished must go back to a
+    // decision, never silently fall through to "nothing to deduct".
+    const status = missingSelectedLotIds ? 'needs_decision' : 'unmatched';
     return {
       ...base,
-      status: 'unmatched',
+      status,
       allocations: [],
       coveredUnit: requiredUnit ?? '',
       coveredQuantity: 0,
       uncoveredQuantity: requiredQuantity,
+      unresolvedReason: missingSelectedLotIds ? 'lot_unavailable' : undefined,
       fefoApplied: false,
     };
   }
@@ -296,7 +320,9 @@ export function proposeIngredientDeduction(args: ProposeArgs): IngredientDeducti
     for (const use of alloc.lotsUsed) {
       const lot = lotById.get(use.lotId);
       if (!lot || !(use.lotUnitTaken > 0)) continue;
-      allocations.push(allocationFromLotUse(lot, use.lotUnitTaken, ingredientId));
+      allocations.push(
+        allocationFromLotUse(lot, use.lotUnitTaken, use.takenQuantity, alloc.coveredUnit, ingredientId),
+      );
       coveredQuantity += use.takenQuantity;
     }
     remainder = alloc.unresolvedRemainder;
@@ -338,7 +364,10 @@ export function proposeIngredientDeduction(args: ProposeArgs): IngredientDeducti
     };
   }
 
-  const status: IngredientDeductionStatus = uncoveredQuantity <= EPS ? 'ready' : 'needs_decision';
+  // A vanished picked lot always drops back to a decision, even if the lots
+  // that remain happen to cover the amount - the user must re-acknowledge.
+  const status: IngredientDeductionStatus =
+    missingSelectedLotIds || uncoveredQuantity > EPS ? 'needs_decision' : 'ready';
 
   return {
     ...base,
@@ -347,7 +376,7 @@ export function proposeIngredientDeduction(args: ProposeArgs): IngredientDeducti
     coveredUnit,
     coveredQuantity,
     uncoveredQuantity,
-    unresolvedReason: anyUnresolved ? 'unit_mismatch' : undefined,
+    unresolvedReason: missingSelectedLotIds ? 'lot_unavailable' : anyUnresolved ? 'unit_mismatch' : undefined,
     fefoApplied,
   };
 }
@@ -391,6 +420,9 @@ export function rescaleForServings(
   if (plan.status === 'skipped') {
     return { ...plan, requiredQuantity: newRequiredQuantity, allocations: [], coveredQuantity: 0, uncoveredQuantity: 0 };
   }
+  const restrictToLotIds = plan.manualOverride
+    ? plan.manualLotIds ?? plan.allocations.map((a) => a.pantryItemId)
+    : undefined;
   return proposeIngredientDeduction({
     recipeIngredientId: plan.recipeIngredientId,
     ingredientId: plan.ingredientId,
@@ -399,9 +431,117 @@ export function rescaleForServings(
     requiredUnit: plan.requiredUnit,
     lots,
     conversionMeta,
-    restrictToLotIds: plan.manualOverride ? plan.allocations.map((a) => a.pantryItemId) : undefined,
+    restrictToLotIds,
     manualOverride: plan.manualOverride,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Manual picker: describe every matching lot (compatible units included)
+// ---------------------------------------------------------------------------
+
+export interface SelectableLot {
+  pantryItemId: string;
+  name: string;
+  /** Live stock, in `unit` (the lot's own stored unit). */
+  availableQuantity: number;
+  unit: string;
+  /** `availableQuantity` expressed in the recipe's unit, when that conversion is deterministic AND the units differ. For the "≈ 500 g" preview only. */
+  approxInRequiredUnit?: number;
+  requiredUnit?: string;
+  /** The lot's stored unit can be deterministically compared to the requirement. */
+  convertible: boolean;
+  /** v1: only convertible lots may be picked; an unresolved lot is shown honestly but disabled. */
+  selectable: boolean;
+  unresolvedReason?: 'unit_mismatch';
+  freshnessState: ExpiryState;
+  freshnessPhrase: string;
+  daysUntilExpiry?: number;
+  isUserConfirmedDate: boolean;
+  selected: boolean;
+}
+
+/**
+ * Build the manual-picker rows for one recipe ingredient: every matching active
+ * lot, FEFO-ordered, each marked selectable iff its unit converts deterministically
+ * to the recipe's unit. The picker renders these verbatim - it never runs
+ * conversion math itself.
+ */
+export function describeSelectableLots(args: {
+  requiredUnit?: string;
+  lots: CookingPantryLot[];
+  conversionMeta?: IngredientConversionMeta;
+  selectedLotIds: string[];
+}): SelectableLot[] {
+  const { requiredUnit, lots, conversionMeta, selectedLotIds } = args;
+  const selected = new Set(selectedLotIds);
+  const byId = new Map(lots.map((l) => [l.pantryItemId, l]));
+  // Same order the allocator will consume in: every dated lot (FEFO), then the
+  // no-date lots last.
+  const order = (subset: CookingPantryLot[]) =>
+    fefoSortExpiringLots(subset.map(toExpiringLot))
+      .map((l) => byId.get(l.lotId))
+      .filter((l): l is CookingPantryLot => l !== undefined);
+  const ordered = [
+    ...order(lots.filter((l) => l.expiry.state !== 'unknown')),
+    ...order(lots.filter((l) => l.expiry.state === 'unknown')),
+  ];
+
+  const reqKey = requiredUnit ? normalizeUnit(requiredUnit) : null;
+
+  return ordered.map((lot) => {
+    const conv = requiredUnit
+      ? convertQuantity({ quantity: lot.quantity, fromUnit: lot.unit, toUnit: requiredUnit, meta: conversionMeta })
+      : ({ status: 'unresolved', reason: 'unsupported_unit' } as const);
+    const convertible = conv.status === 'converted';
+    const differsFromRequired = !!reqKey && (normalizeUnit(lot.unit) ?? lot.unit) !== reqKey;
+    return {
+      pantryItemId: lot.pantryItemId,
+      name: lot.name,
+      availableQuantity: lot.quantity,
+      unit: lot.unit,
+      approxInRequiredUnit: conv.status === 'converted' && differsFromRequired ? conv.value : undefined,
+      requiredUnit,
+      convertible,
+      selectable: convertible,
+      unresolvedReason: convertible ? undefined : 'unit_mismatch',
+      freshnessState: lot.expiry.state,
+      freshnessPhrase: lot.expiry.phrase,
+      daysUntilExpiry: lot.expiry.daysUntilExpiry ?? undefined,
+      isUserConfirmedDate: lot.expiry.isUserConfirmedDate,
+      selected: selected.has(lot.pantryItemId),
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Post-cook urgency summary (derived from the ACTUAL confirmed allocations)
+// ---------------------------------------------------------------------------
+
+export interface ConfirmedDeductionForSummary {
+  ingredientName: string;
+  expiryState: ExpiryState;
+  /** The exact freshness phrase for this lot (reused verbatim - never re-worded). */
+  freshnessPhrase: string;
+  /** Amount actually deducted from this lot (any unit). Zero / negative entries are ignored. */
+  deductedQuantity: number;
+}
+
+/**
+ * A short, factual line about the expiring stock a cook actually used. Built
+ * from the confirmed per-lot deductions, so a user override that swapped an
+ * urgent lot for a fresh one changes the sentence. Returns null when nothing
+ * urgent was deducted. Never claims "waste avoided" / "food saved".
+ *
+ * Urgent = expired | critical | use_soon. fresh and unknown never count.
+ */
+export function summarizeUrgentDeductions(deductions: ConfirmedDeductionForSummary[]): string | null {
+  const urgent = deductions.filter((d) => d.deductedQuantity > 0 && isUrgentExpiryState(d.expiryState));
+  if (urgent.length === 0) return null;
+  if (urgent.length === 1) {
+    return `Used ${urgent[0].ingredientName} · ${urgent[0].freshnessPhrase}.`;
+  }
+  return `You used ${urgent.length} pantry items that were due soon.`;
 }
 
 function round3(n: number): number {
