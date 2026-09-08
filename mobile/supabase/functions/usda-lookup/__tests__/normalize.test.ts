@@ -1,5 +1,7 @@
 import {
+  gtinEquivalent,
   isDefensiblyVerified,
+  matchBrandedByGtin,
   normalizeFoodDetail,
   normalizeSearchResponse,
 } from '../normalize';
@@ -108,5 +110,84 @@ describe('isDefensiblyVerified (documented rule; not auto-applied this phase)', 
 
   it('NOT verified for a no_match / malformed search', () => {
     expect(isDefensiblyVerified({ status: 'no_match', candidates: [] })).toEqual({ verified: false, fdcId: null });
+  });
+});
+
+describe('gtinEquivalent', () => {
+  it('is true for a UPC-A and its zero-padded GTIN-13 form', () => {
+    expect(gtinEquivalent('012345678905', '0012345678905')).toBe(true);
+    expect(gtinEquivalent('036000291452', '00036000291452')).toBe(true);
+  });
+
+  it('is true for identical codes and false for genuinely different ones', () => {
+    expect(gtinEquivalent('3017620422003', '3017620422003')).toBe(true);
+    expect(gtinEquivalent('012345678905', '012345678912')).toBe(false);
+  });
+
+  it('rejects empty / non-numeric / out-of-range', () => {
+    expect(gtinEquivalent('', '012345678905')).toBe(false);
+    expect(gtinEquivalent('12345', '012345678905')).toBe(false);
+    expect(gtinEquivalent('abc', '012345678905')).toBe(false);
+    expect(gtinEquivalent(null, '012345678905')).toBe(false);
+  });
+});
+
+describe('matchBrandedByGtin', () => {
+  const scanned = '036000291452'; // UPC-A
+
+  it('accepts the SOLE food whose gtinUpc is GTIN-equivalent to the scanned code', () => {
+    const out = matchBrandedByGtin(
+      { foods: [
+        { fdcId: 111, description: 'Off-brand cola', gtinUpc: '0036000291452', brandOwner: 'Acme' },
+        { fdcId: 222, description: 'Unrelated', gtinUpc: '0000000000000' },
+      ] },
+      scanned,
+    );
+    expect(out).toEqual({ status: 'verified_match', fdcId: 111, description: 'Off-brand cola', brandOwner: 'Acme', gtinUpc: '0036000291452' });
+  });
+
+  it('accepts an exact EAN-13 match', () => {
+    const out = matchBrandedByGtin({ foods: [{ fdcId: 9, description: 'Nutella', gtinUpc: '3017620422003' }] }, '3017620422003');
+    expect(out.status).toBe('verified_match');
+  });
+
+  it('rejects a similarly-named food with the WRONG gtinUpc', () => {
+    const out = matchBrandedByGtin(
+      { foods: [{ fdcId: 5, description: 'Cola (looks right)', gtinUpc: '099999999999', brandOwner: 'Acme' }] },
+      scanned,
+    );
+    expect(out).toEqual({ status: 'no_exact_match' });
+  });
+
+  it('takes the exact GTIN match even when it is not the first result', () => {
+    const out = matchBrandedByGtin(
+      { foods: [
+        { fdcId: 1, description: 'First result, wrong code', gtinUpc: '111111111111' },
+        { fdcId: 2, description: 'Second result, right code', gtinUpc: '036000291452' },
+      ] },
+      scanned,
+    );
+    expect(out).toMatchObject({ status: 'verified_match', fdcId: 2 });
+  });
+
+  it('is ambiguous (no match) when two DIFFERENT fdcIds both carry the GTIN', () => {
+    const out = matchBrandedByGtin(
+      { foods: [
+        { fdcId: 1, description: 'Dup A', gtinUpc: '036000291452' },
+        { fdcId: 2, description: 'Dup B', gtinUpc: '0036000291452' },
+      ] },
+      scanned,
+    );
+    expect(out).toEqual({ status: 'no_exact_match' });
+  });
+
+  it('no exact match when no food has a usable gtinUpc', () => {
+    expect(matchBrandedByGtin({ foods: [{ fdcId: 1, description: 'x' }] }, scanned)).toEqual({ status: 'no_exact_match' });
+    expect(matchBrandedByGtin({ foods: [{ fdcId: 1, description: 'x', gtinUpc: '' }] }, scanned)).toEqual({ status: 'no_exact_match' });
+  });
+
+  it('malformed upstream shape', () => {
+    expect(matchBrandedByGtin(null, scanned)).toEqual({ status: 'malformed' });
+    expect(matchBrandedByGtin({ foods: 'nope' }, scanned)).toEqual({ status: 'malformed' });
   });
 });

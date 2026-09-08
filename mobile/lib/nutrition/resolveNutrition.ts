@@ -110,7 +110,9 @@ export function resolveIngredientNutrition({
     calculationBasis: 'per_quantity',
     uncertaintyNotes:
       reference.status === 'candidate'
-        ? 'Nutrition from an unconfirmed USDA candidate match.'
+        ? reference.source === 'open_food_facts'
+          ? 'Nutrition from Open Food Facts, not USDA-verified.'
+          : 'Nutrition from an unconfirmed USDA candidate match.'
         : reference.status === 'estimated'
           ? 'Nutrition from an authored estimate, not USDA-verified.'
           : null,

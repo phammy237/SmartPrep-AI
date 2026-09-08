@@ -16,7 +16,12 @@ import { NUTRIENT_KEYS, NutrientKey } from '@/types';
 export type NutrientBasisPer100g = Partial<Record<NutrientKey, number | null>>;
 
 /** Where a nutrition reference came from and how much to trust it. */
-export type NutritionReferenceSource = 'usda' | 'user_override' | 'catalog_estimate' | 'none';
+export type NutritionReferenceSource =
+  | 'usda'
+  | 'open_food_facts'
+  | 'user_override'
+  | 'catalog_estimate'
+  | 'none';
 
 /**
  * How resolved a nutrition reference is:

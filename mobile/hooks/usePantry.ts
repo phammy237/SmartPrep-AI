@@ -33,6 +33,7 @@ export function usePantryItemNutrition(item: PantryItem | null | undefined) {
         ingredientId: (item as PantryItem).ingredientId,
         quantity: (item as PantryItem).quantity,
         unit: (item as PantryItem).unit,
+        barcode: (item as PantryItem).barcode,
       }),
     enabled: !!item,
   });

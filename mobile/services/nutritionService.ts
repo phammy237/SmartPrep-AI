@@ -1,6 +1,6 @@
 import { INGREDIENTS, INGREDIENTS_BY_ID } from '@/data';
 import { IngredientConversionMeta } from '@/lib/nutrition/conversion';
-import { NutritionReference, basisHasAnyNutrient } from '@/lib/nutrition/nutritionReference';
+import { NutritionReference, basisHasAnyNutrient, toNutrientBasis } from '@/lib/nutrition/nutritionReference';
 import {
   RecipeIngredientForNutrition,
   RecipeNutritionCoverage,
@@ -8,17 +8,21 @@ import {
 } from '@/lib/nutrition/recipeNutrition';
 import { NutritionResolution, resolveIngredientNutrition } from '@/lib/nutrition/resolveNutrition';
 import {
+  BarcodeProductNutritionRef,
   CanonicalNutritionRef,
   UpsertUserOverrideInput,
   UsdaDetailsResult,
   UsdaSearchResult,
   UserIngredientOverride,
   deleteUserIngredientOverride,
+  fetchBarcodeProductNutrition,
   fetchCanonicalIngredientNutrition,
   fetchUsdaFoodFromCache,
   fetchUserIngredientOverrides,
+  invokeUsdaBrandedByBarcode,
   invokeUsdaDetails,
   invokeUsdaSearch,
+  upsertBarcodeProductCandidate,
   upsertUserIngredientOverride,
 } from '@/lib/supabase/repositories';
 import { NutrientBasisPer100g } from '@/lib/nutrition/nutritionReference';
@@ -114,10 +118,43 @@ export interface ResolveQuantityNutritionArgs {
   canonicalIngredientId: string;
   quantity: number;
   unit: string;
+  /**
+   * Set for a barcode-added pantry item. The product-specific nutrition cache
+   * (verified USDA branded match > Open Food Facts candidate) is consulted first
+   * and outranks the generic canonical ingredient - a branded package's own
+   * label beats an ingredient average. Falls through to the canonical path when
+   * there is no usable product record. Local read only; never calls a provider.
+   */
+  barcode?: string;
+}
+
+function productReference(product: BarcodeProductNutritionRef): NutritionReference {
+  return {
+    status: product.status === 'verified' ? 'verified' : 'candidate',
+    source: product.status === 'verified' ? 'usda' : 'open_food_facts',
+    per100g: product.per100g,
+    fdcId: product.fdcId,
+    verifiedAt: product.status === 'verified' ? product.updatedAt : null,
+  };
 }
 
 /** Full pipeline for one quantity: identity -> reference -> grams -> snapshot with provenance. */
 async function resolveQuantityNutrition(args: ResolveQuantityNutritionArgs): Promise<NutritionResolution> {
+  await requireUserId();
+
+  if (args.barcode) {
+    const product = await fetchBarcodeProductNutrition(args.barcode);
+    if (product && basisHasAnyNutrient(product.per100g)) {
+      const { conversionMeta } = catalogReference(args.canonicalIngredientId);
+      return resolveIngredientNutrition({
+        quantity: args.quantity,
+        unit: args.unit,
+        conversionMeta,
+        reference: productReference(product),
+      });
+    }
+  }
+
   const { reference, conversionMeta } = await resolveIngredientReference(args.canonicalIngredientId);
   return resolveIngredientNutrition({
     quantity: args.quantity,
@@ -125,6 +162,87 @@ async function resolveQuantityNutrition(args: ResolveQuantityNutritionArgs): Pro
     conversionMeta,
     reference,
   });
+}
+
+export interface EnrichBarcodeProductArgs {
+  barcode: string;
+  /** Open Food Facts per-100g values from the review lookup (already normalized). */
+  offPer100g?: NutrientBasisPer100g | null;
+  sourceProductId?: string;
+  description?: string;
+  brand?: string;
+}
+
+export interface ProductNutritionResolution {
+  status: 'verified' | 'candidate' | 'unresolved';
+  source: 'usda' | 'open_food_facts' | 'none';
+  per100g: NutrientBasisPer100g | null;
+  fdcId: number | null;
+  description?: string;
+  brandOwner?: string;
+}
+
+/**
+ * Barcode-intake enrichment - called ONCE from the review screen, never during
+ * ordinary Pantry reads. Persists the best defensible product nutrition and
+ * reports what resolved:
+ *   1. If OFF gave usable per-100g nutrition -> persist it as a `candidate`
+ *      (security-definer RPC; cannot set verified / an fdc_id).
+ *   2. Ask USDA for an EXACT branded-GTIN match (at most one USDA call) -> the
+ *      Edge Function verifies server-side and writes the `verified` row itself.
+ * A USDA failure/absence never blocks intake - the OFF candidate (or unresolved)
+ * stands.
+ */
+async function enrichBarcodeProductNutrition(args: EnrichBarcodeProductArgs): Promise<ProductNutritionResolution> {
+  await requireUserId();
+
+  const offBasis = args.offPer100g ? toNutrientBasis(args.offPer100g) : {};
+  let candidate: BarcodeProductNutritionRef | null = null;
+  if (basisHasAnyNutrient(offBasis)) {
+    try {
+      candidate = await upsertBarcodeProductCandidate({
+        barcode: args.barcode,
+        sourceProductId: args.sourceProductId ?? args.barcode,
+        per100g: offBasis,
+        description: args.description ?? null,
+        brandOwner: args.brand ?? null,
+      });
+    } catch {
+      candidate = null;
+    }
+  }
+
+  let usda: Awaited<ReturnType<typeof invokeUsdaBrandedByBarcode>> | null = null;
+  try {
+    usda = await invokeUsdaBrandedByBarcode(args.barcode);
+  } catch {
+    usda = null;
+  }
+
+  if (usda && usda.status === 'verified_match') {
+    return {
+      status: 'verified',
+      source: 'usda',
+      per100g: toNutrientBasis(usda.nutritionPer100g),
+      fdcId: usda.fdcId,
+      description: usda.description,
+      brandOwner: usda.brandOwner ?? undefined,
+    };
+  }
+
+  const persisted = candidate ?? (await fetchBarcodeProductNutrition(args.barcode).catch(() => null));
+  if (persisted && basisHasAnyNutrient(persisted.per100g)) {
+    return {
+      status: persisted.status === 'verified' ? 'verified' : 'candidate',
+      source: persisted.status === 'verified' ? 'usda' : 'open_food_facts',
+      per100g: persisted.per100g,
+      fdcId: persisted.fdcId,
+      description: persisted.description ?? undefined,
+      brandOwner: persisted.brandOwner ?? undefined,
+    };
+  }
+
+  return { status: 'unresolved', source: 'none', per100g: null, fdcId: null };
 }
 
 /** USDA name search via the Edge Function (auth-gated; API key stays server-side). */
@@ -200,6 +318,7 @@ export const nutritionService = {
   resolveIngredientReference,
   resolveIngredientReferences,
   resolveQuantityNutrition,
+  enrichBarcodeProductNutrition,
   getConversionMetaMap,
   getRecipeNutritionCoverage,
   searchUsda,

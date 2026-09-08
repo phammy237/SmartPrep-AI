@@ -148,3 +148,19 @@ export function lookupVariants(value: string): string[] {
   if (value.length === 12) return [value, `0${value}`];
   return [value];
 }
+
+/**
+ * GS1 GTIN equivalence: two codes identify the same product iff their 14-digit
+ * zero-padded forms are equal. Covers "UPC-A 012345678905" vs its GTIN-13
+ * "0012345678905". This is the ONLY relationship the barcode intake treats as
+ * "the same barcode" for USDA exact-match verification.
+ *
+ * NOTE: mirrored (deliberately, no cross-runtime import) in
+ * supabase/functions/usda-lookup/normalize.ts#gtinEquivalent - keep in sync.
+ */
+export function gtinEquivalent(a: string | null | undefined, b: string | null | undefined): boolean {
+  const da = typeof a === 'string' ? a.replace(/[\s-]/g, '') : '';
+  const db = typeof b === 'string' ? b.replace(/[\s-]/g, '') : '';
+  if (!/^\d{8,14}$/.test(da) || !/^\d{8,14}$/.test(db)) return false;
+  return da.padStart(14, '0') === db.padStart(14, '0');
+}

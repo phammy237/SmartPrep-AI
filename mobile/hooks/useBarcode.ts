@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { BarcodeLookupDeps } from '@/lib/barcode';
 import { CreateBarcodeItemInput } from '@/lib/validation/barcodeSchemas';
-import { barcodeService, pantryService } from '@/services';
+import { EnrichBarcodeProductArgs, barcodeService, nutritionService, pantryService } from '@/services';
 import { haptics } from '@/utils/haptics';
 import { queryKeys } from './queryKeys';
 import { useUser } from './useUser';
@@ -22,6 +22,18 @@ export function useBarcodeLookup() {
   return useMutation({
     mutationFn: (args: { barcode: string; upcE?: boolean; deps?: BarcodeLookupDeps }) =>
       barcodeService.lookupBarcode(args.barcode, { upcE: args.upcE, deps: args.deps }),
+  });
+}
+
+/**
+ * One-shot barcode-intake nutrition enrichment, fired once from the review
+ * screen: persists the Open Food Facts candidate and attempts an exact USDA
+ * branded-GTIN verification (server-side). Never rejects for a provider outcome
+ * - a USDA failure just leaves the OFF candidate in place.
+ */
+export function useEnrichBarcodeProductNutrition() {
+  return useMutation({
+    mutationFn: (args: EnrichBarcodeProductArgs) => nutritionService.enrichBarcodeProductNutrition(args),
   });
 }
 

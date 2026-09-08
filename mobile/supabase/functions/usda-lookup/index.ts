@@ -6,12 +6,19 @@
 // the seven nutrients SmartPrep needs (normalized to per 100 g).
 //
 // Actions:
-//   { "action": "search",  "query": "chicken breast" }
-//   { "action": "details", "fdcId": 171077 }
+//   { "action": "search",             "query": "chicken breast" }
+//   { "action": "details",            "fdcId": 171077 }
+//   { "action": "branded_by_barcode", "barcode": "0123456789012" }
 //
 // Requires an authenticated caller (Bearer JWT). On a successful `details`
 // fetch it best-effort upserts the normalized food into public.usda_foods
 // (service role) so repeat lookups of a verified ingredient never hit USDA.
+//
+// `branded_by_barcode` searches USDA Branded foods by the raw GTIN, accepts a
+// result ONLY when exactly one food's `gtinUpc` is GTIN-equivalent to the
+// scanned code (never name/brand/first-result), and on a match writes the
+// normalized nutrition into public.barcode_product_nutrition as
+// status='verified' (service role - the ONLY path that may set 'verified').
 //
 // Secrets (set with `npx supabase secrets set ...`, never EXPO_PUBLIC_*):
 //   USDA_API_KEY               - FoodData Central API key
@@ -24,6 +31,7 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import {
+  matchBrandedByGtin,
   normalizeFoodDetail,
   normalizeSearchResponse,
 } from './normalize.ts';
@@ -109,6 +117,48 @@ async function cacheFood(food: {
   }
 }
 
+/**
+ * Persist an exact-GTIN-matched USDA product into the global
+ * barcode_product_nutrition cache as status='verified'. Service role -> bypasses
+ * RLS; this is the ONLY path that may set 'verified'. Best-effort.
+ */
+async function cacheVerifiedBarcodeProduct(row: {
+  barcode: string;
+  fdcId: number;
+  description: string;
+  brandOwner: string | null;
+  nutritionPer100g: Record<string, number>;
+}, userId: string): Promise<void> {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  if (!supabaseUrl || !serviceKey) return;
+  const admin = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
+  try {
+    await admin.from('barcode_product_nutrition').upsert(
+      {
+        barcode: row.barcode,
+        provider: 'usda',
+        source_product_id: String(row.fdcId),
+        nutrition_per_100g: row.nutritionPer100g,
+        status: 'verified',
+        fdc_id: row.fdcId,
+        description: row.description || null,
+        brand_owner: row.brandOwner,
+        source_fetched_at: new Date().toISOString(),
+        created_by: userId,
+      },
+      { onConflict: 'barcode' },
+    );
+  } catch {
+    // Best-effort: never fail the lookup because the cache write failed.
+  }
+}
+
+/** A syntactically valid, length-bounded barcode (digits only, 8-14). */
+function isBoundedBarcode(raw: unknown): raw is string {
+  return typeof raw === 'string' && /^[0-9]{8,14}$/.test(raw);
+}
+
 Deno.serve(async (req: Request): Promise<Response> => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS_HEADERS });
   if (req.method !== 'POST') return json({ status: 'method_not_allowed' }, 405);
@@ -180,5 +230,67 @@ Deno.serve(async (req: Request): Promise<Response> => {
     });
   }
 
-  return json({ status: 'invalid_request', reason: "action must be 'search' or 'details'" }, 400);
+  if (action === 'branded_by_barcode') {
+    const barcode = typeof payload.barcode === 'string' ? payload.barcode.trim() : '';
+    if (!isBoundedBarcode(barcode)) {
+      return json({ status: 'invalid_request', reason: 'barcode must be 8-14 digits' }, 400);
+    }
+
+    // USDA has no barcode endpoint; the branded search DOES index gtinUpc, so
+    // query the raw code and verify gtinUpc server-side. Bounded page size.
+    const search = await callUsda(
+      `/foods/search?query=${encodeURIComponent(barcode)}&dataType=Branded&pageSize=25`,
+      apiKey,
+    );
+    if (!search.ok) return json({ status: search.kind }, search.kind === 'rate_limited' ? 429 : 502);
+
+    const match = matchBrandedByGtin(search.body, barcode);
+    if (match.status === 'malformed') return json({ status: 'malformed_upstream' }, 502);
+    if (match.status === 'no_exact_match') return json({ status: 'no_exact_match', barcode });
+
+    const detail = await callUsda(`/food/${match.fdcId}`, apiKey);
+    if (!detail.ok) return json({ status: detail.kind }, detail.kind === 'rate_limited' ? 429 : 502);
+
+    const normalized = normalizeFoodDetail(detail.body);
+    if (normalized.status === 'malformed') return json({ status: 'malformed_upstream' }, 502);
+    if (normalized.status === 'unusable_food') {
+      // We proved the GTIN but USDA has no usable nutrients - not verifiable.
+      return json({ status: 'no_exact_match', barcode });
+    }
+
+    const nutritionPer100g = normalized.nutritionPer100g as Record<string, number>;
+    await cacheFood(
+      {
+        fdcId: normalized.fdcId,
+        description: normalized.description,
+        dataType: normalized.dataType,
+        brandOwner: normalized.brandOwner,
+        servingSize: normalized.servingSize,
+        servingSizeUnit: normalized.servingSizeUnit,
+        nutritionPer100g,
+      },
+      user.id,
+    );
+    await cacheVerifiedBarcodeProduct(
+      {
+        barcode,
+        fdcId: normalized.fdcId,
+        description: normalized.description || match.description,
+        brandOwner: normalized.brandOwner ?? match.brandOwner,
+        nutritionPer100g,
+      },
+      user.id,
+    );
+
+    return json({
+      status: 'verified_match',
+      barcode,
+      fdcId: normalized.fdcId,
+      description: normalized.description || match.description,
+      brandOwner: normalized.brandOwner ?? match.brandOwner,
+      nutritionPer100g: normalized.nutritionPer100g,
+    });
+  }
+
+  return json({ status: 'invalid_request', reason: "action must be 'search', 'details' or 'branded_by_barcode'" }, 400);
 });

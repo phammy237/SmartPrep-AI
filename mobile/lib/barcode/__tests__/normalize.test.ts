@@ -1,4 +1,4 @@
-import { expandUpcE, gtinCheckDigit, hasValidCheckDigit, lookupVariants, normalizeBarcode } from '../normalize';
+import { expandUpcE, gtinCheckDigit, gtinEquivalent, hasValidCheckDigit, lookupVariants, normalizeBarcode } from '../normalize';
 
 describe('gtinCheckDigit / hasValidCheckDigit', () => {
   it('computes the GS1 mod-10 check digit', () => {
@@ -81,6 +81,30 @@ describe('expandUpcE', () => {
   it('rejects a non-0/1 number system and a wrong length', () => {
     expect(expandUpcE('2654321')).toBeNull();
     expect(expandUpcE('12345')).toBeNull();
+  });
+});
+
+describe('gtinEquivalent (the ONLY "same barcode" rule for USDA exact-match verification)', () => {
+  it('treats a UPC-A and its zero-padded GTIN-13 as the same product', () => {
+    expect(gtinEquivalent('012345678905', '0012345678905')).toBe(true);
+    expect(gtinEquivalent('036000291452', '0036000291452')).toBe(true);
+  });
+
+  it('is true for identical codes, false for a different check digit / different code', () => {
+    expect(gtinEquivalent('3017620422003', '3017620422003')).toBe(true);
+    expect(gtinEquivalent('012345678905', '012345678912')).toBe(false);
+  });
+
+  it('rejects empty, non-numeric, too-short, or nullish inputs', () => {
+    expect(gtinEquivalent('', '012345678905')).toBe(false);
+    expect(gtinEquivalent('12ab', '012345678905')).toBe(false);
+    expect(gtinEquivalent('1234567', '012345678905')).toBe(false); // 7 digits
+    expect(gtinEquivalent(null, '012345678905')).toBe(false);
+    expect(gtinEquivalent(undefined, undefined)).toBe(false);
+  });
+
+  it('matches the Edge Function mirror behaviour for the padded EAN-8 / EAN-13 cases', () => {
+    expect(gtinEquivalent('73513537', '0000073513537')).toBe(true);
   });
 });
 

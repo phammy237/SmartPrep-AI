@@ -348,6 +348,39 @@ describe('createBarcodeItem', () => {
       expect(call[0]).not.toHaveProperty('sourceScanDetectionId');
     }
   });
+
+  it('persists fdc_id only when review resolved an exact USDA match', async () => {
+    await pantryService.createBarcodeItem({ ...BASE, fdcId: '2666511' }, 'UTC');
+    expect(repositories.createPantryItem).toHaveBeenLastCalledWith(
+      expect.objectContaining({ fdcId: '2666511', source: 'barcode' }),
+      'UTC',
+    );
+
+    (repositories.createPantryItem as jest.Mock).mockClear();
+    await pantryService.createBarcodeItem(BASE, 'UTC');
+    expect((repositories.createPantryItem as jest.Mock).mock.calls[0][0].fdcId).toBeUndefined();
+  });
+});
+
+describe('resolveItemNutrition', () => {
+  it('forwards the item barcode so the resolver can prefer product-specific nutrition', async () => {
+    (nutritionService.resolveQuantityNutrition as jest.Mock).mockResolvedValue({ status: 'unresolved' });
+    await pantryService.resolveItemNutrition({ ingredientId: 'ing-barcode-x', quantity: 150, unit: 'g', barcode: '036000291452' });
+    expect(nutritionService.resolveQuantityNutrition).toHaveBeenCalledWith({
+      canonicalIngredientId: 'ing-barcode-x',
+      quantity: 150,
+      unit: 'g',
+      barcode: '036000291452',
+    });
+  });
+
+  it('passes undefined barcode for a non-barcode item (manual / scan / grocery)', async () => {
+    (nutritionService.resolveQuantityNutrition as jest.Mock).mockResolvedValue({ status: 'unresolved' });
+    await pantryService.resolveItemNutrition({ ingredientId: 'ing-milk', quantity: 1, unit: 'item' });
+    expect(nutritionService.resolveQuantityNutrition).toHaveBeenCalledWith(
+      expect.objectContaining({ canonicalIngredientId: 'ing-milk', barcode: undefined }),
+    );
+  });
 });
 
 describe('requireUserId (via getPantry)', () => {

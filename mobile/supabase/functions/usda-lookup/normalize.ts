@@ -160,3 +160,65 @@ export function isDefensiblyVerified(search: NormalizedSearch): { verified: bool
   if (exact.length === 1) return { verified: true, fdcId: exact[0].fdcId };
   return { verified: false, fdcId: null };
 }
+
+// ===========================================================================
+// Exact GTIN / UPC verification for barcode intake.
+//
+// Mirrors lib/barcode/normalize.ts#gtinEquivalent (no cross-runtime import).
+// Two codes are the SAME GTIN iff their 14-digit zero-padded forms are equal -
+// this is the standard GS1 equivalence and covers "UPC-A 012345678905" vs its
+// zero-padded GTIN-13 "0012345678905".
+// ===========================================================================
+
+/** Digits only. Returns '' for anything non-numeric or empty. */
+function digitsOnly(raw: unknown): string {
+  const s = typeof raw === 'string' ? raw : typeof raw === 'number' ? String(raw) : '';
+  return /^[0-9\s-]*$/.test(s) ? s.replace(/[\s-]/g, '') : '';
+}
+
+/** True when a and b are the same GTIN (zero-padded to 14 and compared). */
+export function gtinEquivalent(a: unknown, b: unknown): boolean {
+  const da = digitsOnly(a);
+  const db = digitsOnly(b);
+  if (da.length < 8 || da.length > 14 || db.length < 8 || db.length > 14) return false;
+  return da.padStart(14, '0') === db.padStart(14, '0');
+}
+
+export type BrandedGtinMatch =
+  | { status: 'verified_match'; fdcId: number; description: string; brandOwner: string | null; gtinUpc: string }
+  | { status: 'no_exact_match' }
+  | { status: 'malformed' };
+
+/**
+ * Inspect a `/v1/foods/search` (dataType=Branded) response and accept a result
+ * ONLY when EXACTLY ONE distinct food carries a `gtinUpc` that is GTIN-equivalent
+ * to the scanned barcode. Never trusts the first result, name, or brand; an
+ * ambiguous multi-match is treated as no match (do not guess).
+ */
+export function matchBrandedByGtin(raw: unknown, scannedBarcode: string): BrandedGtinMatch {
+  if (!raw || typeof raw !== 'object') return { status: 'malformed' };
+  const foods = (raw as Record<string, unknown>).foods;
+  if (!Array.isArray(foods)) return { status: 'malformed' };
+  if (digitsOnly(scannedBarcode).length < 8) return { status: 'no_exact_match' };
+
+  const matches = new Map<number, { description: string; brandOwner: string | null; gtinUpc: string }>();
+  for (const food of foods) {
+    if (!food || typeof food !== 'object') continue;
+    const f = food as Record<string, unknown>;
+    const fdcId = num(f.fdcId);
+    const gtinUpc = typeof f.gtinUpc === 'string' ? f.gtinUpc : null;
+    if (fdcId === null || !gtinUpc) continue;
+    if (!gtinEquivalent(gtinUpc, scannedBarcode)) continue;
+    if (!matches.has(fdcId)) {
+      matches.set(fdcId, {
+        description: typeof f.description === 'string' ? f.description : '',
+        brandOwner: typeof f.brandOwner === 'string' ? f.brandOwner : null,
+        gtinUpc,
+      });
+    }
+  }
+
+  if (matches.size !== 1) return { status: 'no_exact_match' };
+  const [[fdcId, info]] = [...matches.entries()];
+  return { status: 'verified_match', fdcId, description: info.description, brandOwner: info.brandOwner, gtinUpc: info.gtinUpc };
+}

@@ -2,12 +2,12 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Controller, useForm } from 'react-hook-form';
-import { Alert, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, Text, View } from 'react-native';
 
 import { Button, Chip, EmptyState, Screen, Stepper, TextField } from '@/components';
-import { useCreateBarcodeItem } from '@/hooks';
+import { useCreateBarcodeItem, useEnrichBarcodeProductNutrition } from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
 import { toUserSafeAuthMessage } from '@/lib/errors';
 import { CreateBarcodeItemInput, createBarcodeItemSchema } from '@/lib/validation/barcodeSchemas';
@@ -52,6 +52,25 @@ export function BarcodeReviewScreen() {
   const candidate = pending?.candidate ?? null;
   const notFound = pending?.status === 'not_found';
 
+  // One-shot enrichment: persist the OFF candidate + attempt an exact USDA
+  // branded-GTIN verification. Fires once per review, never blocks the screen.
+  const enrich = useEnrichBarcodeProductNutrition();
+  const enrichStarted = useRef(false);
+  useEffect(() => {
+    if (enrichStarted.current) return;
+    if (pending?.status !== 'found' || !pending.barcode) return;
+    enrichStarted.current = true;
+    enrich.mutate({
+      barcode: pending.barcode,
+      offPer100g: candidate?.nutrition?.per100g ?? null,
+      sourceProductId: candidate?.sourceProductId,
+      description: candidate?.productName || undefined,
+      brand: candidate?.brand,
+    });
+  }, [pending?.status, pending?.barcode, candidate, enrich]);
+
+  const resolved = enrich.data;
+
   const { control, handleSubmit, watch, formState: { errors } } = useForm<CreateBarcodeItemInput>({
     resolver: zodResolver(createBarcodeItemSchema),
     defaultValues: {
@@ -80,7 +99,11 @@ export function BarcodeReviewScreen() {
 
   const onSubmit = handleSubmit(async (values) => {
     try {
-      await createItem.mutateAsync(values);
+      await createItem.mutateAsync({
+        ...values,
+        // Persist the real fdc_id only when review resolved an exact USDA match.
+        fdcId: resolved?.status === 'verified' && resolved.fdcId != null ? String(resolved.fdcId) : undefined,
+      });
       clear();
       router.replace('/(tabs)/pantry');
     } catch (error) {
@@ -88,7 +111,16 @@ export function BarcodeReviewScreen() {
     }
   });
 
-  const nutrition = candidate?.nutrition;
+  // Prefer the enrichment result once it lands; fall back to the raw OFF numbers.
+  const shownPer100g = resolved?.per100g ?? candidate?.nutrition?.per100g ?? null;
+  const nutritionLabel =
+    enrich.isPending && !resolved
+      ? 'checking'
+      : resolved?.status === 'verified'
+        ? 'verified'
+        : shownPer100g
+          ? 'candidate'
+          : 'none';
 
   return (
     <Screen scroll contentContainerStyle={{ padding: theme.spacing.xl, gap: theme.spacing.xl }}>
@@ -280,23 +312,33 @@ export function BarcodeReviewScreen() {
         ) : null}
       </View>
 
-      {nutrition ? (
-        <View style={{ gap: 4 }}>
-          <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Nutrition</Text>
+      <View style={{ gap: 4 }}>
+        <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Nutrition</Text>
+        {nutritionLabel === 'checking' ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <ActivityIndicator size="small" color={theme.colors.textTertiary} />
+            <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>Checking USDA for an exact match…</Text>
+          </View>
+        ) : nutritionLabel === 'verified' ? (
           <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>
-            Per 100 g, from Open Food Facts — not verified. SmartPrep estimates a pantry item's nutrition on its own once
-            it recognises the ingredient.
+            Nutrition verified with USDA (exact barcode match). Saved with your item.
           </Text>
+        ) : nutritionLabel === 'candidate' ? (
+          <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>
+            Nutrition from Open Food Facts — not USDA-verified. Saved with your item.
+          </Text>
+        ) : (
+          <Text style={[theme.typography.footnote, { color: theme.colors.textTertiary }]}>
+            No product nutrition found. SmartPrep will estimate it when it recognises the ingredient.
+          </Text>
+        )}
+        {shownPer100g ? (
           <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>
-            {n1(nutrition.per100g.calories)} kcal · {n1(nutrition.per100g.proteinG)} g protein ·{' '}
-            {n1(nutrition.per100g.carbsG)} g carbs · {n1(nutrition.per100g.fatG)} g fat
+            Per 100 g: {n1(shownPer100g.calories ?? null)} kcal · {n1(shownPer100g.proteinG ?? null)} g protein ·{' '}
+            {n1(shownPer100g.carbsG ?? null)} g carbs · {n1(shownPer100g.fatG ?? null)} g fat
           </Text>
-        </View>
-      ) : (
-        <Text style={[theme.typography.footnote, { color: theme.colors.textTertiary }]}>
-          No nutrition data from the lookup. SmartPrep will estimate it when it recognises the ingredient.
-        </Text>
-      )}
+        ) : null}
+      </View>
 
       <Controller
         control={control}

@@ -6,6 +6,7 @@ import { supabase } from '../client';
 type CanonicalRow = Database['public']['Tables']['canonical_ingredient_nutrition']['Row'];
 type OverrideRow = Database['public']['Tables']['user_ingredient_overrides']['Row'];
 type UsdaFoodRow = Database['public']['Tables']['usda_foods']['Row'];
+type BarcodeProductNutritionRow = Database['public']['Tables']['barcode_product_nutrition']['Row'];
 
 export interface CanonicalNutritionRef {
   canonicalIngredientId: string;
@@ -173,4 +174,100 @@ export async function invokeUsdaDetails(fdcId: number): Promise<UsdaDetailsResul
   });
   if (error) throw error;
   return data as UsdaDetailsResult;
+}
+
+// ===========================================================================
+// Barcode product nutrition - global per-barcode cache (migration 0013)
+// ===========================================================================
+
+export interface BarcodeProductNutritionRef {
+  barcode: string;
+  provider: 'open_food_facts' | 'usda';
+  sourceProductId: string;
+  per100g: NutrientBasisPer100g;
+  status: 'candidate' | 'verified';
+  fdcId: number | null;
+  description: string | null;
+  brandOwner: string | null;
+  sourceFetchedAt: string;
+  updatedAt: string;
+}
+
+function mapBarcodeProductRow(row: BarcodeProductNutritionRow): BarcodeProductNutritionRef {
+  return {
+    barcode: row.barcode,
+    provider: row.provider,
+    sourceProductId: row.source_product_id,
+    per100g: toNutrientBasis(row.nutrition_per_100g),
+    status: row.status,
+    fdcId: row.fdc_id,
+    description: row.description,
+    brandOwner: row.brand_owner,
+    sourceFetchedAt: row.source_fetched_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/** The cached product nutrition for a normalized barcode, or null. Local read - never hits a provider. */
+export async function fetchBarcodeProductNutrition(barcode: string): Promise<BarcodeProductNutritionRef | null> {
+  const { data, error } = await supabase
+    .from('barcode_product_nutrition')
+    .select('*')
+    .eq('barcode', barcode)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? mapBarcodeProductRow(data) : null;
+}
+
+export interface UpsertBarcodeCandidateInput {
+  barcode: string;
+  sourceProductId: string;
+  per100g: NutrientBasisPer100g;
+  description?: string | null;
+  brandOwner?: string | null;
+}
+
+/**
+ * Persist Open Food Facts nutrition as a `candidate` product record. Goes
+ * through the security-definer RPC, which can ONLY ever write
+ * status='candidate' / provider='open_food_facts' / fdc_id=null and never
+ * downgrades an existing verified row.
+ */
+export async function upsertBarcodeProductCandidate(
+  input: UpsertBarcodeCandidateInput,
+): Promise<BarcodeProductNutritionRef> {
+  const { data, error } = await supabase.rpc('upsert_barcode_product_candidate', {
+    p_barcode: input.barcode,
+    p_source_product_id: input.sourceProductId,
+    p_nutrition_per_100g: input.per100g as unknown as Record<string, number>,
+    p_description: input.description ?? null,
+    p_brand_owner: input.brandOwner ?? null,
+  });
+  if (error) throw error;
+  return mapBarcodeProductRow(data);
+}
+
+export type UsdaBrandedMatchResult =
+  | {
+      status: 'verified_match';
+      barcode: string;
+      fdcId: number;
+      description: string;
+      brandOwner: string | null;
+      nutritionPer100g: NutrientBasisPer100g;
+    }
+  | { status: 'no_exact_match'; barcode: string }
+  | { status: 'rate_limited' | 'upstream_error' | 'malformed_upstream' | 'config_error' | 'unauthenticated' };
+
+/**
+ * Ask the usda-lookup Edge Function for an EXACT branded-food GTIN match. The
+ * Edge Function does the GTIN comparison server-side and, on a match, writes the
+ * verified row itself (service role) - the client never asserts a match.
+ */
+export async function invokeUsdaBrandedByBarcode(barcode: string): Promise<UsdaBrandedMatchResult> {
+  const { data, error } = await supabase.functions.invoke('usda-lookup', {
+    body: { action: 'branded_by_barcode', barcode },
+  });
+  if (error) throw error;
+  return data as UsdaBrandedMatchResult;
 }

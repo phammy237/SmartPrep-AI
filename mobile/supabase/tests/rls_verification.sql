@@ -3366,6 +3366,114 @@ set local role postgres;
 delete from public.pantry_items where display_name = 'RLS Barcode Item A';
 commit;
 
+-- ============================================================================
+-- barcode_product_nutrition (migration 0013): a GLOBAL product-nutrition cache.
+--   1. authenticated read works; anon read blocked.
+--   2. no raw client insert/update/delete grant.
+--   3. upsert_barcode_product_candidate writes status='candidate' /
+--      provider='open_food_facts' / fdc_id=null only - a client can never fake
+--      a USDA-verified row or inject an fdc_id, and never downgrades a verified
+--      row.
+--   4. a raw client cannot flip an existing row to status='verified' or set
+--      fdc_id.
+-- ============================================================================
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+-- (3) the only client write path - and it can only ever write a candidate
+select public.upsert_barcode_product_candidate(
+  p_barcode => '0999999999998',
+  p_source_product_id => '0999999999998',
+  p_nutrition_per_100g => '{"calories": 59, "proteinG": 10}'::jsonb,
+  p_description => 'RLS test yogurt',
+  p_brand_owner => 'RLS Brand'
+);
+commit;
+
+begin;
+set local role postgres;
+do $$
+declare v public.barcode_product_nutrition;
+begin
+  select * into v from public.barcode_product_nutrition where barcode = '0999999999998';
+  if not found then raise exception 'FAIL: candidate upsert did not create a row'; end if;
+  if v.status <> 'candidate' or v.provider <> 'open_food_facts' or v.fdc_id is not null then
+    raise exception 'FAIL: client RPC wrote status=% provider=% fdc_id=% (expected candidate/open_food_facts/null)', v.status, v.provider, v.fdc_id;
+  end if;
+  if v.created_by <> 'TEST_USER_A_ID'::uuid then raise exception 'FAIL: created_by not derived from auth.uid()'; end if;
+  raise notice 'PASS: upsert_barcode_product_candidate can only write an OFF candidate';
+
+  -- simulate the Edge Function (service role) upgrading the row to verified
+  update public.barcode_product_nutrition
+    set status = 'verified', provider = 'usda', fdc_id = 424242, source_product_id = '424242'
+    where barcode = '0999999999998';
+end $$;
+commit;
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+do $$
+declare v public.barcode_product_nutrition; denied boolean := false;
+begin
+  -- (1) authenticated read works
+  select * into v from public.barcode_product_nutrition where barcode = '0999999999998';
+  if not found then raise exception 'FAIL: authenticated user cannot read the global cache'; end if;
+
+  -- (2) raw client writes are refused (no grant)
+  begin
+    insert into public.barcode_product_nutrition (barcode, provider, source_product_id, nutrition_per_100g, status)
+      values ('0888888888880', 'usda', '1', '{"calories":1}'::jsonb, 'verified');
+  exception when others then denied := true; end;
+  if not denied then raise exception 'FAIL: raw client INSERT into barcode_product_nutrition was allowed'; end if;
+
+  denied := false;
+  begin
+    update public.barcode_product_nutrition set status = 'candidate' where barcode = '0999999999998';
+  exception when others then denied := true; end;
+  if not denied then raise exception 'FAIL: raw client UPDATE of barcode_product_nutrition was allowed'; end if;
+
+  denied := false;
+  begin
+    delete from public.barcode_product_nutrition where barcode = '0999999999998';
+  exception when others then denied := true; end;
+  if not denied then raise exception 'FAIL: raw client DELETE of barcode_product_nutrition was allowed'; end if;
+
+  -- (3 cont.) the candidate RPC never downgrades a verified row
+  perform public.upsert_barcode_product_candidate(
+    p_barcode => '0999999999998',
+    p_source_product_id => '0999999999998',
+    p_nutrition_per_100g => '{"calories": 1}'::jsonb
+  );
+  select * into v from public.barcode_product_nutrition where barcode = '0999999999998';
+  if v.status <> 'verified' or v.fdc_id <> 424242 then
+    raise exception 'FAIL: a client candidate upsert downgraded a verified row (status=%, fdc_id=%)', v.status, v.fdc_id;
+  end if;
+  raise notice 'PASS: client cannot insert/update/delete barcode_product_nutrition, nor downgrade a verified row';
+end $$;
+commit;
+
+begin;
+set local role anon;
+select set_config('request.jwt.claims', '', true);
+do $$
+declare n int; blocked boolean := false;
+begin
+  begin
+    select count(*) into n from public.barcode_product_nutrition where barcode = '0999999999998';
+  exception when insufficient_privilege then blocked := true;
+  end;
+  if not blocked and n <> 0 then raise exception 'FAIL: anon read a barcode_product_nutrition row'; end if;
+  raise notice 'PASS: anon cannot read barcode_product_nutrition';
+end $$;
+commit;
+
+begin;
+set local role postgres;
+delete from public.barcode_product_nutrition where barcode in ('0999999999998', '0888888888880');
+commit;
+
 do $$
 begin
   raise notice 'ALL RLS CHECKS PASSED';

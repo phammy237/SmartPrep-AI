@@ -34,6 +34,8 @@ export const createBarcodeItemSchema = z
     userProvidedDateType: userProvidedDateTypeSchema.optional(),
     imageUrl: z.string().url().optional(),
     sourceProductId: z.string().trim().max(64).optional(),
+    /** Set only when an exact USDA branded-food GTIN match was made during review. */
+    fdcId: z.string().trim().regex(/^\d+$/).max(20).optional(),
   })
   .refine((v) => !v.userProvidedDate || !!v.userProvidedDateType, {
     message: 'Choose what kind of date this is (best by, use by, or sell by)',

@@ -227,6 +227,8 @@ async function createBarcodeItem(input: CreateBarcodeItemInput, timeZone: string
       source: 'barcode',
       barcode: input.barcode,
       brand: input.brand,
+      // Only present when review resolved an EXACT USDA branded-food GTIN match.
+      fdcId: input.fdcId,
     },
     timeZone,
   );
@@ -240,11 +242,16 @@ async function createBarcodeItem(input: CreateBarcodeItemInput, timeZone: string
  * infrastructure failures (auth, Supabase) DO propagate so the caller knows
  * enrichment failed rather than silently seeing "unresolved".
  */
-async function resolveItemNutrition(item: Pick<PantryItem, 'ingredientId' | 'quantity' | 'unit'>): Promise<NutritionResolution> {
+async function resolveItemNutrition(
+  item: Pick<PantryItem, 'ingredientId' | 'quantity' | 'unit' | 'barcode'>,
+): Promise<NutritionResolution> {
   return nutritionService.resolveQuantityNutrition({
     canonicalIngredientId: item.ingredientId,
     quantity: item.quantity,
     unit: item.unit,
+    // For a barcode-added item, the persisted product nutrition (verified USDA /
+    // OFF candidate) is checked first by the resolver.
+    barcode: item.barcode,
   });
 }
 

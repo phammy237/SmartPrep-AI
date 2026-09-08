@@ -1,16 +1,19 @@
 import { supabase } from '../../client';
 import {
   deleteUserIngredientOverride,
+  fetchBarcodeProductNutrition,
   fetchCanonicalIngredientNutrition,
   fetchUsdaFoodFromCache,
   fetchUserIngredientOverrides,
+  invokeUsdaBrandedByBarcode,
   invokeUsdaDetails,
   invokeUsdaSearch,
+  upsertBarcodeProductCandidate,
   upsertUserIngredientOverride,
 } from '../nutritionReferenceRepository';
 
 jest.mock('../../client', () => ({
-  supabase: { from: jest.fn(), functions: { invoke: jest.fn() } },
+  supabase: { from: jest.fn(), functions: { invoke: jest.fn() }, rpc: jest.fn() },
 }));
 
 type Result = { data: unknown; error: unknown };
@@ -175,5 +178,65 @@ describe('Edge Function invocations', () => {
   it('propagates an Edge Function transport error', async () => {
     invoke.mockResolvedValue({ data: null, error: new Error('function failed') });
     await expect(invokeUsdaSearch('x')).rejects.toThrow('function failed');
+  });
+});
+
+describe('barcode product nutrition (migration 0013)', () => {
+  const rpc = supabase.rpc as jest.Mock;
+
+  const ROW = {
+    id: 'bpn-1',
+    barcode: '036000291452',
+    provider: 'open_food_facts',
+    source_product_id: '036000291452',
+    nutrition_per_100g: { calories: 59, proteinG: 10, sodiumMg: -5, junk: 'x' },
+    status: 'candidate',
+    fdc_id: null,
+    description: 'Vanilla yogurt',
+    brand_owner: 'Oikos',
+    source_fetched_at: '2026-09-05T00:00:00.000Z',
+    created_by: 'user-1',
+    created_at: '2026-09-05T00:00:00.000Z',
+    updated_at: '2026-09-05T00:00:00.000Z',
+  };
+
+  it('fetchBarcodeProductNutrition maps a row to a clean per-100g basis (drops negative / non-numeric)', async () => {
+    (supabase.from as jest.Mock).mockReturnValue(makeChain({ data: ROW, error: null }));
+    const ref = await fetchBarcodeProductNutrition('036000291452');
+    expect(supabase.from).toHaveBeenCalledWith('barcode_product_nutrition');
+    expect(ref).toMatchObject({ barcode: '036000291452', status: 'candidate', provider: 'open_food_facts', fdcId: null });
+    expect(ref?.per100g).toEqual({ calories: 59, proteinG: 10 });
+  });
+
+  it('fetchBarcodeProductNutrition returns null when the barcode is not cached', async () => {
+    (supabase.from as jest.Mock).mockReturnValue(makeChain({ data: null, error: null }));
+    expect(await fetchBarcodeProductNutrition('000000000000')).toBeNull();
+  });
+
+  it('upsertBarcodeProductCandidate goes through the security-definer RPC (never a raw table write)', async () => {
+    rpc.mockResolvedValue({ data: ROW, error: null });
+    await upsertBarcodeProductCandidate({
+      barcode: '036000291452',
+      sourceProductId: '036000291452',
+      per100g: { calories: 59, proteinG: 10 },
+      description: 'Vanilla yogurt',
+      brandOwner: 'Oikos',
+    });
+    expect(rpc).toHaveBeenCalledWith('upsert_barcode_product_candidate', {
+      p_barcode: '036000291452',
+      p_source_product_id: '036000291452',
+      p_nutrition_per_100g: { calories: 59, proteinG: 10 },
+      p_description: 'Vanilla yogurt',
+      p_brand_owner: 'Oikos',
+    });
+    // no direct insert/update/upsert to the table
+    expect(supabase.from).not.toHaveBeenCalledWith('barcode_product_nutrition');
+  });
+
+  it('invokeUsdaBrandedByBarcode calls the Edge Function with the branded_by_barcode action', async () => {
+    invoke.mockResolvedValue({ data: { status: 'no_exact_match', barcode: '036000291452' }, error: null });
+    const r = await invokeUsdaBrandedByBarcode('036000291452');
+    expect(invoke).toHaveBeenCalledWith('usda-lookup', { body: { action: 'branded_by_barcode', barcode: '036000291452' } });
+    expect(r).toEqual({ status: 'no_exact_match', barcode: '036000291452' });
   });
 });

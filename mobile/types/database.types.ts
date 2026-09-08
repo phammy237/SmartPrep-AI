@@ -670,9 +670,42 @@ export interface Database {
         };
         Relationships: [];
       };
+      barcode_product_nutrition: {
+        Row: {
+          id: string;
+          barcode: string;
+          provider: 'open_food_facts' | 'usda';
+          source_product_id: string;
+          nutrition_per_100g: Json;
+          status: 'candidate' | 'verified';
+          fdc_id: number | null;
+          description: string | null;
+          brand_owner: string | null;
+          source_fetched_at: string;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        // No client insert/update/delete grant. Written only by
+        // upsert_barcode_product_candidate (candidate) and the usda-lookup
+        // Edge Function (verified, service role). See migration 0013.
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {
+      upsert_barcode_product_candidate: {
+        Args: {
+          p_barcode: string;
+          p_source_product_id: string;
+          p_nutrition_per_100g: Json;
+          p_description?: string | null;
+          p_brand_owner?: string | null;
+        };
+        Returns: Database['public']['Tables']['barcode_product_nutrition']['Row'];
+      };
       replace_nutrition_goals: {
         Args: {
           p_daily_calories: number;
