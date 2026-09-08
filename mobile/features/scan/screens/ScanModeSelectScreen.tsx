@@ -93,6 +93,46 @@ export function ScanModeSelectScreen() {
           <Ionicons name="chevron-forward" size={20} color={theme.colors.textTertiary} />
         </Pressable>
 
+        <Pressable
+          onPress={() => router.push('/scan/receipt/capture')}
+          accessibilityRole="button"
+          accessibilityLabel="Scan a receipt"
+          style={({ pressed }) => [
+            {
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: theme.spacing.md,
+              backgroundColor: theme.colors.backgroundElevated,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              borderRadius: theme.radius.lg,
+              padding: theme.spacing.lg,
+            },
+            theme.shadow.card,
+            pressed && { opacity: 0.9 },
+          ]}
+        >
+          <View
+            style={{
+              width: 52,
+              height: 52,
+              borderRadius: 26,
+              backgroundColor: theme.colors.accentMuted,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Ionicons name="receipt-outline" size={24} color={theme.colors.accent} />
+          </View>
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Scan Receipt</Text>
+            <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>
+              A grocery receipt - items are extracted and reviewed before any are added.
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={theme.colors.textTertiary} />
+        </Pressable>
+
         {OPTIONS.map((option) => (
           <Pressable
             key={option.mode}

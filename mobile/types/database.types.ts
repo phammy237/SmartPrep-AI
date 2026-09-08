@@ -166,11 +166,14 @@ export interface Database {
           estimated_expiration_date: string | null;
           expiration_confidence: 'high' | 'medium' | 'low' | 'unknown';
           storage_location: 'fridge' | 'freezer' | 'pantry' | 'counter' | 'other' | null;
-          scan_source: 'manual' | 'scan' | 'grocery' | 'barcode';
+          scan_source: 'manual' | 'scan' | 'grocery' | 'barcode' | 'receipt';
           // Set only for scan-confirmed items; UNIQUE per user. See migration 0008.
           source_scan_detection_id: string | null;
           // Set only for grocery-transferred items; UNIQUE per user. See migration 0009.
           source_grocery_item_id: string | null;
+          // Set only for receipt-intake items; UNIQUE per user. See migration 0015.
+          source_receipt_candidate_id: string | null;
+          source_receipt_id: string | null;
           notes: string | null;
           status: 'active' | 'depleted';
           last_confirmed_at: string | null;
@@ -693,6 +696,46 @@ export interface Database {
         Update: never;
         Relationships: [];
       };
+      receipt_scans: {
+        Row: {
+          id: string;
+          user_id: string;
+          client_receipt_id: string;
+          status: 'processing' | 'reviewing' | 'confirmed' | 'partial' | 'failed';
+          merchant_name: string | null;
+          purchased_at: string | null;
+          ocr_source: 'aws_textract' | null;
+          line_count: number;
+          item_count: number;
+          created_at: string;
+          updated_at: string;
+        };
+        // Written only by the receipt security-definer RPCs. See migration 0015.
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      receipt_scan_items: {
+        Row: {
+          id: string;
+          user_id: string;
+          receipt_scan_id: string;
+          candidate_id: string;
+          raw_text: string;
+          display_name: string;
+          quantity: number | null;
+          unit: string | null;
+          category: string | null;
+          ocr_confidence: number | null;
+          candidate_status: 'pending' | 'added' | 'skipped' | 'failed';
+          pantry_item_id: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {
@@ -759,8 +802,36 @@ export interface Database {
           p_barcode?: string | null;
           p_brand?: string | null;
           p_fdc_id?: string | null;
+          p_source_receipt_candidate_id?: string | null;
+          p_source_receipt_id?: string | null;
         };
         Returns: Database['public']['Tables']['pantry_items']['Row'];
+      };
+      begin_receipt_review: {
+        Args: {
+          p_client_receipt_id: string;
+          p_ocr_source?: string | null;
+          p_merchant_name?: string | null;
+          p_purchased_at?: string | null;
+          p_line_count?: number | null;
+          p_items?: Json;
+        };
+        Returns: Json;
+      };
+      link_receipt_scan_item: {
+        Args: {
+          p_receipt_scan_id: string;
+          p_candidate_id: string;
+          p_pantry_item_id: string;
+        };
+        Returns: undefined;
+      };
+      finalize_receipt_review: {
+        Args: {
+          p_receipt_scan_id: string;
+          p_skipped_candidate_ids?: string[];
+        };
+        Returns: Database['public']['Tables']['receipt_scans']['Row'];
       };
       transfer_grocery_item_to_pantry: {
         Args: {

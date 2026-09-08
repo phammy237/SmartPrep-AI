@@ -50,6 +50,8 @@ function mapRow(row: PantryItemRow, timeZone: string): PantryItem {
     usdaMatchConfidence: row.usda_match_confidence ?? undefined,
     barcode: row.barcode ?? undefined,
     brand: row.brand ?? undefined,
+    sourceReceiptCandidateId: row.source_receipt_candidate_id ?? undefined,
+    sourceReceiptId: row.source_receipt_id ?? undefined,
   };
 }
 
@@ -93,6 +95,10 @@ export interface CreatePantryItemParams {
   brand?: string;
   /** Only when a defensible USDA FoodData Central match was made (not in barcode v1). */
   fdcId?: string;
+  /** Receipt intake only: the stable per-session candidate id. Makes create_pantry_item idempotent per receipt line. */
+  sourceReceiptCandidateId?: string;
+  /** Receipt intake only: the receipt_scans.id, for provenance/history. */
+  sourceReceiptId?: string;
 }
 
 export async function createPantryItem(params: CreatePantryItemParams, timeZone: string): Promise<PantryItem> {
@@ -119,6 +125,8 @@ export async function createPantryItem(params: CreatePantryItemParams, timeZone:
     p_barcode: params.barcode ?? null,
     p_brand: params.brand ?? null,
     p_fdc_id: params.fdcId ?? null,
+    p_source_receipt_candidate_id: params.sourceReceiptCandidateId ?? null,
+    p_source_receipt_id: params.sourceReceiptId ?? null,
   });
   if (error) throw error;
   return mapRow(data, timeZone);

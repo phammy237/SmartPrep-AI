@@ -4,6 +4,7 @@ export * from './nutrition';
 export * from './ingredient';
 export * from './pantry';
 export * from './scan';
+export * from './receipt';
 export * from './recipe';
 export * from './mealPlan';
 export * from './grocery';

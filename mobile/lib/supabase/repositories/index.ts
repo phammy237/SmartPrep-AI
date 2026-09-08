@@ -11,4 +11,5 @@ export * from './groceryRepository';
 export * from './impactRepository';
 export * from './nutritionReferenceRepository';
 export * from './scanVisionRepository';
+export * from './receiptRepository';
 export * from './scanHistoryRepository';

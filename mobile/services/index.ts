@@ -11,5 +11,6 @@ export * from './nutritionService';
 export * from './recommendationService';
 export * from './scanService';
 export * from './barcodeService';
+export * from './receiptService';
 export * from './userService';
 export * from './impactService';

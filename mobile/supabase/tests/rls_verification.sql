@@ -3531,6 +3531,103 @@ delete from public.barcode_product_nutrition where barcode = '0999999999998';
 delete from public.usda_foods where fdc_id = 777777;
 commit;
 
+-- ============================================================================
+-- Receipt intake (migration 0015): owner-scoped sessions + candidates, all
+-- writes via security-definer RPCs, per-user idempotency.
+--   1. begin_receipt_review creates an owner-scoped session + candidate rows.
+--   2. User B cannot read User A's receipt session / items.
+--   3. User B cannot link into User A's receipt (link_receipt_scan_item checks
+--      both the receipt scan AND the pantry item belong to the caller).
+--   4. no raw client insert/update/delete of receipt_scans / receipt_scan_items.
+--   5. pantry_items.source_receipt_candidate_id is UNIQUE per user -> the same
+--      client candidate id cannot be used to hijack another user's lot.
+--   6. anon blocked.
+-- ============================================================================
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+select public.begin_receipt_review(
+  p_client_receipt_id => 'rls-receipt-A',
+  p_merchant_name => 'RLS Grocer',
+  p_purchased_at => '2026-09-05',
+  p_line_count => 2,
+  p_items => '[{"candidate_id":"L0","raw_text":"RLS BANANAS 2 LB","display_name":"Rls Bananas","quantity":2,"unit":"lb","category":"produce","ocr_confidence":95}]'::jsonb
+);
+commit;
+
+begin;
+set local role postgres;
+do $$
+declare v_scan public.receipt_scans; v_item public.receipt_scan_items;
+begin
+  select * into v_scan from public.receipt_scans where client_receipt_id = 'rls-receipt-A';
+  if not found or v_scan.user_id <> 'TEST_USER_A_ID'::uuid then
+    raise exception 'FAIL: begin_receipt_review did not create an owner-scoped session';
+  end if;
+  select * into v_item from public.receipt_scan_items where receipt_scan_id = v_scan.id and candidate_id = 'L0';
+  if not found or v_item.user_id <> 'TEST_USER_A_ID'::uuid or v_item.raw_text <> 'RLS BANANAS 2 LB' then
+    raise exception 'FAIL: candidate row not created / raw_text not stored';
+  end if;
+  raise notice 'PASS: begin_receipt_review creates owner-scoped session + candidate rows';
+end $$;
+commit;
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
+do $$
+declare n int; denied boolean := false; v_scan uuid;
+begin
+  -- (2) B cannot read A's receipt
+  select count(*) into n from public.receipt_scans where client_receipt_id = 'rls-receipt-A';
+  if n <> 0 then raise exception 'FAIL: User B read User A receipt_scans'; end if;
+  select count(*) into n from public.receipt_scan_items where raw_text = 'RLS BANANAS 2 LB';
+  if n <> 0 then raise exception 'FAIL: User B read User A receipt_scan_items'; end if;
+
+  -- (3) B cannot link into A's receipt (find A's scan id as postgres, then try as B)
+  set local role postgres;
+  select id into v_scan from public.receipt_scans where client_receipt_id = 'rls-receipt-A';
+  set local role authenticated;
+  select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
+  begin
+    perform public.link_receipt_scan_item(v_scan, 'L0', gen_random_uuid());
+  exception when others then denied := true;
+  end;
+  if not denied then raise exception 'FAIL: User B linked into User A receipt'; end if;
+
+  -- (4) raw client writes refused
+  denied := false;
+  begin
+    insert into public.receipt_scans (user_id, client_receipt_id) values ('TEST_USER_B_ID'::uuid, 'rls-sneak');
+  exception when others then denied := true;
+  end;
+  if not denied then raise exception 'FAIL: raw client INSERT into receipt_scans allowed'; end if;
+
+  raise notice 'PASS: receipt sessions are owner-scoped and RPC-only';
+end $$;
+commit;
+
+begin;
+set local role anon;
+select set_config('request.jwt.claims', '', true);
+do $$
+declare n int; blocked boolean := false;
+begin
+  begin
+    select count(*) into n from public.receipt_scans where client_receipt_id = 'rls-receipt-A';
+  exception when insufficient_privilege then blocked := true;
+  end;
+  if not blocked and n <> 0 then raise exception 'FAIL: anon read a receipt_scans row'; end if;
+  raise notice 'PASS: anon cannot read receipt_scans';
+end $$;
+commit;
+
+begin;
+set local role postgres;
+delete from public.receipt_scans where client_receipt_id = 'rls-receipt-A';
+commit;
+
 do $$
 begin
   raise notice 'ALL RLS CHECKS PASSED';

@@ -1,7 +1,7 @@
 import { IngredientCategory, QuantityUnit } from './common';
 import { FreshnessState } from './freshness';
 
-export type PantryItemSource = 'scan' | 'manual' | 'grocery' | 'barcode';
+export type PantryItemSource = 'scan' | 'manual' | 'grocery' | 'barcode' | 'receipt';
 
 /** Simple two-state lifecycle. Richer "why it left" semantics live only in the pantry_events ledger, not here. */
 export type PantryItemStatus = 'active' | 'depleted';
@@ -67,4 +67,7 @@ export interface PantryItem {
   usdaMatchConfidence?: string;
   barcode?: string;
   brand?: string;
+  /** Receipt intake provenance (see migration 0015). */
+  sourceReceiptCandidateId?: string;
+  sourceReceiptId?: string;
 }

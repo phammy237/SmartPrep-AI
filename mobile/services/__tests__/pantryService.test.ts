@@ -17,6 +17,8 @@ jest.mock('@/lib/supabase/repositories', () => ({
   depletePantryItem: jest.fn(),
   restorePantryItem: jest.fn(),
   confirmPantryItem: jest.fn(),
+  linkReceiptScanItem: jest.fn(),
+  finalizeReceiptReview: jest.fn(),
 }));
 
 jest.mock('../nutritionService', () => ({
@@ -359,6 +361,110 @@ describe('createBarcodeItem', () => {
     (repositories.createPantryItem as jest.Mock).mockClear();
     await pantryService.createBarcodeItem(BASE, 'UTC');
     expect((repositories.createPantryItem as jest.Mock).mock.calls[0][0].fdcId).toBeUndefined();
+  });
+});
+
+describe('createReceiptItem / createReceiptItemsToPantry', () => {
+  const SCAN_ID = '11111111-1111-1111-1111-111111111111';
+  const item = (over: Partial<Record<string, unknown>> = {}) => ({
+    receiptScanId: SCAN_ID,
+    candidateId: 'L1',
+    rawText: 'BNLS CHKN BRST',
+    displayName: 'Chicken Breast',
+    category: 'protein' as const,
+    quantity: 2,
+    unit: 'lb' as const,
+    purchaseDate: '2026-09-05',
+    ...over,
+  });
+
+  beforeEach(() => {
+    (repositories.linkReceiptScanItem as jest.Mock).mockResolvedValue(undefined);
+    (repositories.finalizeReceiptReview as jest.Mock).mockResolvedValue({ id: SCAN_ID, status: 'confirmed', itemCount: 1 });
+  });
+
+  it('goes through create_pantry_item with source "receipt" + receipt provenance/idempotency ids, then links the candidate', async () => {
+    await pantryService.createReceiptItem(item(), 'UTC');
+    expect(repositories.createPantryItem).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'receipt',
+        sourceReceiptCandidateId: 'L1',
+        sourceReceiptId: SCAN_ID,
+        displayName: 'Chicken Breast',
+        category: 'protein',
+        quantity: 2,
+        unit: 'lb',
+      }),
+      'UTC',
+    );
+    expect(repositories.linkReceiptScanItem).toHaveBeenCalledWith(SCAN_ID, 'L1', expect.any(String));
+  });
+
+  it('an EXACT canonical name resolves; an abbreviation gets a synthetic ing-receipt id (raw text never becomes identity)', async () => {
+    await pantryService.createReceiptItem(item({ displayName: 'chicken breast' }), 'UTC');
+    expect((repositories.createPantryItem as jest.Mock).mock.calls[0][0].ingredientId).toBe('ing-chicken-breast');
+
+    (repositories.createPantryItem as jest.Mock).mockClear();
+    await pantryService.createReceiptItem(item({ displayName: 'ORG BAN', candidateId: 'L2' }), 'UTC');
+    const args = (repositories.createPantryItem as jest.Mock).mock.calls[0][0];
+    expect(args.ingredientId).toMatch(/^ing-receipt/);
+    expect(args.displayName).toBe('ORG BAN');
+  });
+
+  it('never fabricates an expiration date from a receipt (no printed date supplied)', async () => {
+    await pantryService.createReceiptItem(item({ purchaseDate: undefined }), 'UTC');
+    expect(repositories.createPantryItem).toHaveBeenCalledWith(
+      expect.objectContaining({ expirationConfidence: 'unknown', estimatedExpirationDate: undefined }),
+      'UTC',
+    );
+  });
+
+  it('batch: independent per candidate - one failure does not block the rest, and the session is finalized', async () => {
+    (repositories.createPantryItem as jest.Mock).mockImplementation(async (params) => {
+      if (params.sourceReceiptCandidateId === 'L2') throw new Error('bad line');
+      return { ...CURRENT_ITEM, id: `item-${params.sourceReceiptCandidateId}`, ...params };
+    });
+
+    const res = await pantryService.createReceiptItemsToPantry(
+      SCAN_ID,
+      [item({ candidateId: 'L1' }), item({ candidateId: 'L2' }), item({ candidateId: 'L3' })],
+      ['L9'],
+      'UTC',
+    );
+
+    expect(res.created.map((i) => i.id)).toEqual(['item-L1', 'item-L3']);
+    expect(res.failed).toEqual([{ candidateId: 'L2', reason: 'bad line' }]);
+    expect(repositories.linkReceiptScanItem).toHaveBeenCalledTimes(2); // only the two that succeeded
+    expect(repositories.finalizeReceiptReview).toHaveBeenCalledWith(SCAN_ID, ['L9']);
+  });
+
+  it('retrying the batch reuses already-created lots (create_pantry_item is idempotent per candidate)', async () => {
+    const store = new Map<string, unknown>();
+    (repositories.createPantryItem as jest.Mock).mockImplementation(async (params) => {
+      const key = params.sourceReceiptCandidateId;
+      if (!store.has(key)) store.set(key, { ...CURRENT_ITEM, id: `item-${key}`, ...params });
+      return store.get(key);
+    });
+
+    const items = [item({ candidateId: 'L1' }), item({ candidateId: 'L2' })];
+    const first = await pantryService.createReceiptItemsToPantry(SCAN_ID, items, [], 'UTC');
+    const second = await pantryService.createReceiptItemsToPantry(SCAN_ID, items, [], 'UTC');
+    expect(first.created.map((i) => i.id)).toEqual(second.created.map((i) => i.id));
+    expect(store.size).toBe(2); // no duplicates
+  });
+
+  it('the same receipt candidate id from a DIFFERENT receipt scan is a separate lot', async () => {
+    (repositories.createPantryItem as jest.Mock).mockImplementation(async (params) => ({
+      ...CURRENT_ITEM,
+      id: `${params.sourceReceiptId}:${params.sourceReceiptCandidateId}`,
+      ...params,
+    }));
+    const a = await pantryService.createReceiptItem(item({ candidateId: 'L1', receiptScanId: SCAN_ID }), 'UTC');
+    const b = await pantryService.createReceiptItem(
+      item({ candidateId: 'L1', receiptScanId: '22222222-2222-2222-2222-222222222222' }),
+      'UTC',
+    );
+    expect(a.id).not.toBe(b.id);
   });
 });
 

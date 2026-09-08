@@ -1,6 +1,6 @@
-import { INGREDIENTS_BY_ID, resolveCanonicalIngredient } from '@/data';
 import { NutritionResolution } from '@/lib/nutrition/resolveNutrition';
 import {
+  CreatePantryItemParams,
   UpdatePantryItemMetadataParams,
   adjustPantryQuantity,
   confirmPantryItem,
@@ -8,12 +8,16 @@ import {
   depletePantryItem,
   fetchPantryItem,
   fetchPantryItems,
+  finalizeReceiptReview,
+  linkReceiptScanItem,
   restorePantryItem,
   transferGroceryItemToPantry,
   updatePantryItemMetadata,
 } from '@/lib/supabase/repositories';
 import { supabase } from '@/lib/supabase/client';
+import { IntakeCandidate, PreparedIntakeCreateInput, prepareIntakeCreateInput, resolvePantryIdentity } from '@/lib/intake';
 import { CreateBarcodeItemInput } from '@/lib/validation/barcodeSchemas';
+import { ConfirmReceiptItemInput } from '@/lib/validation/receiptSchemas';
 import { GroceryTransferItemInput } from '@/lib/validation/grocerySchemas';
 import { CreatePantryItemInput, EditPantryItemMetadataInput } from '@/lib/validation/pantrySchemas';
 import { IngredientCategory, PantryItem, QuantityUnit } from '@/types';
@@ -30,30 +34,29 @@ async function requireUserId(): Promise<string> {
   return data.user.id;
 }
 
-interface ResolvedPantryIdentity {
-  /** Canonical catalog id when one resolves exactly; otherwise the hint or a fresh synthetic id. */
-  ingredientId: string;
-  imageUri: string;
-  /** True when the display name / hint resolved to a real catalog ingredient. */
-  canonical: boolean;
-}
-
-/**
- * The single place a pantry item gets its identity, shared by manual add and
- * Scan confirm (and future OCR). Exact-only catalog resolution (id, then
- * normalized name / alias) - never fuzzy. When it resolves, downstream
- * quantity coverage and nutrition resolution work by canonical id; when it
- * doesn't, the item still persists with a synthetic id (nothing is blocked).
- */
-function resolvePantryIdentity(opts: { hintId?: string; name: string; fallbackImageUri: string }): ResolvedPantryIdentity {
-  const catalog =
-    (opts.hintId ? INGREDIENTS_BY_ID[opts.hintId] : undefined) ??
-    (opts.hintId ? resolveCanonicalIngredient(opts.hintId) : null) ??
-    resolveCanonicalIngredient(opts.name);
-  if (catalog) {
-    return { ingredientId: catalog.id, imageUri: catalog.imageUri, canonical: true };
-  }
-  return { ingredientId: opts.hintId ?? generateId('ing-manual'), imageUri: opts.fallbackImageUri, canonical: false };
+/** Map the shared intake preparation to the exact `createPantryItem` argument. */
+function preparedToCreateParams(p: PreparedIntakeCreateInput): CreatePantryItemParams {
+  return {
+    ingredientId: p.ingredientId,
+    imageUri: p.imageUri,
+    displayName: p.displayName,
+    category: p.category,
+    quantity: p.quantity,
+    unit: p.unit,
+    storageLocation: p.storageLocation,
+    notes: p.notes,
+    purchaseDate: p.purchaseDate,
+    userProvidedDate: p.userProvidedDate,
+    userProvidedDateType: p.userProvidedDateType,
+    estimatedExpirationDate: p.estimatedExpirationDate,
+    expirationConfidence: p.expirationConfidence,
+    source: p.source,
+    barcode: p.barcode,
+    brand: p.brand,
+    fdcId: p.fdcId,
+    sourceReceiptCandidateId: p.sourceReceiptCandidateId,
+    sourceReceiptId: p.sourceReceiptId,
+  };
 }
 
 async function getPantry(timeZone: string): Promise<PantryItem[]> {
@@ -197,41 +200,90 @@ async function createGroceryTransferItem(input: GroceryTransferItemInput, timeZo
  * NOT persisted here - the item enriches at read time like any other.
  */
 async function createBarcodeItem(input: CreateBarcodeItemInput, timeZone: string): Promise<PantryItem> {
-  const providerImage = input.imageUrl && /^https:\/\//.test(input.imageUrl) ? input.imageUrl : undefined;
-  const identity = resolvePantryIdentity({
-    hintId: generateId('ing-barcode'),
-    name: input.displayName,
-    fallbackImageUri: providerImage ?? ingredientPhotoUri(generateId('ing-barcode'), input.displayName),
-  });
-  const estimate = estimateExpiration({
+  const candidate: IntakeCandidate = {
+    provenance: 'barcode',
+    displayName: input.displayName,
     category: input.category,
+    quantity: input.quantity,
+    unit: input.unit,
+    storageLocation: input.storageLocation,
+    notes: input.notes,
     purchaseDate: input.purchaseDate,
     userProvidedDate: input.userProvidedDate,
-  });
+    userProvidedDateType: input.userProvidedDateType,
+    barcode: input.barcode,
+    brand: input.brand,
+    // Only present when review resolved an EXACT USDA branded-food GTIN match.
+    fdcId: input.fdcId,
+    imageUrl: input.imageUrl,
+  };
+  return createPantryItem(preparedToCreateParams(prepareIntakeCreateInput(candidate)), timeZone);
+}
 
-  return createPantryItem(
-    {
-      ingredientId: identity.ingredientId,
-      imageUri: identity.imageUri,
-      displayName: input.displayName,
-      category: input.category,
-      quantity: input.quantity,
-      unit: input.unit,
-      storageLocation: input.storageLocation,
-      notes: input.notes,
-      purchaseDate: input.purchaseDate,
-      userProvidedDate: input.userProvidedDate,
-      userProvidedDateType: input.userProvidedDateType,
-      estimatedExpirationDate: estimate.estimatedExpirationDate,
-      expirationConfidence: estimate.confidence,
-      source: 'barcode',
-      barcode: input.barcode,
-      brand: input.brand,
-      // Only present when review resolved an EXACT USDA branded-food GTIN match.
-      fdcId: input.fdcId,
-    },
-    timeZone,
-  );
+/**
+ * Creates ONE pantry lot from a reviewed Receipt OCR candidate, through the same
+ * shared identity + expiration + create_pantry_item path as barcode intake.
+ * Idempotent per receipt candidate (`source_receipt_candidate_id`): a retry
+ * returns the already-created lot instead of a duplicate. After the create it
+ * links the candidate row back to its pantry item (also idempotent).
+ */
+async function createReceiptItem(input: ConfirmReceiptItemInput, timeZone: string): Promise<PantryItem> {
+  const candidate: IntakeCandidate = {
+    provenance: 'receipt',
+    receiptScanId: input.receiptScanId,
+    candidateId: input.candidateId,
+    rawText: input.rawText,
+    displayName: input.displayName,
+    category: input.category,
+    quantity: input.quantity,
+    unit: input.unit,
+    storageLocation: input.storageLocation,
+    notes: input.notes,
+    purchaseDate: input.purchaseDate,
+    userProvidedDate: input.userProvidedDate,
+    userProvidedDateType: input.userProvidedDateType,
+  };
+  const item = await createPantryItem(preparedToCreateParams(prepareIntakeCreateInput(candidate)), timeZone);
+  await linkReceiptScanItem(input.receiptScanId, input.candidateId, item.id);
+  return item;
+}
+
+export interface ReceiptBatchResult {
+  created: PantryItem[];
+  failed: { candidateId: string; reason: string }[];
+}
+
+/**
+ * Batch confirmation for a reviewed receipt. Each candidate is created
+ * INDEPENDENTLY and idempotently - one malformed line never blocks the others,
+ * and a retry of the whole batch reuses (never duplicates) the ones that
+ * already succeeded. Excluded candidate ids are marked `skipped` and the
+ * session status is finalized (`confirmed` / `partial`).
+ */
+async function createReceiptItemsToPantry(
+  receiptScanId: string,
+  items: ConfirmReceiptItemInput[],
+  skippedCandidateIds: string[],
+  timeZone: string,
+): Promise<ReceiptBatchResult> {
+  const created: PantryItem[] = [];
+  const failed: { candidateId: string; reason: string }[] = [];
+
+  for (const item of items) {
+    try {
+      created.push(await createReceiptItem(item, timeZone));
+    } catch (error) {
+      failed.push({ candidateId: item.candidateId, reason: error instanceof Error ? error.message : 'Could not add' });
+    }
+  }
+
+  try {
+    await finalizeReceiptReview(receiptScanId, skippedCandidateIds);
+  } catch {
+    // Status finalization is bookkeeping - never fail a successful batch over it.
+  }
+
+  return { created, failed };
 }
 
 /**
@@ -319,6 +371,8 @@ export const pantryService = {
   createScanItem,
   createGroceryTransferItem,
   createBarcodeItem,
+  createReceiptItem,
+  createReceiptItemsToPantry,
   resolveItemNutrition,
   updateItemMetadata,
   adjustQuantity,
