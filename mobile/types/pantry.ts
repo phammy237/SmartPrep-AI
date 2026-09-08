@@ -1,7 +1,7 @@
 import { IngredientCategory, QuantityUnit } from './common';
 import { FreshnessState } from './freshness';
 
-export type PantryItemSource = 'scan' | 'manual' | 'grocery';
+export type PantryItemSource = 'scan' | 'manual' | 'grocery' | 'barcode';
 
 /** Simple two-state lifecycle. Richer "why it left" semantics live only in the pantry_events ledger, not here. */
 export type PantryItemStatus = 'active' | 'depleted';

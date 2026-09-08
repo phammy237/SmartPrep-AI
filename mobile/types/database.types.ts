@@ -166,7 +166,7 @@ export interface Database {
           estimated_expiration_date: string | null;
           expiration_confidence: 'high' | 'medium' | 'low' | 'unknown';
           storage_location: 'fridge' | 'freezer' | 'pantry' | 'counter' | 'other' | null;
-          scan_source: 'manual' | 'scan' | 'grocery';
+          scan_source: 'manual' | 'scan' | 'grocery' | 'barcode';
           // Set only for scan-confirmed items; UNIQUE per user. See migration 0008.
           source_scan_detection_id: string | null;
           // Set only for grocery-transferred items; UNIQUE per user. See migration 0009.
@@ -706,6 +706,9 @@ export interface Database {
           p_source: string | null;
           p_source_scan_detection_id: string | null;
           p_source_grocery_item_id: string | null;
+          p_barcode?: string | null;
+          p_brand?: string | null;
+          p_fdc_id?: string | null;
         };
         Returns: Database['public']['Tables']['pantry_items']['Row'];
       };

@@ -8,6 +8,7 @@ export * from './usePreparedMeals';
 export * from './useMealLogs';
 export * from './useGrocery';
 export * from './useScan';
+export * from './useBarcode';
 export * from './useRecommendations';
 export * from './useUser';
 export * from './useImpact';

@@ -53,6 +53,46 @@ export function ScanModeSelectScreen() {
       </View>
 
       <View style={{ gap: theme.spacing.md }}>
+        <Pressable
+          onPress={() => router.push('/scan/barcode/scan')}
+          accessibilityRole="button"
+          accessibilityLabel="Scan a barcode"
+          style={({ pressed }) => [
+            {
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: theme.spacing.md,
+              backgroundColor: theme.colors.backgroundElevated,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              borderRadius: theme.radius.lg,
+              padding: theme.spacing.lg,
+            },
+            theme.shadow.card,
+            pressed && { opacity: 0.9 },
+          ]}
+        >
+          <View
+            style={{
+              width: 52,
+              height: 52,
+              borderRadius: 26,
+              backgroundColor: theme.colors.accentMuted,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Ionicons name="barcode-outline" size={24} color={theme.colors.accent} />
+          </View>
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Scan Barcode</Text>
+            <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>
+              A packaged product's UPC or EAN, looked up and reviewed before it's added.
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={theme.colors.textTertiary} />
+        </Pressable>
+
         {OPTIONS.map((option) => (
           <Pressable
             key={option.mode}

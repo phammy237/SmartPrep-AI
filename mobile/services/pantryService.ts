@@ -13,6 +13,7 @@ import {
   updatePantryItemMetadata,
 } from '@/lib/supabase/repositories';
 import { supabase } from '@/lib/supabase/client';
+import { CreateBarcodeItemInput } from '@/lib/validation/barcodeSchemas';
 import { GroceryTransferItemInput } from '@/lib/validation/grocerySchemas';
 import { CreatePantryItemInput, EditPantryItemMetadataInput } from '@/lib/validation/pantrySchemas';
 import { IngredientCategory, PantryItem, QuantityUnit } from '@/types';
@@ -183,6 +184,55 @@ async function createGroceryTransferItem(input: GroceryTransferItemInput, timeZo
 }
 
 /**
+ * Creates a pantry lot from a REVIEWED barcode-intake form, through the SAME
+ * identity + expiration + creation path as a manual add. The barcode scanner
+ * never inserts inventory - only this call, from the review screen's explicit
+ * "Add to pantry".
+ *
+ * Product identity is preserved as-is: a branded product name ("Chobani Greek
+ * Yogurt") is only mapped to a canonical ingredient when the EXACT authored
+ * resolver hits ("Whole Milk" -> milk); otherwise the item persists with a
+ * synthetic `ing-barcode-*` id (nothing is blocked, coverage/nutrition just
+ * resolve as unresolved until a mapping exists). Nutrition from the provider is
+ * NOT persisted here - the item enriches at read time like any other.
+ */
+async function createBarcodeItem(input: CreateBarcodeItemInput, timeZone: string): Promise<PantryItem> {
+  const providerImage = input.imageUrl && /^https:\/\//.test(input.imageUrl) ? input.imageUrl : undefined;
+  const identity = resolvePantryIdentity({
+    hintId: generateId('ing-barcode'),
+    name: input.displayName,
+    fallbackImageUri: providerImage ?? ingredientPhotoUri(generateId('ing-barcode'), input.displayName),
+  });
+  const estimate = estimateExpiration({
+    category: input.category,
+    purchaseDate: input.purchaseDate,
+    userProvidedDate: input.userProvidedDate,
+  });
+
+  return createPantryItem(
+    {
+      ingredientId: identity.ingredientId,
+      imageUri: identity.imageUri,
+      displayName: input.displayName,
+      category: input.category,
+      quantity: input.quantity,
+      unit: input.unit,
+      storageLocation: input.storageLocation,
+      notes: input.notes,
+      purchaseDate: input.purchaseDate,
+      userProvidedDate: input.userProvidedDate,
+      userProvidedDateType: input.userProvidedDateType,
+      estimatedExpirationDate: estimate.estimatedExpirationDate,
+      expirationConfidence: estimate.confidence,
+      source: 'barcode',
+      barcode: input.barcode,
+      brand: input.brand,
+    },
+    timeZone,
+  );
+}
+
+/**
  * Read-time nutrition enrichment for a pantry item. Secondary to persistence:
  * returns an explicit `unresolved` resolution (not an error) when the item's
  * quantity/unit cannot be converted or no reference exists - never fabricates
@@ -261,6 +311,7 @@ export const pantryService = {
   addManualPantryItem,
   createScanItem,
   createGroceryTransferItem,
+  createBarcodeItem,
   resolveItemNutrition,
   updateItemMetadata,
   adjustQuantity,

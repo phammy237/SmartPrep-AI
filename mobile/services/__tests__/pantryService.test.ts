@@ -275,6 +275,81 @@ describe('addManualPantryItem', () => {
   });
 });
 
+describe('createBarcodeItem', () => {
+  const BASE = {
+    barcode: '036000291452',
+    displayName: 'Chobani Nonfat Greek Yogurt, Vanilla',
+    brand: 'Chobani',
+    category: 'dairy' as const,
+    quantity: 150,
+    unit: 'g' as const,
+    sourceProductId: '036000291452',
+  };
+
+  it('goes through create_pantry_item with source "barcode" and persists barcode + brand as provenance', async () => {
+    await pantryService.createBarcodeItem(BASE, 'UTC');
+    expect(repositories.createPantryItem).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'barcode',
+        barcode: '036000291452',
+        brand: 'Chobani',
+        displayName: 'Chobani Nonfat Greek Yogurt, Vanilla',
+        category: 'dairy',
+        quantity: 150,
+        unit: 'g',
+      }),
+      'UTC',
+    );
+  });
+
+  it('does NOT force a branded product onto a generic canonical ingredient (synthetic ing-barcode id, product name kept)', async () => {
+    await pantryService.createBarcodeItem(BASE, 'UTC');
+    const args = (repositories.createPantryItem as jest.Mock).mock.calls[0][0];
+    expect(args.ingredientId).toMatch(/^ing-barcode/);
+    expect(args.displayName).toBe('Chobani Nonfat Greek Yogurt, Vanilla');
+  });
+
+  it('maps to a canonical ingredient only when the exact resolver hits', async () => {
+    await pantryService.createBarcodeItem({ ...BASE, displayName: 'Chicken Breast', category: 'protein', unit: 'lb' }, 'UTC');
+    const args = (repositories.createPantryItem as jest.Mock).mock.calls[0][0];
+    expect(args.ingredientId).toBe('ing-chicken-breast');
+  });
+
+  it('fabricates no expiration date when the user supplied none', async () => {
+    await pantryService.createBarcodeItem(BASE, 'UTC');
+    expect(repositories.createPantryItem).toHaveBeenCalledWith(
+      expect.objectContaining({ expirationConfidence: 'unknown', estimatedExpirationDate: undefined }),
+      'UTC',
+    );
+  });
+
+  it('honours a printed best-by date (confidence high)', async () => {
+    await pantryService.createBarcodeItem(
+      { ...BASE, userProvidedDate: '2026-12-31', userProvidedDateType: 'best_by' },
+      'UTC',
+    );
+    expect(repositories.createPantryItem).toHaveBeenCalledWith(
+      expect.objectContaining({ estimatedExpirationDate: '2026-12-31', expirationConfidence: 'high' }),
+      'UTC',
+    );
+  });
+
+  it('uses the provider image only when it is an https URL', async () => {
+    await pantryService.createBarcodeItem({ ...BASE, imageUrl: 'https://images.openfoodfacts.org/x.jpg' }, 'UTC');
+    const httpsArgs = (repositories.createPantryItem as jest.Mock).mock.calls[0][0];
+    expect(httpsArgs.imageUri).toBe('https://images.openfoodfacts.org/x.jpg');
+  });
+
+  it('the same barcode can be added again later (no idempotency key sent)', async () => {
+    await pantryService.createBarcodeItem(BASE, 'UTC');
+    await pantryService.createBarcodeItem(BASE, 'UTC');
+    expect(repositories.createPantryItem).toHaveBeenCalledTimes(2);
+    for (const call of (repositories.createPantryItem as jest.Mock).mock.calls) {
+      expect(call[0]).not.toHaveProperty('sourceScanDetectionId');
+    }
+  });
+});
+
 describe('requireUserId (via getPantry)', () => {
   it('throws a clear error instead of calling the repository when there is no session', async () => {
     (supabase.auth.getUser as jest.Mock).mockResolvedValue({ data: { user: null }, error: null });

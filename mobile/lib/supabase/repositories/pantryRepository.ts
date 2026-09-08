@@ -87,6 +87,12 @@ export interface CreatePantryItemParams {
    * than inserting a duplicate). Always null for manual / grocery adds.
    */
   sourceScanDetectionId?: string;
+  /** Barcode intake only: the normalized UPC/EAN, stored as provenance (NOT an idempotency key). */
+  barcode?: string;
+  /** Barcode intake only: brand string from the product lookup. */
+  brand?: string;
+  /** Only when a defensible USDA FoodData Central match was made (not in barcode v1). */
+  fdcId?: string;
 }
 
 export async function createPantryItem(params: CreatePantryItemParams, timeZone: string): Promise<PantryItem> {
@@ -110,6 +116,9 @@ export async function createPantryItem(params: CreatePantryItemParams, timeZone:
     // Grocery transfers go through transfer_grocery_item_to_pantry, which sets
     // this itself; a direct manual/scan create never carries a grocery source.
     p_source_grocery_item_id: null,
+    p_barcode: params.barcode ?? null,
+    p_brand: params.brand ?? null,
+    p_fdc_id: params.fdcId ?? null,
   });
   if (error) throw error;
   return mapRow(data, timeZone);

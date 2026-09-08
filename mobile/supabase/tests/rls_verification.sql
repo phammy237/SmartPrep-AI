@@ -3296,6 +3296,76 @@ begin
 end $$;
 commit;
 
+-- ============================================================================
+-- Barcode intake (migration 0012): barcode/brand are provenance on an
+-- owner-scoped row - they add no new access path. Verify:
+--   1. create_pantry_item with p_source='barcode' + p_barcode/p_brand inserts
+--      as auth.uid() (never a client-supplied user id).
+--   2. user_b cannot modify user_a's barcode provenance.
+--   3. an anonymous caller cannot read a barcode-sourced row.
+-- ============================================================================
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+
+select public.create_pantry_item(
+  p_ingredient_id => 'ing-barcode-rls-a', p_display_name => 'RLS Barcode Item A',
+  p_image_uri => 'https://images.openfoodfacts.org/a.jpg', p_category => 'dairy',
+  p_quantity => 1, p_unit => 'g', p_expiration_confidence => 'unknown',
+  p_source => 'barcode', p_barcode => '0036000291452', p_brand => 'RLS Brand'
+);
+commit;
+
+begin;
+set local role postgres;
+do $$
+declare v_row public.pantry_items;
+begin
+  select * into v_row from public.pantry_items where display_name = 'RLS Barcode Item A';
+  if v_row.user_id <> 'TEST_USER_A_ID'::uuid then
+    raise exception 'FAIL: barcode item user_id came from something other than auth.uid()';
+  end if;
+  if v_row.scan_source <> 'barcode' or v_row.barcode <> '0036000291452' or v_row.brand <> 'RLS Brand' then
+    raise exception 'FAIL: barcode provenance not stored as given';
+  end if;
+  raise notice 'PASS: barcode intake inserts owner-scoped provenance via create_pantry_item';
+end $$;
+commit;
+
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
+do $$
+declare v_id uuid; n int;
+begin
+  select id into v_id from public.pantry_items where display_name = 'RLS Barcode Item A';
+  -- user_b's UPDATE is filtered by RLS to zero rows (not an error) - the point
+  -- is that user_a's provenance is untouched.
+  update public.pantry_items set brand = 'HIJACKED' where id = v_id;
+  set local role postgres;
+  select count(*) into n from public.pantry_items where id = v_id and brand = 'RLS Brand';
+  if n <> 1 then raise exception 'FAIL: user_b altered user_a barcode provenance'; end if;
+  raise notice 'PASS: cross-user barcode provenance is not writable';
+end $$;
+commit;
+
+begin;
+set local role anon;
+select set_config('request.jwt.claims', '', true);
+do $$
+declare n int;
+begin
+  select count(*) into n from public.pantry_items where display_name = 'RLS Barcode Item A';
+  if n <> 0 then raise exception 'FAIL: anon read a barcode-sourced pantry row'; end if;
+  raise notice 'PASS: anon cannot read barcode-sourced pantry rows';
+end $$;
+commit;
+
+begin;
+set local role postgres;
+delete from public.pantry_items where display_name = 'RLS Barcode Item A';
+commit;
+
 do $$
 begin
   raise notice 'ALL RLS CHECKS PASSED';
