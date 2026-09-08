@@ -120,81 +120,126 @@ describe('resolveQuantityNutrition - barcode product nutrition outranks canonica
   });
 });
 
-describe('enrichBarcodeProductNutrition', () => {
-  it('persists the OFF candidate then reports it when USDA has no exact match', async () => {
+describe('enrichBarcodeProductNutrition - OFF-independent + verified-means-persisted', () => {
+  const BARCODE = '036000291452';
+  const verifiedRow = (over: Record<string, unknown> = {}) =>
+    barcodeRow({ provider: 'usda', status: 'verified', fdcId: 2666511, per100g: { calories: 61, proteinG: 10.3 }, ...over });
+
+  it('OFF found + USDA no exact -> persists + reports the OFF candidate', async () => {
+    repo.fetchBarcodeProductNutrition.mockResolvedValue(null);
     repo.upsertBarcodeProductCandidate.mockResolvedValue(barcodeRow());
-    repo.invokeUsdaBrandedByBarcode.mockResolvedValue({ status: 'no_exact_match', barcode: '036000291452' });
+    repo.invokeUsdaBrandedByBarcode.mockResolvedValue({ status: 'no_exact_match', barcode: BARCODE });
 
     const out = await nutritionService.enrichBarcodeProductNutrition({
-      barcode: '036000291452',
+      barcode: BARCODE,
       offPer100g: { calories: 59, proteinG: 10, carbsG: 3.6, fatG: 0, fiberG: null, sugarG: null, sodiumMg: null },
-      sourceProductId: '036000291452',
-      description: 'Oikos Vanilla',
-      brand: 'Oikos',
     });
 
     expect(repo.upsertBarcodeProductCandidate).toHaveBeenCalledWith(
-      expect.objectContaining({ barcode: '036000291452', per100g: { calories: 59, proteinG: 10, carbsG: 3.6, fatG: 0 } }),
+      expect.objectContaining({ barcode: BARCODE, per100g: { calories: 59, proteinG: 10, carbsG: 3.6, fatG: 0 } }),
     );
-    expect(repo.invokeUsdaBrandedByBarcode).toHaveBeenCalledTimes(1); // at most one USDA call
+    expect(repo.invokeUsdaBrandedByBarcode).toHaveBeenCalledTimes(1);
     expect(out).toMatchObject({ status: 'candidate', source: 'open_food_facts', fdcId: null });
-    expect(out.per100g?.calories).toBe(59);
   });
 
-  it('an exact USDA branded match upgrades the result to verified with the fdc_id', async () => {
+  it('OFF found + USDA exact + persisted verified row readable back -> verified with fdc_id', async () => {
+    repo.fetchBarcodeProductNutrition.mockResolvedValueOnce(null).mockResolvedValueOnce(verifiedRow());
     repo.upsertBarcodeProductCandidate.mockResolvedValue(barcodeRow());
     repo.invokeUsdaBrandedByBarcode.mockResolvedValue({
-      status: 'verified_match',
-      barcode: '036000291452',
-      fdcId: 2666511,
-      description: 'OIKOS, TRIPLE ZERO, VANILLA',
-      brandOwner: 'Danone',
-      nutritionPer100g: { calories: 61, proteinG: 10.3, carbsG: 4, fatG: 0 },
+      status: 'verified_match', barcode: BARCODE, fdcId: 2666511, description: 'OIKOS', brandOwner: 'Danone',
+      nutritionPer100g: { calories: 61, proteinG: 10.3 },
     });
 
-    const out = await nutritionService.enrichBarcodeProductNutrition({
-      barcode: '036000291452',
-      offPer100g: { calories: 59 },
-    });
-
+    const out = await nutritionService.enrichBarcodeProductNutrition({ barcode: BARCODE, offPer100g: { calories: 59 } });
     expect(out).toMatchObject({ status: 'verified', source: 'usda', fdcId: 2666511 });
     expect(out.per100g?.calories).toBe(61);
   });
 
-  it('OFF with no nutrition + no USDA match -> unresolved (still no throw, intake not blocked)', async () => {
-    repo.invokeUsdaBrandedByBarcode.mockResolvedValue({ status: 'no_exact_match', barcode: '036000291452' });
-    const out = await nutritionService.enrichBarcodeProductNutrition({ barcode: '036000291452', offPer100g: null });
-    expect(repo.upsertBarcodeProductCandidate).not.toHaveBeenCalled(); // nothing to persist
+  it('USDA says verified_match but NO persisted verified row -> NOT verified (OFF candidate stands, fdcId null)', async () => {
+    repo.fetchBarcodeProductNutrition.mockResolvedValue(null); // up-front check AND the read-back
+    repo.upsertBarcodeProductCandidate.mockResolvedValue(barcodeRow());
+    repo.invokeUsdaBrandedByBarcode.mockResolvedValue({
+      status: 'verified_match', barcode: BARCODE, fdcId: 2666511, description: 'x', brandOwner: null,
+      nutritionPer100g: { calories: 61 },
+    });
+
+    const out = await nutritionService.enrichBarcodeProductNutrition({ barcode: BARCODE, offPer100g: { calories: 59 } });
+    expect(out).toMatchObject({ status: 'candidate', source: 'open_food_facts', fdcId: null });
+  });
+
+  it('Edge Function reports persist_failed -> NOT verified, OFF candidate stands, no fdcId', async () => {
+    repo.fetchBarcodeProductNutrition.mockResolvedValue(null);
+    repo.upsertBarcodeProductCandidate.mockResolvedValue(barcodeRow());
+    repo.invokeUsdaBrandedByBarcode.mockResolvedValue({ status: 'persist_failed', barcode: BARCODE });
+
+    const out = await nutritionService.enrichBarcodeProductNutrition({ barcode: BARCODE, offPer100g: { calories: 59 } });
+    expect(out).toMatchObject({ status: 'candidate', fdcId: null });
+  });
+
+  it('OFF not_found + USDA exact (persisted) -> verified, name/brand from USDA, no OFF candidate written', async () => {
+    repo.fetchBarcodeProductNutrition
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(verifiedRow({ description: 'OIKOS TRIPLE ZERO VANILLA', brandOwner: 'Danone' }));
+    repo.invokeUsdaBrandedByBarcode.mockResolvedValue({
+      status: 'verified_match', barcode: BARCODE, fdcId: 2666511, description: 'OIKOS TRIPLE ZERO VANILLA', brandOwner: 'Danone',
+      nutritionPer100g: { calories: 61 },
+    });
+
+    const out = await nutritionService.enrichBarcodeProductNutrition({ barcode: BARCODE, offPer100g: null });
+    expect(repo.upsertBarcodeProductCandidate).not.toHaveBeenCalled();
+    expect(repo.invokeUsdaBrandedByBarcode).toHaveBeenCalledTimes(1); // USDA attempted despite OFF miss
+    expect(out).toMatchObject({ status: 'verified', source: 'usda', fdcId: 2666511 });
+    expect(out.description).toBe('OIKOS TRIPLE ZERO VANILLA');
+  });
+
+  it('OFF not_found + USDA no exact -> unresolved (blank manual path), nothing persisted, no throw', async () => {
+    repo.fetchBarcodeProductNutrition.mockResolvedValue(null);
+    repo.invokeUsdaBrandedByBarcode.mockResolvedValue({ status: 'no_exact_match', barcode: BARCODE });
+    const out = await nutritionService.enrichBarcodeProductNutrition({ barcode: BARCODE, offPer100g: null });
+    expect(repo.upsertBarcodeProductCandidate).not.toHaveBeenCalled();
     expect(out).toEqual({ status: 'unresolved', source: 'none', per100g: null, fdcId: null });
   });
 
-  it('a USDA provider error does not block - the OFF candidate still stands', async () => {
+  it('OFF provider failure (no offPer100g) + USDA exact still verifies independently', async () => {
+    repo.fetchBarcodeProductNutrition.mockResolvedValueOnce(null).mockResolvedValueOnce(verifiedRow());
+    repo.invokeUsdaBrandedByBarcode.mockResolvedValue({
+      status: 'verified_match', barcode: BARCODE, fdcId: 2666511, description: 'x', brandOwner: null,
+      nutritionPer100g: { calories: 61 },
+    });
+    const out = await nutritionService.enrichBarcodeProductNutrition({ barcode: BARCODE, offPer100g: undefined });
+    expect(out).toMatchObject({ status: 'verified', fdcId: 2666511 });
+  });
+
+  it('a USDA transport error never blocks - the OFF candidate still stands', async () => {
+    repo.fetchBarcodeProductNutrition.mockResolvedValue(null);
     repo.upsertBarcodeProductCandidate.mockResolvedValue(barcodeRow());
     repo.invokeUsdaBrandedByBarcode.mockRejectedValue(new Error('rate limited'));
-    const out = await nutritionService.enrichBarcodeProductNutrition({
-      barcode: '036000291452',
-      offPer100g: { calories: 59 },
-    });
+    const out = await nutritionService.enrichBarcodeProductNutrition({ barcode: BARCODE, offPer100g: { calories: 59 } });
     expect(out.status).toBe('candidate');
   });
 
-  it('reuses an already-verified persisted row (a prior scan verified this barcode)', async () => {
-    repo.upsertBarcodeProductCandidate.mockResolvedValue(
-      barcodeRow({ provider: 'usda', status: 'verified', fdcId: 999, per100g: { calories: 61 } }),
-    );
-    repo.invokeUsdaBrandedByBarcode.mockResolvedValue({ status: 'no_exact_match', barcode: '036000291452' });
-    const out = await nutritionService.enrichBarcodeProductNutrition({
-      barcode: '036000291452',
-      offPer100g: { calories: 59 },
-    });
-    expect(out).toMatchObject({ status: 'verified', source: 'usda', fdcId: 999 });
+  it('an existing PERSISTED verified row short-circuits - no USDA call, no candidate upsert', async () => {
+    repo.fetchBarcodeProductNutrition.mockResolvedValue(verifiedRow());
+    const out = await nutritionService.enrichBarcodeProductNutrition({ barcode: BARCODE, offPer100g: { calories: 59 } });
+    expect(out).toMatchObject({ status: 'verified', source: 'usda', fdcId: 2666511 });
+    expect(repo.invokeUsdaBrandedByBarcode).not.toHaveBeenCalled();
+    expect(repo.upsertBarcodeProductCandidate).not.toHaveBeenCalled();
   });
 
-  it('requires auth', async () => {
+  it('an existing CANDIDATE row does NOT short-circuit USDA (still tries to upgrade)', async () => {
+    repo.fetchBarcodeProductNutrition.mockResolvedValue(barcodeRow());
+    repo.upsertBarcodeProductCandidate.mockResolvedValue(barcodeRow());
+    repo.invokeUsdaBrandedByBarcode.mockResolvedValue({ status: 'no_exact_match', barcode: BARCODE });
+    await nutritionService.enrichBarcodeProductNutrition({ barcode: BARCODE, offPer100g: { calories: 59 } });
+    expect(repo.invokeUsdaBrandedByBarcode).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires auth (no provider calls when unauthenticated)', async () => {
     getUser.mockResolvedValue({ data: { user: null }, error: null });
     await expect(
-      nutritionService.enrichBarcodeProductNutrition({ barcode: '036000291452', offPer100g: { calories: 1 } }),
+      nutritionService.enrichBarcodeProductNutrition({ barcode: BARCODE, offPer100g: { calories: 1 } }),
     ).rejects.toThrow('Not signed in');
+    expect(repo.invokeUsdaBrandedByBarcode).not.toHaveBeenCalled();
   });
 });
 

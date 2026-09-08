@@ -53,12 +53,14 @@ export function BarcodeReviewScreen() {
   const notFound = pending?.status === 'not_found';
 
   // One-shot enrichment: persist the OFF candidate + attempt an exact USDA
-  // branded-GTIN verification. Fires once per review, never blocks the screen.
+  // branded-GTIN verification. Fires once per review for ANY valid barcode -
+  // USDA is attempted even when Open Food Facts returned not_found. Never blocks
+  // the screen.
   const enrich = useEnrichBarcodeProductNutrition();
   const enrichStarted = useRef(false);
   useEffect(() => {
     if (enrichStarted.current) return;
-    if (pending?.status !== 'found' || !pending.barcode) return;
+    if (!pending?.barcode) return;
     enrichStarted.current = true;
     enrich.mutate({
       barcode: pending.barcode,
@@ -67,11 +69,11 @@ export function BarcodeReviewScreen() {
       description: candidate?.productName || undefined,
       brand: candidate?.brand,
     });
-  }, [pending?.status, pending?.barcode, candidate, enrich]);
+  }, [pending?.barcode, candidate, enrich]);
 
   const resolved = enrich.data;
 
-  const { control, handleSubmit, watch, formState: { errors } } = useForm<CreateBarcodeItemInput>({
+  const { control, handleSubmit, watch, setValue, getValues, formState: { errors } } = useForm<CreateBarcodeItemInput>({
     resolver: zodResolver(createBarcodeItemSchema),
     defaultValues: {
       barcode: pending?.barcode ?? '',
@@ -88,6 +90,21 @@ export function BarcodeReviewScreen() {
   });
 
   const userProvidedDate = watch('userProvidedDate');
+
+  // OFF not_found but USDA had an exact match: prefill name/brand from the safe
+  // USDA fields so the user isn't dropped into a blank form. Once, and only if
+  // they haven't typed anything.
+  const usdaPrefilled = useRef(false);
+  useEffect(() => {
+    if (usdaPrefilled.current || !resolved || pending?.status !== 'not_found') return;
+    if (!resolved.description && !resolved.brandOwner) return;
+    usdaPrefilled.current = true;
+    if (resolved.description && !getValues('displayName')) setValue('displayName', resolved.description);
+    if (resolved.brandOwner && !getValues('brand')) setValue('brand', resolved.brandOwner);
+  }, [resolved, pending?.status, getValues, setValue]);
+
+  const usdaFilledManual =
+    pending?.status === 'not_found' && !!resolved && (resolved.status === 'verified' || resolved.status === 'candidate');
 
   if (!pending) {
     return (
@@ -129,14 +146,15 @@ export function BarcodeReviewScreen() {
           <Ionicons name="chevron-back" size={22} color={theme.colors.textPrimary} />
         </Pressable>
         <Text style={[theme.typography.title2, { color: theme.colors.textPrimary }]}>
-          {notFound ? 'Add manually' : 'Review product'}
+          {notFound && !usdaFilledManual ? 'Add manually' : 'Review product'}
         </Text>
       </View>
 
       {notFound ? (
         <Text style={[theme.typography.body, { color: theme.colors.textSecondary }]}>
-          We couldn't find barcode {pending.barcode} in the product database. Fill in the details and it'll still be
-          added to your pantry, with the barcode kept for later.
+          {usdaFilledManual
+            ? `Open Food Facts didn't have barcode ${pending.barcode}, but USDA did — the details below are prefilled from it. Review and adjust before adding.`
+            : `We couldn't find barcode ${pending.barcode} in the product database. Fill in the details and it'll still be added to your pantry, with the barcode kept for later.`}
         </Text>
       ) : (
         <View style={{ flexDirection: 'row', gap: theme.spacing.md, alignItems: 'center' }}>

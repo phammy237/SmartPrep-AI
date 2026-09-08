@@ -257,6 +257,8 @@ export type UsdaBrandedMatchResult =
       nutritionPer100g: NutrientBasisPer100g;
     }
   | { status: 'no_exact_match'; barcode: string }
+  /** GTIN matched at USDA but the authoritative verified cache write did NOT land - treat as unverified. */
+  | { status: 'persist_failed'; barcode: string }
   | { status: 'rate_limited' | 'upstream_error' | 'malformed_upstream' | 'config_error' | 'unauthenticated' };
 
 /**

@@ -16,9 +16,10 @@
 //
 // `branded_by_barcode` searches USDA Branded foods by the raw GTIN, accepts a
 // result ONLY when exactly one food's `gtinUpc` is GTIN-equivalent to the
-// scanned code (never name/brand/first-result), and on a match writes the
-// normalized nutrition into public.barcode_product_nutrition as
-// status='verified' (service role - the ONLY path that may set 'verified').
+// scanned code (never name/brand/first-result), and then writes the verified
+// record ATOMICALLY via the service-role-only upsert_verified_barcode_product
+// RPC. It returns `verified_match` ONLY after that write succeeds; if the write
+// fails it returns `persist_failed` so the app never treats it as verified.
 //
 // Secrets (set with `npx supabase secrets set ...`, never EXPO_PUBLIC_*):
 //   USDA_API_KEY               - FoodData Central API key
@@ -118,39 +119,44 @@ async function cacheFood(food: {
 }
 
 /**
- * Persist an exact-GTIN-matched USDA product into the global
- * barcode_product_nutrition cache as status='verified'. Service role -> bypasses
- * RLS; this is the ONLY path that may set 'verified'. Best-effort.
+ * Persist an exact-GTIN-matched USDA product as the AUTHORITATIVE verified
+ * barcode nutrition, via the service-role-only upsert_verified_barcode_product
+ * RPC (one transaction: usda_foods + barcode_product_nutrition). Returns whether
+ * it actually landed - the caller only claims `verified_match` when this is
+ * true. NOT best-effort: a failure here means the verification failed.
  */
-async function cacheVerifiedBarcodeProduct(row: {
+async function persistVerifiedBarcodeProduct(row: {
   barcode: string;
   fdcId: number;
   description: string;
   brandOwner: string | null;
+  dataType: string | null;
+  servingSize: number | null;
+  servingSizeUnit: string | null;
   nutritionPer100g: Record<string, number>;
-}, userId: string): Promise<void> {
+}, userId: string): Promise<{ ok: true; nutritionPer100g: Record<string, number> } | { ok: false }> {
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-  if (!supabaseUrl || !serviceKey) return;
+  if (!supabaseUrl || !serviceKey) return { ok: false };
   const admin = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
   try {
-    await admin.from('barcode_product_nutrition').upsert(
-      {
-        barcode: row.barcode,
-        provider: 'usda',
-        source_product_id: String(row.fdcId),
-        nutrition_per_100g: row.nutritionPer100g,
-        status: 'verified',
-        fdc_id: row.fdcId,
-        description: row.description || null,
-        brand_owner: row.brandOwner,
-        source_fetched_at: new Date().toISOString(),
-        created_by: userId,
-      },
-      { onConflict: 'barcode' },
-    );
+    const { data, error } = await admin.rpc('upsert_verified_barcode_product', {
+      p_barcode: row.barcode,
+      p_fdc_id: row.fdcId,
+      p_nutrition_per_100g: row.nutritionPer100g,
+      p_description: row.description || null,
+      p_brand_owner: row.brandOwner,
+      p_usda_description: row.description || null,
+      p_usda_data_type: row.dataType,
+      p_usda_serving_size: row.servingSize,
+      p_usda_serving_size_unit: row.servingSizeUnit,
+      p_created_by: userId,
+    });
+    if (error || !data) return { ok: false };
+    const persisted = (data as { nutrition_per_100g?: Record<string, number> }).nutrition_per_100g;
+    return { ok: true, nutritionPer100g: persisted ?? row.nutritionPer100g };
   } catch {
-    // Best-effort: never fail the lookup because the cache write failed.
+    return { ok: false };
   }
 }
 
@@ -258,37 +264,36 @@ Deno.serve(async (req: Request): Promise<Response> => {
       return json({ status: 'no_exact_match', barcode });
     }
 
-    const nutritionPer100g = normalized.nutritionPer100g as Record<string, number>;
-    await cacheFood(
-      {
-        fdcId: normalized.fdcId,
-        description: normalized.description,
-        dataType: normalized.dataType,
-        brandOwner: normalized.brandOwner,
-        servingSize: normalized.servingSize,
-        servingSizeUnit: normalized.servingSizeUnit,
-        nutritionPer100g,
-      },
-      user.id,
-    );
-    await cacheVerifiedBarcodeProduct(
+    const description = normalized.description || match.description;
+    const brandOwner = normalized.brandOwner ?? match.brandOwner;
+
+    // "verified" is only real once the authoritative cache row is persisted.
+    const persist = await persistVerifiedBarcodeProduct(
       {
         barcode,
         fdcId: normalized.fdcId,
-        description: normalized.description || match.description,
-        brandOwner: normalized.brandOwner ?? match.brandOwner,
-        nutritionPer100g,
+        description,
+        brandOwner,
+        dataType: normalized.dataType,
+        servingSize: normalized.servingSize,
+        servingSizeUnit: normalized.servingSizeUnit,
+        nutritionPer100g: normalized.nutritionPer100g as Record<string, number>,
       },
       user.id,
     );
+    if (!persist.ok) {
+      // GTIN matched but the verified record did not land - do NOT let the app
+      // treat this as verified. It keeps the OFF candidate / stays unresolved.
+      return json({ status: 'persist_failed', barcode }, 200);
+    }
 
     return json({
       status: 'verified_match',
       barcode,
       fdcId: normalized.fdcId,
-      description: normalized.description || match.description,
-      brandOwner: normalized.brandOwner ?? match.brandOwner,
-      nutritionPer100g: normalized.nutritionPer100g,
+      description,
+      brandOwner,
+      nutritionPer100g: persist.nutritionPer100g,
     });
   }
 

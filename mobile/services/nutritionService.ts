@@ -166,7 +166,7 @@ async function resolveQuantityNutrition(args: ResolveQuantityNutritionArgs): Pro
 
 export interface EnrichBarcodeProductArgs {
   barcode: string;
-  /** Open Food Facts per-100g values from the review lookup (already normalized). */
+  /** Open Food Facts per-100g values from the review lookup (already normalized). Optional - USDA is attempted regardless. */
   offPer100g?: NutrientBasisPer100g | null;
   sourceProductId?: string;
   description?: string;
@@ -177,27 +177,55 @@ export interface ProductNutritionResolution {
   status: 'verified' | 'candidate' | 'unresolved';
   source: 'usda' | 'open_food_facts' | 'none';
   per100g: NutrientBasisPer100g | null;
+  /** Non-null ONLY for `status: 'verified'` backed by a persisted verified row. */
   fdcId: number | null;
   description?: string;
   brandOwner?: string;
 }
 
+function fromPersistedProduct(row: BarcodeProductNutritionRef): ProductNutritionResolution {
+  const verified = row.status === 'verified';
+  return {
+    status: verified ? 'verified' : 'candidate',
+    source: verified ? 'usda' : 'open_food_facts',
+    per100g: row.per100g,
+    fdcId: verified ? row.fdcId : null,
+    description: row.description ?? undefined,
+    brandOwner: row.brandOwner ?? undefined,
+  };
+}
+
 /**
  * Barcode-intake enrichment - called ONCE from the review screen, never during
- * ordinary Pantry reads. Persists the best defensible product nutrition and
- * reports what resolved:
+ * ordinary Pantry reads.
+ *
+ *   0. If the barcode already has a PERSISTED verified row -> reuse it, no
+ *      provider calls at all.
  *   1. If OFF gave usable per-100g nutrition -> persist it as a `candidate`
  *      (security-definer RPC; cannot set verified / an fdc_id).
- *   2. Ask USDA for an EXACT branded-GTIN match (at most one USDA call) -> the
- *      Edge Function verifies server-side and writes the `verified` row itself.
- * A USDA failure/absence never blocks intake - the OFF candidate (or unresolved)
- * stands.
+ *   2. Attempt an EXACT USDA branded-GTIN match - ALWAYS, independent of whether
+ *      OFF found the product. The Edge Function verifies server-side AND writes
+ *      the authoritative verified row in one transaction; it returns
+ *      `verified_match` only after that write lands.
+ *   3. `status: 'verified'` is returned ONLY after re-reading the persisted
+ *      verified row (so "verified" in the app == a row Pantry Detail will
+ *      resolve). Any USDA failure / no-match / persist failure -> keep the OFF
+ *      candidate, else unresolved. Intake is never blocked.
  */
 async function enrichBarcodeProductNutrition(args: EnrichBarcodeProductArgs): Promise<ProductNutritionResolution> {
   await requireUserId();
 
+  // (0) Reuse an already-verified shared cache row - skip USDA entirely.
+  const existing = await fetchBarcodeProductNutrition(args.barcode).catch(() => null);
+  if (existing && existing.status === 'verified' && basisHasAnyNutrient(existing.per100g)) {
+    return fromPersistedProduct(existing);
+  }
+
+  // (1) Persist the OFF candidate (independent of USDA). Never downgrades a
+  // verified row (the RPC guards that server-side).
   const offBasis = args.offPer100g ? toNutrientBasis(args.offPer100g) : {};
-  let candidate: BarcodeProductNutritionRef | null = null;
+  let candidate: BarcodeProductNutritionRef | null =
+    existing && basisHasAnyNutrient(existing.per100g) ? existing : null;
   if (basisHasAnyNutrient(offBasis)) {
     try {
       candidate = await upsertBarcodeProductCandidate({
@@ -208,10 +236,11 @@ async function enrichBarcodeProductNutrition(args: EnrichBarcodeProductArgs): Pr
         brandOwner: args.brand ?? null,
       });
     } catch {
-      candidate = null;
+      /* keep whatever candidate we already had */
     }
   }
 
+  // (2) USDA exact GTIN - attempted for every valid barcode, OFF result or not.
   let usda: Awaited<ReturnType<typeof invokeUsdaBrandedByBarcode>> | null = null;
   try {
     usda = await invokeUsdaBrandedByBarcode(args.barcode);
@@ -219,27 +248,22 @@ async function enrichBarcodeProductNutrition(args: EnrichBarcodeProductArgs): Pr
     usda = null;
   }
 
+  // (3) Verified ONLY when the authoritative row is actually readable back.
   if (usda && usda.status === 'verified_match') {
-    return {
-      status: 'verified',
-      source: 'usda',
-      per100g: toNutrientBasis(usda.nutritionPer100g),
-      fdcId: usda.fdcId,
-      description: usda.description,
-      brandOwner: usda.brandOwner ?? undefined,
-    };
+    const persistedVerified = await fetchBarcodeProductNutrition(args.barcode).catch(() => null);
+    if (
+      persistedVerified &&
+      persistedVerified.status === 'verified' &&
+      basisHasAnyNutrient(persistedVerified.per100g)
+    ) {
+      return fromPersistedProduct(persistedVerified);
+    }
+    // Edge Function said verified but no persisted row - fall through to candidate.
   }
 
   const persisted = candidate ?? (await fetchBarcodeProductNutrition(args.barcode).catch(() => null));
   if (persisted && basisHasAnyNutrient(persisted.per100g)) {
-    return {
-      status: persisted.status === 'verified' ? 'verified' : 'candidate',
-      source: persisted.status === 'verified' ? 'usda' : 'open_food_facts',
-      per100g: persisted.per100g,
-      fdcId: persisted.fdcId,
-      description: persisted.description ?? undefined,
-      brandOwner: persisted.brandOwner ?? undefined,
-    };
+    return fromPersistedProduct(persisted);
   }
 
   return { status: 'unresolved', source: 'none', per100g: null, fdcId: null };

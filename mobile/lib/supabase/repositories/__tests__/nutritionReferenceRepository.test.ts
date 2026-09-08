@@ -239,4 +239,9 @@ describe('barcode product nutrition (migration 0013)', () => {
     expect(invoke).toHaveBeenCalledWith('usda-lookup', { body: { action: 'branded_by_barcode', barcode: '036000291452' } });
     expect(r).toEqual({ status: 'no_exact_match', barcode: '036000291452' });
   });
+
+  it('passes through the persist_failed status (GTIN matched but the verified write did not land)', async () => {
+    invoke.mockResolvedValue({ data: { status: 'persist_failed', barcode: '036000291452' }, error: null });
+    expect(await invokeUsdaBrandedByBarcode('036000291452')).toEqual({ status: 'persist_failed', barcode: '036000291452' });
+  });
 });

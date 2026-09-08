@@ -706,6 +706,23 @@ export interface Database {
         };
         Returns: Database['public']['Tables']['barcode_product_nutrition']['Row'];
       };
+      // SERVICE ROLE ONLY - not granted to `authenticated`. Called by the
+      // usda-lookup Edge Function; the app never invokes it. See migration 0014.
+      upsert_verified_barcode_product: {
+        Args: {
+          p_barcode: string;
+          p_fdc_id: number;
+          p_nutrition_per_100g: Json;
+          p_description?: string | null;
+          p_brand_owner?: string | null;
+          p_usda_description?: string | null;
+          p_usda_data_type?: string | null;
+          p_usda_serving_size?: number | null;
+          p_usda_serving_size_unit?: string | null;
+          p_created_by?: string | null;
+        };
+        Returns: Database['public']['Tables']['barcode_product_nutrition']['Row'];
+      };
       replace_nutrition_goals: {
         Args: {
           p_daily_calories: number;

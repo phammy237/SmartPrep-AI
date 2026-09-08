@@ -3474,6 +3474,63 @@ set local role postgres;
 delete from public.barcode_product_nutrition where barcode in ('0999999999998', '0888888888880');
 commit;
 
+-- ============================================================================
+-- upsert_verified_barcode_product (migration 0014): SERVICE ROLE ONLY.
+--   * an authenticated user cannot execute it (no EXECUTE grant) - so a client
+--     still cannot mint a verified row / inject an fdc_id by any path.
+--   * service_role can, and it writes usda_foods + a verified
+--     barcode_product_nutrition row atomically.
+-- ============================================================================
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID', 'role', 'authenticated')::text, true);
+do $$
+declare denied boolean := false;
+begin
+  begin
+    perform public.upsert_verified_barcode_product(
+      p_barcode => '0999999999998',
+      p_fdc_id => 999999,
+      p_nutrition_per_100g => '{"calories": 1}'::jsonb
+    );
+  exception when insufficient_privilege then denied := true;
+  end;
+  if not denied then
+    raise exception 'FAIL: an authenticated client could execute upsert_verified_barcode_product';
+  end if;
+  raise notice 'PASS: upsert_verified_barcode_product is not executable by authenticated clients';
+end $$;
+commit;
+
+begin;
+set local role service_role;
+do $$
+declare v public.barcode_product_nutrition; u public.usda_foods;
+begin
+  select * into v from public.upsert_verified_barcode_product(
+    p_barcode => '0999999999998',
+    p_fdc_id => 777777,
+    p_nutrition_per_100g => '{"calories": 61, "proteinG": 10.3}'::jsonb,
+    p_description => 'RLS verified yogurt',
+    p_brand_owner => 'RLS Brand',
+    p_usda_description => 'RLS verified yogurt (USDA)',
+    p_usda_data_type => 'Branded'
+  );
+  if v.status <> 'verified' or v.provider <> 'usda' or v.fdc_id <> 777777 then
+    raise exception 'FAIL: service-role verified upsert wrote status=% provider=% fdc_id=%', v.status, v.provider, v.fdc_id;
+  end if;
+  select * into u from public.usda_foods where fdc_id = 777777;
+  if not found then raise exception 'FAIL: verified upsert did not also write the usda_foods secondary cache row'; end if;
+  raise notice 'PASS: service_role verified upsert writes barcode_product_nutrition + usda_foods atomically';
+end $$;
+commit;
+
+begin;
+set local role postgres;
+delete from public.barcode_product_nutrition where barcode = '0999999999998';
+delete from public.usda_foods where fdc_id = 777777;
+commit;
+
 do $$
 begin
   raise notice 'ALL RLS CHECKS PASSED';
