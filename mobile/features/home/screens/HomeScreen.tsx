@@ -1,6 +1,7 @@
+import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import React, { useMemo } from 'react';
-import { Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 
 import { EmptyState, LoadingState, Screen, SectionHeader } from '@/components';
 import { RecipeCarousel } from '@/features/recipes/components/RecipeCarousel';
@@ -17,16 +18,20 @@ import {
 import { useTheme } from '@/hooks/useTheme';
 import { countIngredientsNeedingAttention, getRecipeAvailability } from '@/services';
 import { todayIsoDateInTimeZone } from '@/utils/expiration';
-import { freshnessSortWeight } from '@/utils/freshness';
+import { isPantryItemNeedingAttention } from '@/utils/freshness';
 import { dailyNutritionTotal } from '@/utils/nutritionSnapshot';
 import { GreetingHeader } from '../components/GreetingHeader';
 import { ImpactSummaryCard } from '../components/ImpactSummaryCard';
 import { NutritionCard } from '../components/NutritionCard';
-import { ScanHeroCard } from '../components/ScanHeroCard';
 import { TonightCard } from '../components/TonightCard';
-import { UseFirstSection } from '../components/UseFirstSection';
 import { UseSoonSection } from '../components/UseSoonSection';
 import { WeeklyPlanPreview } from '../components/WeeklyPlanPreview';
+
+const SHORTCUTS: { label: string; icon: keyof typeof Ionicons.glyphMap; href: string }[] = [
+  { label: 'Recipes', icon: 'book-outline', href: '/recipes' },
+  { label: 'Grocery List', icon: 'cart-outline', href: '/grocery' },
+  { label: 'Leftovers', icon: 'fast-food-outline', href: '/prepared-meals' },
+];
 
 export function HomeScreen() {
   const theme = useTheme();
@@ -47,11 +52,8 @@ export function HomeScreen() {
 
   const recipesById = useMemo(() => Object.fromEntries((recipes ?? []).map((r) => [r.id, r])), [recipes]);
 
-  const useFirstItems = useMemo(
-    () =>
-      (pantry ?? [])
-        .filter((item) => item.freshness.label === 'prioritize' || item.freshness.label === 'use_soon')
-        .sort((a, b) => freshnessSortWeight(a.freshness.label) - freshnessSortWeight(b.freshness.label)),
+  const attentionCount = useMemo(
+    () => (pantry ?? []).filter((item) => isPantryItemNeedingAttention(item.freshness.label)).length,
     [pantry],
   );
 
@@ -95,6 +97,8 @@ export function HomeScreen() {
 
   const isLoading =
     userQuery.isLoading || pantryQuery.isLoading || collectionsQuery.isLoading || recipesQuery.isLoading;
+  // Home renders on the core four queries only. Recommendations / plan / impact
+  // are best-effort strips - a failure there must never break Home.
   const isError =
     userQuery.isError || pantryQuery.isError || collectionsQuery.isError || recipesQuery.isError;
 
@@ -131,18 +135,40 @@ export function HomeScreen() {
     <Screen scroll header contentContainerStyle={{ padding: theme.spacing.lg, gap: theme.spacing.xl }}>
       <GreetingHeader name={user.name} />
 
-      <NutritionCard consumed={todaysNutrition} goals={user.preferences.nutritionGoals} onPress={() => router.push('/nutrition')} />
-
-      <ScanHeroCard />
-
-      <UseFirstSection items={useFirstItems} />
-
+      {/* 1. Freshness / Use Soon - the headline "what to care about today" */}
       <UseSoonSection
         recommendations={useSoonQuery.data ?? []}
         isLoading={useSoonQuery.isLoading}
         ready={!pantryQuery.isLoading}
       />
 
+      {attentionCount > 0 ? (
+        <Pressable
+          onPress={() => router.push('/pantry?filter=use_soon')}
+          accessibilityRole="button"
+          accessibilityLabel={`${attentionCount} pantry ingredients need attention`}
+          style={({ pressed }) => [
+            {
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: theme.spacing.sm,
+              backgroundColor: theme.colors.freshness.useSoonMuted,
+              borderRadius: theme.radius.md,
+              paddingVertical: theme.spacing.sm,
+              paddingHorizontal: theme.spacing.md,
+            },
+            pressed && { opacity: 0.9 },
+          ]}
+        >
+          <Ionicons name="time-outline" size={18} color={theme.colors.freshness.useSoon} />
+          <Text style={[theme.typography.footnote, { color: theme.colors.textPrimary, flex: 1 }]}>
+            {attentionCount} pantry ingredient{attentionCount === 1 ? '' : 's'} need attention
+          </Text>
+          <Ionicons name="chevron-forward" size={16} color={theme.colors.freshness.useSoon} />
+        </Pressable>
+      ) : null}
+
+      {/* 2. Today's meals */}
       {tonightRecipe ? (
         <View style={{ gap: theme.spacing.sm }}>
           <SectionHeader title="Tonight" />
@@ -155,9 +181,48 @@ export function HomeScreen() {
         </View>
       ) : null}
 
+      {mealPlanQuery.data ? (
+        <View style={{ gap: theme.spacing.sm }}>
+          <WeeklyPlanPreview items={upcomingPlanItems} recipesById={recipesById} />
+        </View>
+      ) : null}
+
+      {/* 3. Jump to the areas that don't have their own tab */}
+      <View style={{ flexDirection: 'row', gap: theme.spacing.sm }}>
+        {SHORTCUTS.map((s) => (
+          <Pressable
+            key={s.href}
+            onPress={() => router.push(s.href as never)}
+            accessibilityRole="button"
+            accessibilityLabel={s.label}
+            style={({ pressed }) => [
+              {
+                flex: 1,
+                alignItems: 'center',
+                gap: 4,
+                backgroundColor: theme.colors.backgroundElevated,
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+                borderRadius: theme.radius.lg,
+                paddingVertical: theme.spacing.md,
+              },
+              pressed && { opacity: 0.9 },
+            ]}
+          >
+            <Ionicons name={s.icon} size={22} color={theme.colors.accent} />
+            <Text style={[theme.typography.caption, { color: theme.colors.textPrimary }]}>{s.label}</Text>
+          </Pressable>
+        ))}
+      </View>
+
       {almostThere && almostThere.recipes.length > 0 ? (
         <View style={{ gap: theme.spacing.sm }}>
-          <SectionHeader title="Almost There" subtitle="You have most of what you need" />
+          <SectionHeader
+            title="Almost There"
+            subtitle="You have most of what you need"
+            actionLabel="All recipes"
+            onActionPress={() => router.push('/recipes')}
+          />
           <RecipeCarousel
             recipes={almostThere.recipes}
             getSubtitle={(r) => {
@@ -169,11 +234,8 @@ export function HomeScreen() {
         </View>
       ) : null}
 
-      {mealPlanQuery.data ? (
-        <View style={{ gap: theme.spacing.sm }}>
-          <WeeklyPlanPreview items={upcomingPlanItems} recipesById={recipesById} />
-        </View>
-      ) : null}
+      {/* 4. Progress / activity - lower priority */}
+      <NutritionCard consumed={todaysNutrition} goals={user.preferences.nutritionGoals} onPress={() => router.push('/nutrition')} />
 
       {impactQuery.data ? (
         <View style={{ gap: theme.spacing.sm }}>
@@ -181,9 +243,9 @@ export function HomeScreen() {
         </View>
       ) : null}
 
-      {useFirstItems.length === 0 && !tonightRecipe ? (
+      {attentionCount === 0 && !tonightRecipe ? (
         <Text style={[theme.typography.body, { color: theme.colors.textSecondary }]}>
-          Scan your kitchen to get started.
+          Add food to your pantry to get personalized meal ideas.
         </Text>
       ) : null}
     </Screen>

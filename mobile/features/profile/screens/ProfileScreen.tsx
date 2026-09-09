@@ -254,7 +254,7 @@ export function ProfileScreen() {
       </View>
 
       <View style={{ gap: theme.spacing.lg }}>
-        <SectionHeader title="SmartPrep Priorities" subtitle="Shapes how we recommend meals" />
+        <SectionHeader title="SmartPrep Priorities" subtitle="Saved to your profile - deeper personalization is coming" />
         {localPriorities
           ? PRIORITY_FIELDS.map((field) => (
               <PrioritySlider
@@ -301,7 +301,7 @@ export function ProfileScreen() {
 
       {!prefs.allergies.length && !prefs.favoriteCuisines.length && !prefs.dislikedFoods.length ? (
         <Text style={[theme.typography.footnote, { color: theme.colors.textTertiary }]}>
-          Add allergies, cuisines, and foods to avoid above to fine-tune your recommendations.
+          Add allergies, cuisines, and foods to avoid so they're on file for your profile.
         </Text>
       ) : null}
     </Screen>

@@ -19,7 +19,7 @@ export function ImpactSummaryCard({ impact }: ImpactSummaryCardProps) {
 
   return (
     <>
-      <SectionHeader title="Kitchen Activity" subtitle={impact.rangeLabel} />
+      <SectionHeader title="Kitchen Impact" subtitle={impact.rangeLabel} />
       <Card>
         {impact.hasActivity ? (
           <View style={{ flexDirection: 'row' }}>

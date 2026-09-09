@@ -31,7 +31,7 @@ export function PrioritiesScreen() {
             What matters most to you?
           </Text>
           <Text style={[theme.typography.body, { color: theme.colors.textSecondary }]}>
-            This shapes how we recommend meals. You can adjust it anytime in your profile.
+            Tell us what matters - you can adjust these anytime in your profile.
           </Text>
         </View>
 

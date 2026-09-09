@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { scanService } from '@/services';
 import { useScanSessionStore } from '@/store';
 import { Scan, ScanCaptureImage, ScanMode, ScanSection } from '@/types';
+import { invalidatePantryDerivedQueries } from './invalidatePantryDerived';
 import { queryKeys } from './queryKeys';
 
 /** Confirmed scans, newest first (real Supabase-backed history). */
@@ -49,10 +50,9 @@ export function useConfirmScan() {
   return useMutation({
     mutationFn: (scan: Scan) => scanService.confirmScan(scan),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.pantry });
-      queryClient.invalidateQueries({ queryKey: queryKeys.recipes });
-      queryClient.invalidateQueries({ queryKey: queryKeys.recipeCollections });
-      queryClient.invalidateQueries({ queryKey: queryKeys.readyToCookCount });
+      // New pantry lots -> refresh every pantry-derived surface, plus the
+      // scan-history list this confirmation just added a row to.
+      invalidatePantryDerivedQueries(queryClient);
       queryClient.invalidateQueries({ queryKey: queryKeys.scanHistory });
     },
   });

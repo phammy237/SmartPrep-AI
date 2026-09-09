@@ -124,6 +124,9 @@ export function PlannerScreen() {
       </Text>
 
       <View style={{ gap: theme.spacing.sm }}>
+        <Text style={[theme.typography.caption, { color: theme.colors.textTertiary }]}>
+          Generate My Week favors food you already have and ingredients to use soon.
+        </Text>
         <Button
           label="Generate My Week"
           onPress={() =>

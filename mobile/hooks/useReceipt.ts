@@ -5,7 +5,7 @@ import { ConfirmReceiptItemInput } from '@/lib/validation/receiptSchemas';
 import { pantryService, receiptService } from '@/services';
 import { BeginReceiptReviewArgs } from '@/services/receiptService';
 import { haptics } from '@/utils/haptics';
-import { queryKeys } from './queryKeys';
+import { invalidatePantryDerivedQueries } from './invalidatePantryDerived';
 import { useUser } from './useUser';
 
 function useTimeZone(): string {
@@ -39,11 +39,7 @@ export function useConfirmReceiptItems() {
     onSuccess: (result) => {
       if (result.created.length > 0) {
         haptics.success();
-        queryClient.invalidateQueries({ queryKey: queryKeys.pantry });
-        queryClient.invalidateQueries({ queryKey: queryKeys.recipes });
-        queryClient.invalidateQueries({ queryKey: queryKeys.recipeCollections });
-        queryClient.invalidateQueries({ queryKey: queryKeys.readyToCookCount });
-        queryClient.invalidateQueries({ queryKey: queryKeys.recommendations });
+        invalidatePantryDerivedQueries(queryClient);
       }
     },
   });

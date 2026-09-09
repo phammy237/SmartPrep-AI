@@ -232,14 +232,6 @@ export function RecipeDetailScreen() {
               fullWidth
             />
           ) : null}
-          <Button
-            label="Swap Ingredients"
-            variant="ghost"
-            onPress={() =>
-              Alert.alert('Swap Ingredients', 'Ingredient swapping will let you substitute items - coming soon.')
-            }
-            fullWidth
-          />
         </View>
 
         {recipe.steps.length > 0 ? (

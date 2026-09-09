@@ -50,7 +50,7 @@ export function FoodPreferencesScreen() {
             Any foods you'd rather avoid?
           </Text>
           <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>
-            We'll steer recommendations away from these.
+            We'll keep these on file for your profile.
           </Text>
         </View>
         {dislikedOptions.length > 0 ? (

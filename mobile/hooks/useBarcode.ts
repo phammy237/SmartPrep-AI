@@ -4,7 +4,7 @@ import { BarcodeLookupDeps } from '@/lib/barcode';
 import { CreateBarcodeItemInput } from '@/lib/validation/barcodeSchemas';
 import { EnrichBarcodeProductArgs, barcodeService, nutritionService, pantryService } from '@/services';
 import { haptics } from '@/utils/haptics';
-import { queryKeys } from './queryKeys';
+import { invalidatePantryDerivedQueries } from './invalidatePantryDerived';
 import { useUser } from './useUser';
 
 /** Same timezone-resolution pattern as usePantry - UTC until the profile loads. */
@@ -45,11 +45,7 @@ export function useCreateBarcodeItem() {
     mutationFn: (input: CreateBarcodeItemInput) => pantryService.createBarcodeItem(input, timeZone),
     onSuccess: () => {
       haptics.success();
-      queryClient.invalidateQueries({ queryKey: queryKeys.pantry });
-      queryClient.invalidateQueries({ queryKey: queryKeys.recipes });
-      queryClient.invalidateQueries({ queryKey: queryKeys.recipeCollections });
-      queryClient.invalidateQueries({ queryKey: queryKeys.readyToCookCount });
-      queryClient.invalidateQueries({ queryKey: queryKeys.recommendations });
+      invalidatePantryDerivedQueries(queryClient);
     },
   });
 }

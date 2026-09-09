@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { EditPantryItemMetadataInput } from '@/lib/validation/pantrySchemas';
 import { pantryService } from '@/services';
 import { PantryItem } from '@/types';
+import { invalidatePantryDerivedQueries } from './invalidatePantryDerived';
 import { queryKeys } from './queryKeys';
 import { useUser } from './useUser';
 
@@ -50,14 +51,7 @@ export function usePantryItem(id: string | undefined) {
 
 function useInvalidatePantry() {
   const queryClient = useQueryClient();
-  return () => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.pantry });
-    queryClient.invalidateQueries({ queryKey: queryKeys.recipes });
-    queryClient.invalidateQueries({ queryKey: queryKeys.recipeCollections });
-    queryClient.invalidateQueries({ queryKey: queryKeys.readyToCookCount });
-    // Use-Soon recommendations derive from pantry expiry + coverage.
-    queryClient.invalidateQueries({ queryKey: queryKeys.recommendations });
-  };
+  return () => invalidatePantryDerivedQueries(queryClient);
 }
 
 export function useAddManualPantryItem() {

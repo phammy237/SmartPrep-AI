@@ -27,8 +27,8 @@ export function WelcomeScreen() {
             { color: theme.colors.textSecondary, textAlign: 'center', maxWidth: 300 },
           ]}
         >
-          SmartPrep turns your fridge, freezer, and pantry into a living inventory that tells you
-          what to cook next.
+          SmartPrep keeps a living inventory of your fridge, freezer, and pantry - so you know what
+          you have, use food before it goes bad, plan meals, and build smarter grocery lists.
         </Text>
       </View>
       <Button label="Get Started" onPress={() => router.push('/onboarding/signin')} fullWidth />

@@ -53,12 +53,18 @@ export function PreparedMealsScreen() {
       Alert.alert('Cannot log', validation.reason);
       return;
     }
-    logConsumption.mutate({
-      preparedMealId: mealId,
-      servingsConsumed: servings,
-      mealType: mealTypeByMeal[mealId] ?? 'dinner',
-      idempotencyKey: generateId('prepared-log'),
-    });
+    logConsumption.mutate(
+      {
+        preparedMealId: mealId,
+        servingsConsumed: servings,
+        mealType: mealTypeByMeal[mealId] ?? 'dinner',
+        idempotencyKey: generateId('prepared-log'),
+      },
+      {
+        onError: () =>
+          Alert.alert("Couldn't log that serving", 'Something went wrong on our end. Please try again in a moment.'),
+      },
+    );
   };
 
   return (

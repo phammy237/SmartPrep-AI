@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { groceryService, groceryTransferService, ManualGroceryItemInput, UpdateGroceryItemInput } from '@/services';
 import type { RecipeShortfall } from '@/services';
 import { GroceryTransferItemInput } from '@/lib/validation/grocerySchemas';
+import { invalidatePantryDerivedQueries } from './invalidatePantryDerived';
 import { queryKeys } from './queryKeys';
 
 export function useGroceryList() {
@@ -75,7 +76,9 @@ export function useTransferGroceryItemsToPantry() {
     mutationFn: (inputs: GroceryTransferItemInput[]) => groceryTransferService.transferItemsToPantry(inputs),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.groceryList });
-      queryClient.invalidateQueries({ queryKey: queryKeys.pantry });
+      // New pantry lots also change recipe coverage, Ready to Cook, and the
+      // Use-Soon recommendations - keep every pantry-derived surface fresh.
+      invalidatePantryDerivedQueries(queryClient);
     },
   });
 }

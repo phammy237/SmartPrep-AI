@@ -38,7 +38,8 @@ export function AllergiesScreen() {
             Any allergies we should know about?
           </Text>
           <Text style={[theme.typography.body, { color: theme.colors.textSecondary }]}>
-            We'll flag recipes that contain these.
+            We'll keep these on your profile. SmartPrep doesn't screen recipes for allergens yet, so keep
+            checking ingredients yourself.
           </Text>
         </View>
         <ChipGroup options={options} selected={allergies} onToggle={(v) => toggleListValue('allergies', v)} />

@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import React, { useState } from 'react';
 import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
 
@@ -7,6 +7,7 @@ import { EmptyState, FilterBar, FilterOption, LoadingState, Screen } from '@/com
 import { usePantry } from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
 import { IngredientCategory, PantryItem } from '@/types';
+import { isPantryItemNeedingAttention } from '@/utils/freshness';
 import { filterPantryItemsByCategory, filterPantryItemsByStatus, sortPantryItems } from '@/utils/pantryFilters';
 import { PantryItemRow } from '../components/PantryItemRow';
 
@@ -29,14 +30,20 @@ function applyFilter(items: PantryItem[], filter: FilterValue): PantryItem[] {
   }
   const active = filterPantryItemsByStatus(items, 'active');
   if (filter === 'all') return active;
-  if (filter === 'use_soon') return active.filter((item) => item.freshness.label === 'use_soon' || item.freshness.label === 'prioritize');
+  if (filter === 'use_soon') return active.filter((item) => isPantryItemNeedingAttention(item.freshness.label));
   return filterPantryItemsByCategory(active, filter);
+}
+
+const FILTER_VALUES = FILTERS.map((f) => f.value);
+function isFilterValue(v: unknown): v is FilterValue {
+  return typeof v === 'string' && (FILTER_VALUES as string[]).includes(v);
 }
 
 export function PantryScreen() {
   const theme = useTheme();
   const pantryQuery = usePantry();
-  const [filter, setFilter] = useState<FilterValue>('all');
+  const params = useLocalSearchParams<{ filter?: string }>();
+  const [filter, setFilter] = useState<FilterValue>(isFilterValue(params.filter) ? params.filter : 'all');
 
   const filtered = sortPantryItems(applyFilter(pantryQuery.data ?? [], filter), 'urgency');
 

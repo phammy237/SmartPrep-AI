@@ -33,24 +33,33 @@ export const FRESHNESS_META: Record<FreshnessLabel, FreshnessMeta> = {
     icon: 'checkmark-circle',
   },
   use_soon: {
-    label: 'Use Soon',
-    shortLabel: 'Use Soon',
+    label: 'Use soon',
+    shortLabel: 'Use soon',
     description: 'Best used in the next few days.',
     icon: 'time',
   },
   prioritize: {
-    label: 'Prioritize',
-    shortLabel: 'Prioritize',
-    description: "This should be used first, it won't be good much longer.",
+    label: 'Use now',
+    shortLabel: 'Use now',
+    description: "Use this first - it won't be good much longer.",
     icon: 'alert-circle',
   },
   cant_tell: {
-    label: "Can't Tell",
-    shortLabel: "Can't Tell",
-    description: "We're not confident enough to estimate freshness yet.",
+    label: 'No date',
+    shortLabel: 'No date',
+    description: 'No expiration date for this item yet.',
     icon: 'help-circle',
   },
 };
+
+/**
+ * The one predicate for "this pantry item needs the user's attention soon" -
+ * used by the Home summary line and the Pantry "Use soon" filter so both
+ * surfaces mean exactly the same thing.
+ */
+export function isPantryItemNeedingAttention(label: FreshnessLabel): boolean {
+  return label === 'prioritize' || label === 'use_soon';
+}
 
 export const FRESHNESS_LABELS: FreshnessLabel[] = ['fresh', 'use_soon', 'prioritize', 'cant_tell'];
 

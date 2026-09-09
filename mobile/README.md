@@ -1,6 +1,8 @@
 # SmartPrep AI
 
-SmartPrep AI turns your fridge, freezer, and pantry into a living inventory: scan your kitchen, get recipes ranked by what you already have, build a grocery list for what's missing, and track nutrition against your goals.
+SmartPrep AI keeps your fridge, freezer, and pantry as a living inventory: add food four ways (type it in, photo-scan ingredients, scan a barcode, or scan a grocery receipt), get recipes ranked by what you already have, plan a week around ingredients to use soon, build a grocery list for what's missing, deduct real quantities when you cook, and track nutrition against your goals.
+
+Adding food never guesses silently: a photo scan, a barcode, and a receipt each land in a **review screen** where you confirm every item, quantity, unit, and date before anything is written to the pantry.
 
 Built with [Expo](https://expo.dev) (React Native + [Expo Router](https://docs.expo.dev/router/introduction) for file-based navigation) and TypeScript.
 
@@ -163,7 +165,15 @@ Grocery is now explicit shopping trips instead of one perpetual list.
 - `prepared_meals.status = 'discarded'` is schema-supported (mirroring `pantry_events`' reserved `donated`/`traded`) but has no UI path to reach it in Phase 3.
 - `supabase/tests/rls_verification.sql`'s Phase 3 section has not been executed against a live project (none is linked in this environment) - see [Backend (Supabase)](#backend-supabase).
 
-**Phase 4 will implement:** USDA (or equivalent) nutrition lookup, so `nutrition_status` can legitimately become `'verified'` for matched ingredients, plus real gram-based unit conversion.
+### Nutrition verification (`0007`, `0013`, `0014`) and barcode/receipt intake (`0012`, `0015`)
+
+**Nutrition is now resolvable to a `'verified'` state** for matched foods. The `usda-lookup` Edge Function calls USDA FoodData Central (server-side; `USDA_API_KEY` is an Edge Function secret only) and results are cached in a shared `nutrition_reference` table. `lib/nutrition/resolveNutrition.ts` is the single read-time resolver used by pantry-item detail, recipe coverage, and prepared-meal logging: it returns an explicit status - `verified` (exact USDA match), `candidate` (an unconfirmed USDA row), `estimated` (heuristic), or `unresolved` (quantity/unit can't be converted) - and never turns "unknown" into a fabricated number. Gram-based unit conversion (`lib/nutrition/conversion.ts`) is backed by per-ingredient density / per-unit-weight metadata; an unconvertible unit stays honest rather than being forced.
+
+**Barcode intake (`0012`, `0013`, `0014`).** `Scan Barcode` in the "Add to Pantry" hub takes a camera scan or a typed UPC/EAN through one pipeline (`lib/barcode`): normalize -> validate -> look up against Open Food Facts. A found product prefills `BarcodeReviewScreen`; the user confirms name / quantity / unit / dates before `create_pantry_item` writes the lot. A one-shot enrichment persists the Open Food Facts nutrition candidate and attempts an exact USDA branded-GTIN verification server-side - a USDA miss just leaves the Open Food Facts candidate in place. "Product not found" routes to manual entry; no canned fallback.
+
+**Receipt intake (`0015`).** `Scan Receipt` photographs a grocery receipt and sends it (transient, never stored) to the `receipt-ocr` Edge Function, which calls **AWS Textract `AnalyzeExpense`** (AWS credentials are Edge Function secrets only) and returns a provider-neutral line-item list. `ReceiptReviewScreen` lets the user edit/deselect every parsed line; confirmed lines are created into the pantry independently and idempotently (`{ created, failed }`, retry re-attempts only failures), reusing the same `create_pantry_item` path.
+
+**Still required to run these live:** deploy the functions (`npx supabase functions deploy usda-lookup scan-ingredients receipt-ocr`) and set their secrets (`USDA_API_KEY`, `OPENAI_API_KEY`, `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION`). None of that has been done in this repo - see [docs/LIVE_VALIDATION.md](docs/LIVE_VALIDATION.md).
 
 `lib/` holds backend-adjacent, cross-feature infrastructure that isn't tied to one product area:
 
@@ -226,15 +236,18 @@ npx supabase gen types typescript --linked > types/database.types.ts
 
 ### What's backend-only (never in this app)
 
-The `EXPO_PUBLIC_*` variables above are the only Supabase config the app needs, and are safe to ship (every table they can reach is behind Row Level Security). `OPENAI_API_KEY`, `USDA_API_KEY`, and `THEMEALDB_API_KEY` are listed commented-out in `.env.example` for visibility only - they belong in Supabase Edge Function secrets once Phase 5 adds the functions that use them:
+The `EXPO_PUBLIC_*` variables above are the only Supabase config the app needs, and are safe to ship (every table they can reach is behind Row Level Security). Every other credential is a **Supabase Edge Function secret** - never read by the mobile client, never prefixed `EXPO_PUBLIC_`, never in a client `.env`:
 
 ```bash
-npx supabase secrets set OPENAI_API_KEY=sk-...
-npx supabase secrets set USDA_API_KEY=...
-npx supabase secrets set THEMEALDB_API_KEY=...
+npx supabase secrets set USDA_API_KEY=...            # usda-lookup      (FoodData Central)
+npx supabase secrets set OPENAI_API_KEY=sk-...       # scan-ingredients (vision model)
+npx supabase secrets set OPENAI_SCAN_MODEL=gpt-4o-mini   # optional; this is the default
+npx supabase secrets set AWS_ACCESS_KEY_ID=...       # receipt-ocr      (Textract AnalyzeExpense)
+npx supabase secrets set AWS_SECRET_ACCESS_KEY=...
+npx supabase secrets set AWS_REGION=us-east-1
 ```
 
-They are never read by the mobile client and must never be prefixed `EXPO_PUBLIC_`.
+Each Edge Function also relies on the platform-injected `SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY`, which you do not set. `THEMEALDB_API_KEY` is reserved in `.env.example` but no function consumes it yet. A quick grep proof that nothing secret is bundled: no `EXPO_PUBLIC_` variable other than the Supabase URL/anon key exists, and `OPENAI` / `AWS` / `USDA` appear only under `supabase/functions/`.
 
 ## Scripts
 
@@ -264,6 +277,11 @@ CI=1 npx jest --watchAll=false
 ```
 
 This covers pure logic (nutrition/date math, zod schemas, repository row-mapping against a mocked Supabase client) - it does not and cannot exercise real RLS policies, since that requires a live Postgres instance. Run `supabase/tests/rls_verification.sql` against a linked project for that (see [Backend (Supabase)](#backend-supabase)).
+
+For anything that only shows up against a real project or a real device:
+
+- [`docs/SMOKE_TEST.md`](docs/SMOKE_TEST.md) - one manual golden-path pass (create account → add / scan / barcode / receipt → plan → grocery → transfer → cook → verify deduction), plus the failure/retry cases.
+- [`docs/LIVE_VALIDATION.md`](docs/LIVE_VALIDATION.md) - the readiness checklist for migrations, RLS, Edge Functions, secrets, auth isolation, and device capabilities. Nothing in it has been run live yet.
 
 ## Learn more
 

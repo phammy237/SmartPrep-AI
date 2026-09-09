@@ -46,13 +46,53 @@ export function ScanModeSelectScreen() {
   return (
     <Screen contentContainerStyle={{ padding: theme.spacing.xl, gap: theme.spacing.xl }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Text style={[theme.typography.title1, { color: theme.colors.textPrimary }]}>Scan Your Kitchen</Text>
+        <Text style={[theme.typography.title1, { color: theme.colors.textPrimary }]}>Add to Pantry</Text>
         <Pressable onPress={() => router.back()} accessibilityRole="button" accessibilityLabel="Close" hitSlop={8}>
           <Ionicons name="close" size={26} color={theme.colors.textPrimary} />
         </Pressable>
       </View>
 
       <View style={{ gap: theme.spacing.md }}>
+        <Pressable
+          onPress={() => router.push('/pantry/add')}
+          accessibilityRole="button"
+          accessibilityLabel="Add an item manually"
+          style={({ pressed }) => [
+            {
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: theme.spacing.md,
+              backgroundColor: theme.colors.backgroundElevated,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              borderRadius: theme.radius.lg,
+              padding: theme.spacing.lg,
+            },
+            theme.shadow.card,
+            pressed && { opacity: 0.9 },
+          ]}
+        >
+          <View
+            style={{
+              width: 52,
+              height: 52,
+              borderRadius: 26,
+              backgroundColor: theme.colors.accentMuted,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Ionicons name="create-outline" size={24} color={theme.colors.accent} />
+          </View>
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>Add Manually</Text>
+            <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>
+              Type in an item, quantity, and dates yourself.
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={theme.colors.textTertiary} />
+        </Pressable>
+
         <Pressable
           onPress={() => router.push('/scan/barcode/scan')}
           accessibilityRole="button"

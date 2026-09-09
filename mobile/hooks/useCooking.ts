@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DeductionInput } from '@/lib/validation/cookingSchemas';
 import { cookingService, nutritionService } from '@/services';
 import { haptics } from '@/utils/haptics';
+import { invalidatePantryDerivedQueries } from './invalidatePantryDerived';
 import { queryKeys } from './queryKeys';
 
 /**
@@ -29,13 +30,13 @@ export function useConversionMeta(ingredientIds: string[]) {
 function useInvalidateAfterCooking() {
   const queryClient = useQueryClient();
   return () => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.pantry });
-    queryClient.invalidateQueries({ queryKey: queryKeys.recipes });
-    queryClient.invalidateQueries({ queryKey: queryKeys.recipeCollections });
-    queryClient.invalidateQueries({ queryKey: queryKeys.readyToCookCount });
+    // Pantry + everything derived from it (coverage, collections, ready-to-cook,
+    // Use-Soon recommendations).
+    invalidatePantryDerivedQueries(queryClient);
+    // Cooking-specific extras: new prepared-meal balance, a meal-plan item that
+    // may now be completed, and a meal log that may have been created.
     queryClient.invalidateQueries({ queryKey: queryKeys.preparedMeals });
     queryClient.invalidateQueries({ queryKey: queryKeys.mealPlan });
-    queryClient.invalidateQueries({ queryKey: queryKeys.recommendations });
     queryClient.invalidateQueries({ queryKey: ['mealLogs'] });
   };
 }
