@@ -59,8 +59,11 @@ create unique index pantry_items_source_grocery_item_uq
 -- cannot add a parameter, so the 0008 definition is dropped and recreated -
 -- body unchanged apart from the new idempotent early-return branch and the new
 -- column on insert. Manual / scan callers pass null and get identical behaviour.
+-- Full 16-argument type signature of the 0008 function (arg 11
+-- p_user_provided_date is `date`). A wrong list here makes the drop a silent
+-- no-op and leaves the 0008 overload behind.
 drop function if exists public.create_pantry_item(
-  text, text, text, text, numeric, text, text, text, date, date, text, text, date, text, text, text
+  text, text, text, text, numeric, text, text, text, date, date, date, text, date, text, text, text
 );
 
 create function public.create_pantry_item(
@@ -139,11 +142,13 @@ begin
 end;
 $$;
 
-comment on function public.create_pantry_item is
+comment on function public.create_pantry_item(
+  text, text, text, text, numeric, text, text, text, date, date, date, text, date, text, text, text, uuid
+) is
   'security definer: see justification comment in migration 0002. Idempotent when p_source_scan_detection_id (scan) OR p_source_grocery_item_id (grocery transfer) is given: a repeat call returns the existing row instead of inserting a duplicate item / event.';
 
 grant execute on function public.create_pantry_item(
-  text, text, text, text, numeric, text, text, text, date, date, text, text, date, text, text, text, uuid
+  text, text, text, text, numeric, text, text, text, date, date, date, text, date, text, text, text, uuid
 ) to authenticated;
 
 -- ============================================================================

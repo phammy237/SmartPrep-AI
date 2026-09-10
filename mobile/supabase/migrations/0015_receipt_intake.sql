@@ -150,8 +150,11 @@ create trigger receipt_scan_items_set_updated_at
 -- ============================================================================
 -- 5. create_pantry_item: 2 trailing optional args for receipt provenance
 -- ============================================================================
+-- Full 20-argument type signature of the 0012 function (arg 11
+-- p_user_provided_date is `date`). A wrong list here makes the drop a silent
+-- no-op and leaves the 0012 overload behind.
 drop function if exists public.create_pantry_item(
-  text, text, text, text, numeric, text, text, text, date, date, text, text, date, text, text, text, uuid, text, text, text
+  text, text, text, text, numeric, text, text, text, date, date, date, text, date, text, text, text, uuid, text, text, text
 );
 
 create function public.create_pantry_item(
@@ -236,14 +239,16 @@ begin
 end;
 $$;
 
-comment on function public.create_pantry_item is
+comment on function public.create_pantry_item(
+  text, text, text, text, numeric, text, text, text, date, date, date, text, date, text, text, text, uuid, text, text, text, text, uuid
+) is
   'security definer: see migration 0002. Idempotent when p_source_scan_detection_id (scan) OR p_source_grocery_item_id (grocery transfer) OR p_source_receipt_candidate_id (receipt intake) is given: a repeat call returns the existing row instead of inserting a duplicate item / event.';
 
 grant execute on function public.create_pantry_item(
-  text, text, text, text, numeric, text, text, text, date, date, text, text, date, text, text, text, uuid, text, text, text, text, uuid
+  text, text, text, text, numeric, text, text, text, date, date, date, text, date, text, text, text, uuid, text, text, text, text, uuid
 ) to authenticated;
 revoke execute on function public.create_pantry_item(
-  text, text, text, text, numeric, text, text, text, date, date, text, text, date, text, text, text, uuid, text, text, text, text, uuid
+  text, text, text, text, numeric, text, text, text, date, date, date, text, date, text, text, text, uuid, text, text, text, text, uuid
 ) from public;
 
 -- ============================================================================

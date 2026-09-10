@@ -11,10 +11,17 @@
 -- Phase 7 grocery->pantry transfer (transfer_grocery_item_to_pantry +
 -- pantry_items.source_grocery_item_id + grocery_list_items transfer state),
 -- Phase 8 grocery shopping-trip lifecycle (complete_grocery_list +
--- grocery_lists.completed_at + completed-trip immutability triggers), and
+-- grocery_lists.completed_at + completed-trip immutability triggers),
 -- Phase 8b grocery_list_items least-privilege column grants (0011:
--- server-controlled columns are not client-writable; is_checked is RPC-only).
--- Run migrations 0001-0011 first.
+-- server-controlled columns are not client-writable; is_checked is RPC-only),
+-- barcode intake provenance (0012: create_pantry_item barcode source is
+-- owner-scoped), barcode_product_nutrition (0013/0014:
+-- upsert_barcode_product_candidate writes an OFF candidate only,
+-- upsert_verified_barcode_product is service_role-only, clients cannot
+-- insert/update/delete or downgrade a verified row), and receipt sessions
+-- (0015: receipt_scans / receipt_scan_items are owner-scoped and RPC-only,
+-- raw client INSERT is refused).
+-- Run migrations 0001-0015 first.
 --
 -- Run this in the Supabase SQL editor or via `psql` against your linked
 -- project. It does NOT create test users itself - auth.users rows can only

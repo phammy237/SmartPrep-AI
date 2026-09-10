@@ -8,6 +8,44 @@
 --   3. existing canonical-ingredient nutrition  -> its own status (fallback)
 --   4. otherwise                                -> unresolved
 --
+
+-- ============================================================================
+-- is_nonempty_nutrient_basis - a per-100g jsonb has >= 1 known nutrient
+-- ============================================================================
+-- Mirrors lib/nutrition/nutritionReference.ts#basisHasAnyNutrient + the numeric
+-- guard in toNutrientBasis. Keep both in sync by hand (no cross-language import).
+--
+-- Defined FIRST in this migration: barcode_product_nutrition's CHECK constraint
+-- calls it, so the function must already exist when the table is created.
+create function public.is_nonempty_nutrient_basis(basis jsonb)
+returns boolean
+language plpgsql
+immutable
+security invoker
+set search_path = ''
+as $$
+declare
+  k text;
+begin
+  if basis is null or jsonb_typeof(basis) <> 'object' then
+    return false;
+  end if;
+  foreach k in array array['calories', 'proteinG', 'carbsG', 'fatG', 'fiberG', 'sugarG', 'sodiumMg']
+  loop
+    if basis ? k
+      and jsonb_typeof(basis -> k) = 'number'
+      and (basis ->> k)::numeric >= 0
+    then
+      return true;
+    end if;
+  end loop;
+  return false;
+end;
+$$;
+
+comment on function public.is_nonempty_nutrient_basis is
+  'True when a per-100g nutrition jsonb has at least one known, non-negative numeric nutrient. Backs the check on barcode_product_nutrition and gates upsert_barcode_product_candidate.';
+
 -- ============================================================================
 -- barcode_product_nutrition  - one GLOBAL row per normalized barcode
 -- ============================================================================
@@ -75,40 +113,6 @@ create policy "barcode_product_nutrition_read_authenticated" on public.barcode_p
 create trigger barcode_product_nutrition_set_updated_at
   before update on public.barcode_product_nutrition
   for each row execute function public.set_updated_at();
-
--- ============================================================================
--- is_nonempty_nutrient_basis - a per-100g jsonb has >= 1 known nutrient
--- ============================================================================
--- Mirrors lib/nutrition/nutritionReference.ts#basisHasAnyNutrient + the numeric
--- guard in toNutrientBasis. Keep both in sync by hand (no cross-language import).
-create function public.is_nonempty_nutrient_basis(basis jsonb)
-returns boolean
-language plpgsql
-immutable
-security invoker
-set search_path = ''
-as $$
-declare
-  k text;
-begin
-  if basis is null or jsonb_typeof(basis) <> 'object' then
-    return false;
-  end if;
-  foreach k in array array['calories', 'proteinG', 'carbsG', 'fatG', 'fiberG', 'sugarG', 'sodiumMg']
-  loop
-    if basis ? k
-      and jsonb_typeof(basis -> k) = 'number'
-      and (basis ->> k)::numeric >= 0
-    then
-      return true;
-    end if;
-  end loop;
-  return false;
-end;
-$$;
-
-comment on function public.is_nonempty_nutrient_basis is
-  'True when a per-100g nutrition jsonb has at least one known, non-negative numeric nutrient. Backs the check on barcode_product_nutrition and gates upsert_barcode_product_candidate.';
 
 -- ============================================================================
 -- upsert_barcode_product_candidate - the ONLY client-facing write path

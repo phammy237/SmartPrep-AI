@@ -61,8 +61,11 @@ comment on column public.pantry_items.brand is
 -- 2. create_pantry_item: 3 trailing optional args for barcode provenance
 -- ============================================================================
 
+-- Full 17-argument type signature of the 0009 function (arg 11
+-- p_user_provided_date is `date`). A wrong list here makes the drop a silent
+-- no-op and leaves the 0009 overload behind.
 drop function if exists public.create_pantry_item(
-  text, text, text, text, numeric, text, text, text, date, date, text, text, date, text, text, text, uuid
+  text, text, text, text, numeric, text, text, text, date, date, date, text, date, text, text, text, uuid
 );
 
 create function public.create_pantry_item(
@@ -148,13 +151,15 @@ begin
 end;
 $$;
 
-comment on function public.create_pantry_item is
+comment on function public.create_pantry_item(
+  text, text, text, text, numeric, text, text, text, date, date, date, text, date, text, text, text, uuid, text, text, text
+) is
   'security definer: see justification comment in migration 0002. Idempotent when p_source_scan_detection_id (scan) OR p_source_grocery_item_id (grocery transfer) is given. Barcode intake passes p_source = ''barcode'' + p_barcode/p_brand/p_fdc_id and is intentionally NOT idempotency-keyed.';
 
 grant execute on function public.create_pantry_item(
-  text, text, text, text, numeric, text, text, text, date, date, text, text, date, text, text, text, uuid, text, text, text
+  text, text, text, text, numeric, text, text, text, date, date, date, text, date, text, text, text, uuid, text, text, text
 ) to authenticated;
 
 revoke execute on function public.create_pantry_item(
-  text, text, text, text, numeric, text, text, text, date, date, text, text, date, text, text, text, uuid, text, text, text
+  text, text, text, text, numeric, text, text, text, date, date, date, text, date, text, text, text, uuid, text, text, text
 ) from public;

@@ -56,7 +56,15 @@ create unique index pantry_items_source_scan_detection_uq
 -- The body is the 0002 body plus (1) an early idempotent return when a row
 -- already exists for p_source_scan_detection_id and (2) the new column on
 -- insert. Manual / grocery callers pass null and get identical behaviour.
-drop function if exists public.create_pantry_item(text, text, text, text, numeric, text, text, text, date, date, text, text, date, text, text);
+--
+-- The DROP targets the FULL 15-argument type signature of the 0002 function
+-- (p_user_provided_date is `date`, not `text`) so it actually matches and
+-- removes that overload. Getting this list wrong makes `drop ... if exists`
+-- a silent no-op, leaving two create_pantry_item overloads and making the
+-- bare `comment on function` below fail with 42725 (function name not unique).
+drop function if exists public.create_pantry_item(
+  text, text, text, text, numeric, text, text, text, date, date, date, text, date, text, text
+);
 
 create function public.create_pantry_item(
   p_ingredient_id text,
@@ -124,11 +132,13 @@ begin
 end;
 $$;
 
-comment on function public.create_pantry_item is
+comment on function public.create_pantry_item(
+  text, text, text, text, numeric, text, text, text, date, date, date, text, date, text, text, text
+) is
   'security definer: see justification comment in migration 0002. Idempotent when p_source_scan_detection_id is given (scan confirmation only): a repeat call returns the existing row instead of inserting a duplicate item / event.';
 
 grant execute on function public.create_pantry_item(
-  text, text, text, text, numeric, text, text, text, date, date, text, text, date, text, text, text
+  text, text, text, text, numeric, text, text, text, date, date, date, text, date, text, text, text
 ) to authenticated;
 
 -- ============================================================================

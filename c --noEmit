@@ -1,0 +1,192 @@
+[1mdiff --git a/mobile/types/database.types.ts b/mobile/types/database.types.ts[m
+[1mindex 8b7edf0..dba2d8d 100644[m
+[1m--- a/mobile/types/database.types.ts[m
+[1m+++ b/mobile/types/database.types.ts[m
+[36m@@ -1,1001 +1,2292 @@[m
+[31m-/**[m
+[31m- * Hand-authored to match supabase/migrations/0001-0011. STILL A STAND-IN -[m
+[31m- * regenerate from a live project once linked:[m
+[31m- *   npx supabase gen types typescript --linked > types/database.types.ts[m
+[31m- *[m
+[31m- * This is a STAND-IN for the real generated file. Once a project is linked,[m
+[31m- * regenerate it for real and this file will be overwritten:[m
+[31m- *[m
+[31m- *   npx supabase gen types typescript --linked > types/database.types.ts[m
+[31m- *[m
+[31m- * Do not hand-edit table shapes here without also editing the migration that[m
+[31m- * defines them (and vice versa) - they will drift silently otherwise.[m
+[31m- */[m
+[32m+[m[32m﻿export type Json =[m
+[32m+[m[32m  | string[m
+[32m+[m[32m  | number[m
+[32m+[m[32m  | boolean[m
+[32m+[m[32m  | null[m
+[32m+[m[32m  | { [key: string]: Json | undefined }[m
+[32m+[m[32m  | Json[][m
+ [m
+[31m-export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];[m
+[31m-[m
+[31m-type PantryQuantityUnit =[m
+[31m-  | 'item'[m
+[31m-  | 'container'[m
+[31m-  | 'bag'[m
+[31m-  | 'bottle'[m
+[31m-  | 'can'[m
+[31m-  | 'package'[m
+[31m-  | 'serving'[m
+[31m-  | 'g'[m
+[31m-  | 'kg'[m
+[31m-  | 'oz'[m
+[31m-  | 'lb'[m
+[31m-  | 'ml'[m
+[31m-  | 'L';[m
+[31m-[m
+[31m-type NutritionStatusDb = 'verified' | 'estimated' | 'incomplete';[m
+[31m-type MealTypeDb = 'breakfast' | 'lunch' | 'dinner' | 'snack';[m
+[31m-[m
+[31m-export interface Database {[m
+[32m+[m[32mexport type Database = {[m
+[32m+[m[32m  // Allows to automatically instantiate createClient with right options[m
+[32m+[m[32m  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)[m
+[32m+[m[32m  __InternalSupabase: {[m
+[32m+[m[32m    PostgrestVersion: "14.5"[m
+[32m+[m[32m  }[m
+   public: {[m
+     Tables: {[m
+[31m-      profiles: {[m
+[32m+[m[32m      barcode_product_nutrition: {[m
+         Row: {[m
+[31m-          id: string;[m
+[31m-          email: string;[m
+[31m-          display_name: string;[m
+[31m-          auth_provider: 'email' | 'apple' | 'google';[m
+[31m-          timezone: string;[m
+[31m-          household_size: number;[m
+[31m-          cooking_confidence: number;[m
+[31m-          created_at: string;[m
+[31m-          updated_at: string;[m
+[31m-        };[m
+[32m+[m[32m          barcode: string[m
+[32m+[m[32m          brand_owner: string | null[m
+[32m+[m[32m          created_at: string[m
+[32m+[m[32m          created_by: string | null[m
+[32m+[m[32m          description: string | null[m
+[32m+[m[32m          fdc_id: number | null[m
+[32m+[m[32m          id: string[m
+[32m+[m[32m          nutrition_per_100g: Json[m
+[32m+[m[32m          provider: string[m
+[32m+[m[32m          source_fetched_at: string[m
+[32m+[m[32m          source_product_id: string[m
+[32m+[m[32m          status: string[m
+[32m+[m[32m          updated_at: string[m
+[32m+[m[32m        }[m
+         Insert: {[m
+[31m-          id: string;[m
+[31m-          email: string;[m
+[31m-          display_name?: string;[m
+[31m-          auth_provider?: 'email' | 'apple' | 'google';[m
+[31m-          timezone?: string;[m
+[31m-          household_size?: number;[m
+[31m-          cooking_confidence?: number;[m
+[31m-        };[m
+[32m+[m[32m          barcode: string[m
+[32m+[m[32m          brand_owner?: string | null[m
+[32m+[m[32m          created_at?: string[m
+[32m+[m[32m          created_by?: string | null[m
+[32m+[m[32m          description?: string | null[m
+[32m+[m[32m          fdc_id?: number | null[m
+[32m+[m[32m          id?: string[m
+[32m+[m[32m          nutrition_per_100g: Json[m
+[32m+[m[32m          provider: string[m
+[32m+[m[32m          source_fetched_at?: string[m
+[32m+[m[32m          source_product_id: string[m
+[32m+[m[32m          status?: string[m
+[32m+[m[32m          updated_at?: string[m
+[32m+[m[32m        }[m
+         Update: {[m
+[31m-          display_name?: string;[m
+[31m-          timezone?: string;[m
+[31m-          household_size?: number;[m
+[31m-          cooking_confidence?: number;[m
+[31m-        };[m
+[31m-        Relationships: [];[m
+[31m-      };[m
+[31m-      dietary_preferences: {[m
+[32m+[m[32m          barcode?: string[m
+[32m+[m[32m          brand_owner?: string | null[m
+[32m+[m[32m          created_at?: string[m
+[32m+[m[32m          created_by?: string | null[m
+[32m+[m[32m          description?: string | null[m
+[32m+[m[32m          fdc_id?: number | null[m
+[32m+[m[32m          id?: string[m
+[32m+[m[32m          nutrition_per_100g?: Json[m
+[32m+[m[32m          provider?: string[m
+[32m+[m[32m          source_fetched_at?: string[m
+[32m+[m[32m          source_product_id?: string[m
+[32m+[m[32m          status?: string[m
+[32m+[m[32m          updated_at?: string[m
+[32m+[m[32m        }[m
+[32m+[m[32m        Relationships: [][m
+[32m+[m[32m      }[m
+[32m+[m[32m      canonical_ingredient_nutrition: {[m
+         Row: {[m
+[31m-          user_id: string;[m
+[31m-          dietary_patterns: string[];[m
+[31m-          allergens: string[];[m
+[31m-          excluded_ingredients: string[];[m
+[31m-          preferred_cuisines: string[];[m
+[31m-          equipment: string[];[m
+[31m-          max_cook_time: 'under_15' | '15_30' | '30_60' | 'no_preference';[m
+[31m-          novelty_preference: string | null;[m
+[31m-          priorities: Json;[m
+[31m-          weekly_grocery_budget: number | null;[m
+[31m-          created_at: string;[m
+[31m-          updated_at: string;[m
+[31m-        };[m
+[32m+[m[32m          canonical_ingredient_id: string[m
+[32m+[m[32m          created_at: string[m
+[32m+[m[32m          fdc_id: number | null[m
+[32m+[m[32m          match_rule: string | null[m
+[32m+[m[32m          nutrition_per_100g: Json[m
+[32m+[m[32m          status: string[m
+[32m+[m[32m          updated_at: string[m
+[32m+[m[32m          verified_at: string | null[m
+[32m+[m[32m          verified_by: string | null[m
+[32m+[m[32m        }[m
+         Insert: {[m
+[31m-          user_id: string;[m
+[31m-          dietary_patterns?: string[];[m
+[31m-          allergens?: string[];[m
+[31m-          excluded_ingredients?: string[];[m
+[31m-          preferred_cuisines?: string[];[m
+[31m-          equipment?: string[];[m
+[31m-          max_cook_time?: 'under_15' | '15_30' | '30_60' | 'no_preference';[m
+[31m-          novelty_preference?: string | null;[m
+[31m-          priorities?: Json;[m
+[31m-          weekly_grocery_budget?: number | null;[m
+[31m-        };[m
+[32m+[m[32m          canonical_ingredient_id: string[m
+[32m+[m[32m          created_at?: string[m
+[32m+[m[32m          fdc_id?: number | null[m
+[32m+[m[32m          match_rule?: string | null[m
+[32m+[m[32m          nutrition_per_100g: Json[m
+[32m+[m[32m          status?: string[m
+[32m+[m[32m          updated_at?: string[m
+[32m+[m[32m          verified_at?: string | null[m
+[32m+[m[32m          verified_by?: string | null[m
+[32m+[m[32m        }[m
+         Update: {[m
+[31m-          dietary_patterns?: string[];[m
+[31m-          allergens?: string[];[m
+[31m-          excluded_ingredients?: string[];[m
+[31m-          preferred_cuisines?: string[];[m
+[31m-          equipment?: string[];[m
+[31m-          max_cook_time?: 'under_15' | '15_30' | '30_60' | 'no_preference';[m
+[31m-          novelty_preference?: string | null;[m
+[31m-          priorities?: Json;[m
+[31m-          weekly_grocery_budget?: number | null;[m
+[31m-        };[m
+[31m-        Relationships: [];[m
+[31m-      };[m
+[31m-      nutrition_goals: {[m
+[32m+[m[32m          canonical_ingredient_id?: string[m

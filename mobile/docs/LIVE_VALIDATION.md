@@ -10,6 +10,29 @@ Legend: ☐ not started · ◐ partially done / code-ready · ☑ verified live 
 
 ---
 
+## 0. BLOCKER - there is no SmartPrep Supabase project yet (checked 2026-09-09)
+
+Read-only discovery via the logged-in Supabase CLI:
+
+- The SmartPrep repo is **not linked** (`supabase/.temp/` has no `project-ref`;
+  `supabase migration list` → `LegacyProjectNotLinkedError`).
+- There is **no `.env`** in the repo, so the app cannot connect to anything.
+- The Supabase account has **exactly one project**, `kkhwianmmuyvznncmsoc`
+  ("Job application prj"), and it is **a different application** - its public
+  schema is `applications, jobs, resumes, experiences, generated_answers,
+  requirement_evidence_mappings, …` (a job-application tracker), migrations
+  `0001-0012` with unrelated names. It contains **zero** SmartPrep tables.
+- **Do NOT `supabase link` + `db push` the SmartPrep migrations to that project.**
+  It would apply 15 migrations (incl. a recipe-catalog seed and `profiles`
+  changes) on top of a live unrelated database.
+
+**To unblock:** create a dedicated SmartPrep Supabase project (or designate one),
+then `supabase link` it, add `.env` with its URL + anon key, and only then work
+through the checklist below. Everything from section 1 onward is ☐ until that
+project exists.
+
+---
+
 ## 1. Database
 
 | # | Check | How | Status |
