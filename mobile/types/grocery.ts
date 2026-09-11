@@ -1,7 +1,8 @@
 import { QuantityUnit, IngredientCategory } from './common';
 
 /** How a grocery line came to exist - provenance for future auto-generated lists. */
-export type GroceryItemSource = 'manual' | 'recipe' | 'meal_plan' | 'pantry_shortage';
+export const GROCERY_ITEM_SOURCE_VALUES = ['manual', 'recipe', 'meal_plan', 'pantry_shortage'] as const;
+export type GroceryItemSource = (typeof GROCERY_ITEM_SOURCE_VALUES)[number];
 
 /**
  * What a grocery line's `quantity` means. Explicit so quantities are never
@@ -11,7 +12,12 @@ export type GroceryItemSource = 'manual' | 'recipe' | 'meal_plan' | 'pantry_shor
  *  - uncovered_shortfall  recipe requirement minus confirmed pantry coverage
  *                         (reserved - needs unit conversion before anything populates it)
  */
-export type GroceryQuantityBasis = 'as_entered' | 'recipe_requirement' | 'uncovered_shortfall';
+export const GROCERY_QUANTITY_BASIS_VALUES = ['as_entered', 'recipe_requirement', 'uncovered_shortfall'] as const;
+export type GroceryQuantityBasis = (typeof GROCERY_QUANTITY_BASIS_VALUES)[number];
+
+/** Whether an acquired grocery line has been turned into a pantry lot yet. */
+export const PANTRY_TRANSFER_STATUS_VALUES = ['not_transferred', 'transferred'] as const;
+export type PantryTransferStatus = (typeof PANTRY_TRANSFER_STATUS_VALUES)[number];
 
 export interface GroceryListItem {
   id: string;
@@ -33,7 +39,7 @@ export interface GroceryListItem {
    * `isChecked` ("acquired" and "in pantry" are separate facts). Set only via
    * the transfer flow (transfer_grocery_item_to_pantry).
    */
-  pantryTransferStatus?: 'not_transferred' | 'transferred';
+  pantryTransferStatus?: PantryTransferStatus;
   /** The pantry lot this line produced, once transferred. */
   pantryItemId?: string;
   estimatedPrice?: number;
@@ -54,7 +60,8 @@ export interface GroceryList {
 // completed; the completed list + its items ARE the history.
 // ---------------------------------------------------------------------------
 
-export type GroceryListStatus = 'active' | 'completed' | 'archived';
+export const GROCERY_LIST_STATUS_VALUES = ['active', 'completed', 'archived'] as const;
+export type GroceryListStatus = (typeof GROCERY_LIST_STATUS_VALUES)[number];
 
 /** One row in Shopping History. Counts are derived, not stored. */
 export interface GroceryTripSummary {

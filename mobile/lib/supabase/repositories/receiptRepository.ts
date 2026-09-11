@@ -60,13 +60,15 @@ export interface ReceiptReviewState {
 }
 
 export async function beginReceiptReview(input: BeginReceiptReviewInput): Promise<ReceiptReviewState> {
+  // p_merchant_name / p_purchased_at are `DEFAULT NULL` SQL params
+  // (migration 0015) - omitting is identical to sending SQL NULL.
   const { data, error } = await supabase.rpc('begin_receipt_review', {
     p_client_receipt_id: input.clientReceiptId,
     p_ocr_source: input.ocrSource ?? 'aws_textract',
-    p_merchant_name: input.merchantName ?? null,
-    p_purchased_at: input.purchasedAt ?? null,
     p_line_count: input.lineCount ?? input.items.length,
     p_items: input.items as unknown as Json,
+    ...(input.merchantName != null ? { p_merchant_name: input.merchantName } : {}),
+    ...(input.purchasedAt != null ? { p_purchased_at: input.purchasedAt } : {}),
   });
   if (error) throw error;
   const raw = data as { receiptScanId: string; status: ReceiptScanRow['status']; items: { candidateId: string; pantryItemId: string | null; candidateStatus: string }[] };

@@ -150,8 +150,11 @@ describe('insertGroceryListItems', () => {
       source_recipe_version_ids: ['rv-1'],
       quantity_basis: 'recipe_requirement',
     });
-    // trigger-managed columns are never sent by the client
-    expect(rows[0]).not.toHaveProperty('normalized_name');
+    // normalized_name is NOT NULL with no default, so the generated Insert type
+    // requires it; we send the shared-normalizer value (the DB's BEFORE INSERT
+    // trigger re-derives the same string from display_name on every write).
+    expect(rows[0].normalized_name).toBe('parmesan');
+    // other trigger-/default-managed columns are still never sent by the client
     expect(rows[0]).not.toHaveProperty('checked_at');
     expect(rows[0]).not.toHaveProperty('sort_order');
   });

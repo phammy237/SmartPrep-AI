@@ -132,20 +132,26 @@ describe('createPantryItem', () => {
         p_quantity: 1,
         p_unit: 'item',
         p_storage_location: 'fridge',
-        p_user_provided_date: null,
       }),
+    );
+    // Absent optional values are omitted (the SQL params are DEFAULT NULL), not
+    // sent as explicit null.
+    expect(supabase.rpc as jest.Mock).not.toHaveBeenCalledWith(
+      'create_pantry_item',
+      expect.objectContaining({ p_user_provided_date: null }),
     );
     expect(result.id).toBe('item-1');
   });
 
-  it('defaults p_source_scan_detection_id to null for a manual add', async () => {
+  it('omits p_source_scan_detection_id for a manual add (SQL param is DEFAULT NULL)', async () => {
     const mock = supabase.rpc as jest.Mock;
     mock.mockResolvedValue({ data: BASE_ROW, error: null });
     await createPantryItem(
       { ingredientId: 'i', imageUri: '', displayName: 'Milk', category: 'dairy', quantity: 1, unit: 'item' },
       'UTC',
     );
-    expect(mock.mock.calls.at(-1)?.[1]).toMatchObject({ p_source: 'manual', p_source_scan_detection_id: null });
+    expect(mock.mock.calls.at(-1)?.[1]).toMatchObject({ p_source: 'manual' });
+    expect(mock.mock.calls.at(-1)?.[1]).not.toHaveProperty('p_source_scan_detection_id');
   });
 
   it('forwards sourceScanDetectionId as the pantry idempotency key for a scan-confirmed item', async () => {
@@ -190,10 +196,10 @@ describe('adjustPantryQuantity / depletePantryItem / restorePantryItem / confirm
 
     await depletePantryItem('item-1', 'discarded', undefined, 'UTC');
 
+    // p_reason is a DEFAULT NULL SQL param - an absent reason is omitted.
     expect(supabase.rpc).toHaveBeenCalledWith('deplete_pantry_item', {
       p_item_id: 'item-1',
       p_event_type: 'discarded',
-      p_reason: null,
     });
   });
 
@@ -245,6 +251,8 @@ describe('transferGroceryItemToPantry', () => {
       'UTC',
     );
 
+    // Optional p_* params are DEFAULT NULL - absent values are omitted, not
+    // sent as explicit null.
     expect(supabase.rpc).toHaveBeenCalledWith('transfer_grocery_item_to_pantry', {
       p_grocery_item_id: 'gi-1',
       p_ingredient_id: 'ing-chicken-breast',
@@ -253,11 +261,7 @@ describe('transferGroceryItemToPantry', () => {
       p_category: 'protein',
       p_quantity: 1,
       p_unit: 'lb',
-      p_storage_location: null,
-      p_notes: null,
       p_purchase_date: '2026-09-06',
-      p_user_provided_date: null,
-      p_user_provided_date_type: null,
       p_estimated_expiration_date: '2026-09-10',
       p_expiration_confidence: 'medium',
     });

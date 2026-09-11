@@ -1,7 +1,15 @@
 import { DeductionInput } from '@/lib/validation/cookingSchemas';
-import { CompleteCookingEventResult, CookingEvent, CookingEventIngredient } from '@/types';
+import {
+  COOKING_EVENT_STATUS_VALUES,
+  CompleteCookingEventResult,
+  CookingEvent,
+  CookingEventIngredient,
+  MATCH_CONFIDENCE_VALUES,
+  PANTRY_DEDUCTION_STATUS_VALUES,
+} from '@/types';
 import { Database } from '@/types/database.types';
 import { supabase } from '../client';
+import { assertEnumValue, parseNullableEnumValue } from './enumMappers';
 import { mapMealLogRow } from './mealLogRepository';
 import { mapPreparedMealRow } from './preparedMealRepository';
 
@@ -13,11 +21,15 @@ function mapCookingEventRow(row: CookingEventRow): CookingEvent {
     id: row.id,
     recipeVersionId: row.recipe_version_id,
     mealPlanItemId: row.meal_plan_item_id ?? undefined,
-    status: row.status,
+    status: assertEnumValue(COOKING_EVENT_STATUS_VALUES, row.status, 'cooking_events.status'),
     plannedServings: row.planned_servings,
     actualServingsPrepared: row.actual_servings_prepared ?? undefined,
     finalBatchWeightG: row.final_batch_weight_g ?? undefined,
-    pantryDeductionStatus: row.pantry_deduction_status,
+    pantryDeductionStatus: assertEnumValue(
+      PANTRY_DEDUCTION_STATUS_VALUES,
+      row.pantry_deduction_status,
+      'cooking_events.pantry_deduction_status',
+    ),
     startedAt: row.started_at,
     completedAt: row.completed_at ?? undefined,
   };
@@ -34,7 +46,11 @@ function mapCookingEventIngredientRow(row: CookingEventIngredientRow): CookingEv
     deductedQuantity: row.deducted_quantity,
     deductedUnit: row.deducted_unit ?? undefined,
     estimatedGrams: row.estimated_grams ?? undefined,
-    matchConfidence: row.match_confidence ?? undefined,
+    matchConfidence: parseNullableEnumValue(
+      MATCH_CONFIDENCE_VALUES,
+      row.match_confidence,
+      'cooking_event_ingredients.match_confidence',
+    ),
     userConfirmed: row.user_confirmed,
     wasSkipped: row.was_skipped,
   };
@@ -52,20 +68,23 @@ export async function startCookingEvent(params: {
   plannedServings?: number;
   idempotencyKey: string;
 }): Promise<CookingEvent> {
+  // p_meal_plan_item_id / p_planned_servings are `DEFAULT NULL` SQL params
+  // (migration 0003) - omitting them is identical to sending SQL NULL.
   const { data, error } = await supabase.rpc('start_cooking_event', {
     p_recipe_version_id: params.recipeVersionId,
-    p_meal_plan_item_id: params.mealPlanItemId ?? null,
-    p_planned_servings: params.plannedServings ?? null,
     p_idempotency_key: params.idempotencyKey,
+    ...(params.mealPlanItemId != null ? { p_meal_plan_item_id: params.mealPlanItemId } : {}),
+    ...(params.plannedServings != null ? { p_planned_servings: params.plannedServings } : {}),
   });
   if (error) throw error;
   return mapCookingEventRow(data);
 }
 
 export async function cancelCookingEvent(cookingEventId: string, reason?: string): Promise<CookingEvent> {
+  // p_reason is a `DEFAULT NULL` SQL param (migration 0003).
   const { data, error } = await supabase.rpc('cancel_cooking_event', {
     p_cooking_event_id: cookingEventId,
-    p_reason: reason ?? null,
+    ...(reason != null ? { p_reason: reason } : {}),
   });
   if (error) throw error;
   return mapCookingEventRow(data);
@@ -107,14 +126,16 @@ export async function completeCookingEvent(params: {
   mealType?: string;
   notes?: string;
 }): Promise<CompleteCookingEventResult> {
+  // p_final_batch_weight_g / p_meal_type / p_notes are `DEFAULT NULL` SQL
+  // params (migration 0003) - omitting is identical to sending SQL NULL.
   const { data, error } = await supabase.rpc('complete_cooking_event', {
     p_cooking_event_id: params.cookingEventId,
     p_actual_servings_prepared: params.actualServingsPrepared,
     p_deductions: params.deductions.map(mapDeductionForRpc),
-    p_final_batch_weight_g: params.finalBatchWeightG ?? null,
     p_servings_consumed_now: params.servingsConsumedNow,
-    p_meal_type: params.mealType ?? null,
-    p_notes: params.notes ?? null,
+    ...(params.finalBatchWeightG != null ? { p_final_batch_weight_g: params.finalBatchWeightG } : {}),
+    ...(params.mealType != null ? { p_meal_type: params.mealType } : {}),
+    ...(params.notes != null ? { p_notes: params.notes } : {}),
   });
   if (error) throw error;
 

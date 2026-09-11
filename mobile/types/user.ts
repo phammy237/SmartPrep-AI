@@ -8,7 +8,8 @@ export type DietaryPreference =
   | 'dairy_free'
   | 'none';
 
-export type CookingTimePreference = 'under_15' | '15_30' | '30_60' | 'no_preference';
+export const COOKING_TIME_PREFERENCE_VALUES = ['under_15', '15_30', '30_60', 'no_preference'] as const;
+export type CookingTimePreference = (typeof COOKING_TIME_PREFERENCE_VALUES)[number];
 
 /** 1 (beginner) - 5 (experienced) */
 export type CookingConfidence = 1 | 2 | 3 | 4 | 5;
@@ -22,7 +23,8 @@ export interface SmartPrepPriorities {
   tryNewFoods: number;
 }
 
-export type MacroPreference = 'balanced' | 'low_carb' | 'high_protein';
+export const MACRO_PREFERENCE_VALUES = ['balanced', 'low_carb', 'high_protein'] as const;
+export type MacroPreference = (typeof MACRO_PREFERENCE_VALUES)[number];
 
 export interface NutritionGoals {
   dailyCalories: number;
@@ -33,7 +35,8 @@ export interface NutritionGoals {
   fiberG: number;
 }
 
-export type WeightGoalDirection = 'lose' | 'maintain' | 'gain';
+export const WEIGHT_GOAL_DIRECTION_VALUES = ['lose', 'maintain', 'gain'] as const;
+export type WeightGoalDirection = (typeof WEIGHT_GOAL_DIRECTION_VALUES)[number];
 
 export interface WeightGoal {
   direction: WeightGoalDirection;
@@ -55,7 +58,10 @@ export interface UserPreferences {
   weeklyGroceryBudget: number;
 }
 
-export type AuthProvider = 'apple' | 'google' | 'email' | null;
+export const AUTH_PROVIDER_VALUES = ['apple', 'google', 'email'] as const;
+/** A concrete auth provider as stored on `profiles.auth_provider` (never null at the DB). */
+export type AuthProviderName = (typeof AUTH_PROVIDER_VALUES)[number];
+export type AuthProvider = AuthProviderName | null;
 
 export interface User {
   id: string;

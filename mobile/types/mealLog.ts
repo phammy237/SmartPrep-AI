@@ -1,7 +1,8 @@
 import { MealType } from './mealPlan';
 import { NutritionSnapshot, NutritionStatus } from './nutrition';
 
-export type MealLogSource = 'cooking_flow' | 'prepared_meal' | 'quick_add' | 'manual';
+export const MEAL_LOG_SOURCE_VALUES = ['cooking_flow', 'prepared_meal', 'quick_add', 'manual'] as const;
+export type MealLogSource = (typeof MEAL_LOG_SOURCE_VALUES)[number];
 
 /** An immutable consumed-nutrition record. Totals must always read `nutritionSnapshot`, never look up the live recipe. */
 export interface MealLog {

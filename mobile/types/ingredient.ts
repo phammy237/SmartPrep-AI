@@ -10,7 +10,8 @@ export type IngredientNutritionPer100g = Partial<Record<NutrientKey, number>>;
  *   candidate  - a USDA row is linked but not confirmed
  *   verified   - a defensible USDA match or explicit confirmation
  */
-export type IngredientNutritionStatus = 'estimated' | 'candidate' | 'verified';
+export const INGREDIENT_NUTRITION_STATUS_VALUES = ['estimated', 'candidate', 'verified'] as const;
+export type IngredientNutritionStatus = (typeof INGREDIENT_NUTRITION_STATUS_VALUES)[number];
 
 /**
  * Canonical catalog entry for an ingredient - the "what is this" record.

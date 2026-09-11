@@ -1,6 +1,7 @@
-import { CookingConfidence } from '@/types';
+import { AUTH_PROVIDER_VALUES, AuthProviderName, CookingConfidence } from '@/types';
 import { Database } from '@/types/database.types';
 import { supabase } from '../client';
+import { assertEnumValue } from './enumMappers';
 
 type ProfileRowDb = Database['public']['Tables']['profiles']['Row'];
 
@@ -8,7 +9,7 @@ export interface ProfileRecord {
   id: string;
   email: string;
   displayName: string;
-  authProvider: 'email' | 'apple' | 'google';
+  authProvider: AuthProviderName;
   cookingConfidence: CookingConfidence;
   householdSize: number;
   timezone: string;
@@ -20,7 +21,7 @@ function mapRow(row: ProfileRowDb): ProfileRecord {
     id: row.id,
     email: row.email,
     displayName: row.display_name,
-    authProvider: row.auth_provider,
+    authProvider: assertEnumValue(AUTH_PROVIDER_VALUES, row.auth_provider, 'profiles.auth_provider'),
     cookingConfidence: row.cooking_confidence as CookingConfidence,
     householdSize: row.household_size,
     timezone: row.timezone,

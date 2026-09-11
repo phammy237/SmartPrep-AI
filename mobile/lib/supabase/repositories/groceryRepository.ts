@@ -1,15 +1,24 @@
+import { normalizeIngredientName } from '@/data';
 import {
+  GROCERY_ITEM_SOURCE_VALUES,
+  GROCERY_LIST_STATUS_VALUES,
+  GROCERY_QUANTITY_BASIS_VALUES,
   GroceryItemSource,
   GroceryList,
   GroceryListItem,
+  GroceryListStatus,
   GroceryQuantityBasis,
   GroceryTripDetail,
   GroceryTripSummary,
+  INGREDIENT_CATEGORY_VALUES,
   IngredientCategory,
+  PANTRY_TRANSFER_STATUS_VALUES,
+  QUANTITY_UNIT_VALUES,
   QuantityUnit,
 } from '@/types';
 import { Database, Json } from '@/types/database.types';
 import { supabase } from '../client';
+import { assertEnumValue, parseNullableEnumValue } from './enumMappers';
 
 type GroceryListRow = Database['public']['Tables']['grocery_lists']['Row'];
 type GroceryListItemRow = Database['public']['Tables']['grocery_list_items']['Row'];
@@ -18,11 +27,15 @@ type GroceryListItemRow = Database['public']['Tables']['grocery_list_items']['Ro
 export interface GroceryListHeader {
   id: string;
   createdAt: string;
-  status: GroceryListRow['status'];
+  status: GroceryListStatus;
+}
+
+function parseGroceryListStatus(value: string): GroceryListStatus {
+  return assertEnumValue(GROCERY_LIST_STATUS_VALUES, value, 'grocery_lists.status');
 }
 
 function mapListRow(row: GroceryListRow): GroceryListHeader {
-  return { id: row.id, createdAt: row.created_at, status: row.status };
+  return { id: row.id, createdAt: row.created_at, status: parseGroceryListStatus(row.status) };
 }
 
 const TRIP_PREVIEW_LIMIT = 4;
@@ -34,7 +47,7 @@ function mapTripSummary(
 ): GroceryTripSummary {
   return {
     id: row.id,
-    status: row.status,
+    status: parseGroceryListStatus(row.status),
     createdAt: row.created_at,
     // Completed trips always have completed_at (DB check). Fall back defensively.
     completedAt: row.completed_at ?? row.created_at,
@@ -54,18 +67,27 @@ function mapItemRow(row: GroceryListItemRow): GroceryListItem {
     imageUri: row.image_uri,
     // Column is nullable; the UI groups strictly by the six categories, so an
     // unset category renders under "Other".
-    category: (row.category ?? 'other') as IngredientCategory,
+    category:
+      parseNullableEnumValue(INGREDIENT_CATEGORY_VALUES, row.category, 'grocery_list_items.category') ?? 'other',
     quantity: row.quantity,
-    unit: row.unit as QuantityUnit,
+    unit: assertEnumValue(QUANTITY_UNIT_VALUES, row.unit, 'grocery_list_items.unit'),
     isChecked: row.is_checked,
-    source: row.source,
-    quantityBasis: row.quantity_basis,
+    source: assertEnumValue(GROCERY_ITEM_SOURCE_VALUES, row.source, 'grocery_list_items.source'),
+    quantityBasis: assertEnumValue(
+      GROCERY_QUANTITY_BASIS_VALUES,
+      row.quantity_basis,
+      'grocery_list_items.quantity_basis',
+    ),
     sourceRecipeIds: row.source_recipe_version_ids.length > 0 ? row.source_recipe_version_ids : undefined,
     isManuallyAdded: row.source === 'manual' ? true : undefined,
     // A generated line whose pantry comparison couldn't be resolved carries the
     // conservative full requirement - flag it so Grocery can ask for a check.
     needsQuantityCheck: meta.coverage === 'unresolved' ? true : undefined,
-    pantryTransferStatus: row.pantry_transfer_status,
+    pantryTransferStatus: assertEnumValue(
+      PANTRY_TRANSFER_STATUS_VALUES,
+      row.pantry_transfer_status,
+      'grocery_list_items.pantry_transfer_status',
+    ),
     pantryItemId: row.pantry_item_id ?? undefined,
     estimatedPrice: row.estimated_price ?? undefined,
     swapSuggestion: row.swap_suggestion ?? undefined,
@@ -126,6 +148,14 @@ export async function insertGroceryListItems(
     user_id: userId,
     catalog_ingredient_id: it.catalogIngredientId ?? null,
     display_name: it.displayName,
+    // normalized_name is NOT NULL with no default, so the generated Insert type
+    // requires it. The DB's grocery_list_items_sync_normalized_name BEFORE
+    // INSERT trigger (migration 0005) authoritatively re-derives it from
+    // display_name on every write; we send the same value via the shared
+    // normalizer so the row satisfies the type contract and stays correct even
+    // if that trigger were ever removed. (SQL: lower(regexp_replace(trim(x),
+    // '\s+', ' ', 'g')) === normalizeIngredientName.)
+    normalized_name: normalizeIngredientName(it.displayName),
     image_uri: it.imageUri ?? '',
     category: it.category ?? null,
     quantity: it.quantity,
@@ -234,7 +264,7 @@ export async function deletePlanGeneratedGroceryItems(
 // --- Shopping-trip lifecycle (Phase 8) -------------------------------------
 
 export interface CompleteGroceryListResult {
-  completed: { id: string; status: GroceryListRow['status']; createdAt: string; completedAt: string | null };
+  completed: { id: string; status: GroceryListStatus; createdAt: string; completedAt: string | null };
   active: { id: string; createdAt: string };
 }
 
@@ -251,7 +281,7 @@ export async function completeGroceryList(listId: string): Promise<CompleteGroce
   return {
     completed: {
       id: result.completedList.id,
-      status: result.completedList.status,
+      status: parseGroceryListStatus(result.completedList.status),
       createdAt: result.completedList.created_at,
       completedAt: result.completedList.completed_at,
     },

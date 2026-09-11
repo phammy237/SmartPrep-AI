@@ -1,7 +1,8 @@
 import { IngredientCategory, QuantityUnit } from './common';
 import { FreshnessState } from './freshness';
 
-export type ScanMode = 'quick' | 'guided';
+export const SCAN_MODE_VALUES = ['quick', 'guided'] as const;
+export type ScanMode = (typeof SCAN_MODE_VALUES)[number];
 export type ScanSection = 'quick' | 'fridge' | 'freezer' | 'pantry';
 export type ScanStatus = 'capturing' | 'processing' | 'reviewing' | 'confirmed';
 
@@ -97,9 +98,12 @@ export interface ScanConfirmSummary {
 // scan - never the source photo, which stays transient.
 // ---------------------------------------------------------------------------
 
-export type PersistedScanStatus = 'confirming' | 'confirmed';
+export const PERSISTED_SCAN_STATUS_VALUES = ['confirming', 'confirmed'] as const;
+export type PersistedScanStatus = (typeof PERSISTED_SCAN_STATUS_VALUES)[number];
+
 /** The three guided areas; quick scans have no sections. */
-export type GuidedScanSection = Exclude<ScanSection, 'quick'>;
+export const GUIDED_SCAN_SECTION_VALUES = ['fridge', 'freezer', 'pantry'] as const;
+export type GuidedScanSection = (typeof GUIDED_SCAN_SECTION_VALUES)[number];
 
 export interface ScanRecordSection {
   section: GuidedScanSection;

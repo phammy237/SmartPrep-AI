@@ -6,7 +6,8 @@ export interface NutritionFacts {
   fiberG: number;
 }
 
-export type NutritionStatus = 'verified' | 'estimated' | 'incomplete';
+export const NUTRITION_STATUS_VALUES = ['verified', 'estimated', 'incomplete'] as const;
+export type NutritionStatus = (typeof NUTRITION_STATUS_VALUES)[number];
 
 /**
  * What the numbers in a NutritionSnapshot represent - one serving, one gram, a

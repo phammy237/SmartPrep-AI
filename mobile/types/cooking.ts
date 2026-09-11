@@ -1,9 +1,14 @@
 import { MealLog } from './mealLog';
 import { PreparedMeal } from './preparedMeal';
 
-export type CookingEventStatus = 'started' | 'completed' | 'cancelled';
-export type PantryDeductionStatus = 'pending' | 'applied' | 'skipped';
-export type MatchConfidence = 'exact' | 'likely' | 'uncertain' | 'none';
+export const COOKING_EVENT_STATUS_VALUES = ['started', 'completed', 'cancelled'] as const;
+export type CookingEventStatus = (typeof COOKING_EVENT_STATUS_VALUES)[number];
+
+export const PANTRY_DEDUCTION_STATUS_VALUES = ['pending', 'applied', 'skipped'] as const;
+export type PantryDeductionStatus = (typeof PANTRY_DEDUCTION_STATUS_VALUES)[number];
+
+export const MATCH_CONFIDENCE_VALUES = ['exact', 'likely', 'uncertain', 'none'] as const;
+export type MatchConfidence = (typeof MATCH_CONFIDENCE_VALUES)[number];
 
 export interface CookingEvent {
   id: string;

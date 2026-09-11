@@ -1,7 +1,13 @@
 import { IngredientConversionMeta } from '@/lib/nutrition/conversion';
 import { NutrientBasisPer100g, toNutrientBasis } from '@/lib/nutrition/nutritionReference';
+import { INGREDIENT_NUTRITION_STATUS_VALUES } from '@/types';
 import { Database } from '@/types/database.types';
 import { supabase } from '../client';
+import { assertEnumValue } from './enumMappers';
+
+/** Provider + status domains for the per-barcode product cache (migration 0013/0014). */
+const BARCODE_PRODUCT_PROVIDER_VALUES = ['open_food_facts', 'usda'] as const;
+const BARCODE_PRODUCT_STATUS_VALUES = ['candidate', 'verified'] as const;
 
 type CanonicalRow = Database['public']['Tables']['canonical_ingredient_nutrition']['Row'];
 type OverrideRow = Database['public']['Tables']['user_ingredient_overrides']['Row'];
@@ -50,7 +56,11 @@ function mapCanonicalRow(row: CanonicalRow): CanonicalNutritionRef {
   return {
     canonicalIngredientId: row.canonical_ingredient_id,
     per100g: toNutrientBasis(row.nutrition_per_100g),
-    status: row.status,
+    status: assertEnumValue(
+      INGREDIENT_NUTRITION_STATUS_VALUES,
+      row.status,
+      'canonical_ingredient_nutrition.status',
+    ),
     fdcId: row.fdc_id,
     verifiedAt: row.verified_at,
   };
@@ -196,10 +206,10 @@ export interface BarcodeProductNutritionRef {
 function mapBarcodeProductRow(row: BarcodeProductNutritionRow): BarcodeProductNutritionRef {
   return {
     barcode: row.barcode,
-    provider: row.provider,
+    provider: assertEnumValue(BARCODE_PRODUCT_PROVIDER_VALUES, row.provider, 'barcode_product_nutrition.provider'),
     sourceProductId: row.source_product_id,
     per100g: toNutrientBasis(row.nutrition_per_100g),
-    status: row.status,
+    status: assertEnumValue(BARCODE_PRODUCT_STATUS_VALUES, row.status, 'barcode_product_nutrition.status'),
     fdcId: row.fdc_id,
     description: row.description,
     brandOwner: row.brand_owner,
@@ -236,12 +246,13 @@ export interface UpsertBarcodeCandidateInput {
 export async function upsertBarcodeProductCandidate(
   input: UpsertBarcodeCandidateInput,
 ): Promise<BarcodeProductNutritionRef> {
+  // p_description / p_brand_owner are `DEFAULT NULL` SQL params (migration 0013).
   const { data, error } = await supabase.rpc('upsert_barcode_product_candidate', {
     p_barcode: input.barcode,
     p_source_product_id: input.sourceProductId,
     p_nutrition_per_100g: input.per100g as unknown as Record<string, number>,
-    p_description: input.description ?? null,
-    p_brand_owner: input.brandOwner ?? null,
+    ...(input.description != null ? { p_description: input.description } : {}),
+    ...(input.brandOwner != null ? { p_brand_owner: input.brandOwner } : {}),
   });
   if (error) throw error;
   return mapBarcodeProductRow(data);

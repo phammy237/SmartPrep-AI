@@ -1,7 +1,8 @@
 import { CreateMealPlanEntryInput, UpdateMealPlanEntryInput } from '@/lib/validation/plannerSchemas';
-import { MealPlanEntry, MealType } from '@/types';
+import { MEAL_PLAN_STATUS_VALUES, MEAL_TYPE_VALUES, MealPlanEntry, MealType } from '@/types';
 import { Database } from '@/types/database.types';
 import { supabase } from '../client';
+import { assertEnumValue } from './enumMappers';
 
 type MealPlanItemRow = Database['public']['Tables']['meal_plan_items']['Row'];
 
@@ -11,10 +12,10 @@ function mapRow(row: MealPlanItemRow): MealPlanEntry {
     scheduledDate: row.scheduled_date,
     scheduledTime: row.scheduled_time ?? undefined,
     timezone: row.timezone,
-    mealSlot: row.meal_slot,
+    mealSlot: assertEnumValue(MEAL_TYPE_VALUES, row.meal_slot, 'meal_plan_items.meal_slot'),
     recipeVersionId: row.recipe_version_id,
     plannedServings: row.planned_servings,
-    status: row.status,
+    status: assertEnumValue(MEAL_PLAN_STATUS_VALUES, row.status, 'meal_plan_items.status'),
     notes: row.notes ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

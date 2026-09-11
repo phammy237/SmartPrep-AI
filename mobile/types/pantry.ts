@@ -1,18 +1,23 @@
 import { IngredientCategory, QuantityUnit } from './common';
 import { FreshnessState } from './freshness';
 
-export type PantryItemSource = 'scan' | 'manual' | 'grocery' | 'barcode' | 'receipt';
+export const PANTRY_ITEM_SOURCE_VALUES = ['scan', 'manual', 'grocery', 'barcode', 'receipt'] as const;
+export type PantryItemSource = (typeof PANTRY_ITEM_SOURCE_VALUES)[number];
 
 /** Simple two-state lifecycle. Richer "why it left" semantics live only in the pantry_events ledger, not here. */
-export type PantryItemStatus = 'active' | 'depleted';
+export const PANTRY_ITEM_STATUS_VALUES = ['active', 'depleted'] as const;
+export type PantryItemStatus = (typeof PANTRY_ITEM_STATUS_VALUES)[number];
 
-export type StorageLocation = 'fridge' | 'freezer' | 'pantry' | 'counter' | 'other';
+export const STORAGE_LOCATION_VALUES = ['fridge', 'freezer', 'pantry', 'counter', 'other'] as const;
+export type StorageLocation = (typeof STORAGE_LOCATION_VALUES)[number];
 
 /** Whether the stored quantity is a real user-entered number ('exact') or a rough estimate (reserved for future scan-derived quantities). */
-export type QuantityConfidence = 'exact' | 'estimated';
+export const QUANTITY_CONFIDENCE_VALUES = ['exact', 'estimated'] as const;
+export type QuantityConfidence = (typeof QUANTITY_CONFIDENCE_VALUES)[number];
 
 /** A user-provided printed date is guidance, never a guaranteed safety deadline - see utils/expiration.ts. */
-export type UserProvidedDateType = 'best_by' | 'use_by' | 'sell_by';
+export const USER_PROVIDED_DATE_TYPE_VALUES = ['best_by', 'use_by', 'sell_by'] as const;
+export type UserProvidedDateType = (typeof USER_PROVIDED_DATE_TYPE_VALUES)[number];
 
 /**
  * How much we trust `estimatedExpirationDate`:
@@ -21,7 +26,8 @@ export type UserProvidedDateType = 'best_by' | 'use_by' | 'sell_by';
  *  - 'low': a heuristic with no purchase date to anchor it (rare, defensive fallback)
  *  - 'unknown': no date information at all - never fabricate one
  */
-export type ExpirationConfidence = 'high' | 'medium' | 'low' | 'unknown';
+export const EXPIRATION_CONFIDENCE_VALUES = ['high', 'medium', 'low', 'unknown'] as const;
+export type ExpirationConfidence = (typeof EXPIRATION_CONFIDENCE_VALUES)[number];
 
 export interface PantryItem {
   id: string;

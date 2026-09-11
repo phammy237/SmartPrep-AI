@@ -53,14 +53,13 @@ describe('fetchKitchenImpactSummary', () => {
     });
   });
 
-  it('passes null bounds through for an all-time query', async () => {
+  it('omits the null bounds for an all-time query (p_start_date/p_end_date DEFAULT NULL)', async () => {
     rpc.mockResolvedValue({ data: { ...FULL_RESPONSE }, error: null });
     await fetchKitchenImpactSummary({ startDate: null, endDate: null, timeZone: 'UTC' });
-    expect(rpc).toHaveBeenCalledWith('get_kitchen_impact_summary', {
-      p_start_date: null,
-      p_end_date: null,
-      p_timezone: 'UTC',
-    });
+    expect(rpc).toHaveBeenCalledWith('get_kitchen_impact_summary', { p_timezone: 'UTC' });
+    const args = rpc.mock.calls.at(-1)?.[1] ?? {};
+    expect(args).not.toHaveProperty('p_start_date');
+    expect(args).not.toHaveProperty('p_end_date');
   });
 
   it('keeps utilizationRate null when unavailable (never coerces to 0)', async () => {

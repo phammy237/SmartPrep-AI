@@ -1,6 +1,7 @@
-import { NutritionGoals, WeightGoal } from '@/types';
+import { MACRO_PREFERENCE_VALUES, NutritionGoals, WEIGHT_GOAL_DIRECTION_VALUES, WeightGoal } from '@/types';
 import { Database } from '@/types/database.types';
 import { supabase } from '../client';
+import { assertEnumValue } from './enumMappers';
 
 type NutritionGoalsRowDb = Database['public']['Tables']['nutrition_goals']['Row'];
 
@@ -13,14 +14,25 @@ function mapRow(row: NutritionGoalsRowDb): NutritionGoalsRecord {
   return {
     nutritionGoals: {
       dailyCalories: row.daily_calories,
-      macroPreference: row.macro_preference,
+      macroPreference: assertEnumValue(
+        MACRO_PREFERENCE_VALUES,
+        row.macro_preference,
+        'nutrition_goals.macro_preference',
+      ),
       proteinG: row.protein_min_g,
       carbsG: row.carbs_target_g,
       fatG: row.fat_target_g,
       fiberG: row.fiber_target_g ?? 0,
     },
     weightGoal: {
-      direction: row.weight_goal_direction ?? 'maintain',
+      direction:
+        row.weight_goal_direction == null
+          ? 'maintain'
+          : assertEnumValue(
+              WEIGHT_GOAL_DIRECTION_VALUES,
+              row.weight_goal_direction,
+              'nutrition_goals.weight_goal_direction',
+            ),
       targetLbs: row.weight_goal_target_lbs ?? 0,
       targetDate: row.weight_goal_target_date ?? '',
     },
@@ -54,7 +66,13 @@ export async function replaceNutritionGoals(values: NutritionGoalsRecord): Promi
     p_macro_preference: values.nutritionGoals.macroPreference,
     p_weight_goal_direction: values.weightGoal.direction,
     p_weight_goal_target_lbs: values.weightGoal.targetLbs,
-    p_weight_goal_target_date: values.weightGoal.targetDate || null,
+    // The SQL param is `p_weight_goal_target_date date` with no DEFAULT
+    // (migration 0001): it is positionally required but genuinely nullable -
+    // NULL means "no target date", and the underlying column is nullable too.
+    // The generated Args type widens a NOT-NULL-less function param to a
+    // required non-null `string` and cannot express the nullable case, so we
+    // narrow the `null` through here rather than change repository semantics.
+    p_weight_goal_target_date: (values.weightGoal.targetDate || null) as string,
   });
   if (error) throw error;
   return mapRow(data);

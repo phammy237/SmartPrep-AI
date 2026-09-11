@@ -1,15 +1,35 @@
-import { IngredientCategory, PantryItem, QuantityUnit, StorageLocation, UserProvidedDateType } from '@/types';
+import {
+  EXPIRATION_CONFIDENCE_VALUES,
+  INGREDIENT_CATEGORY_VALUES,
+  IngredientCategory,
+  PANTRY_ITEM_SOURCE_VALUES,
+  PANTRY_ITEM_STATUS_VALUES,
+  PantryItem,
+  QUANTITY_CONFIDENCE_VALUES,
+  QUANTITY_UNIT_VALUES,
+  QuantityUnit,
+  STORAGE_LOCATION_VALUES,
+  StorageLocation,
+  USER_PROVIDED_DATE_TYPE_VALUES,
+  UserProvidedDateType,
+} from '@/types';
 import { Database } from '@/types/database.types';
 import { deriveExpirationUrgency } from '@/utils/expiration';
 import { FRESHNESS_OVERRIDE_VALUES } from '@/utils/freshness';
 import { supabase } from '../client';
+import { assertEnumValue, parseNullableEnumValue } from './enumMappers';
 
 type PantryItemRow = Database['public']['Tables']['pantry_items']['Row'];
 
 function mapRow(row: PantryItemRow, timeZone: string): PantryItem {
+  const expirationConfidence = assertEnumValue(
+    EXPIRATION_CONFIDENCE_VALUES,
+    row.expiration_confidence,
+    'pantry_items.expiration_confidence',
+  );
   const urgency = deriveExpirationUrgency(
     row.estimated_expiration_date ?? undefined,
-    row.expiration_confidence,
+    expirationConfidence,
     timeZone,
   );
   const freshnessValues = FRESHNESS_OVERRIDE_VALUES[urgency.label];
@@ -19,9 +39,9 @@ function mapRow(row: PantryItemRow, timeZone: string): PantryItem {
     ingredientId: row.ingredient_id,
     name: row.display_name,
     imageUri: row.image_uri,
-    category: row.category,
+    category: assertEnumValue(INGREDIENT_CATEGORY_VALUES, row.category, 'pantry_items.category'),
     quantity: row.quantity,
-    unit: row.unit,
+    unit: assertEnumValue(QUANTITY_UNIT_VALUES, row.unit, 'pantry_items.unit'),
     freshness: {
       score: freshnessValues.score,
       confidence: freshnessValues.confidence,
@@ -30,19 +50,31 @@ function mapRow(row: PantryItemRow, timeZone: string): PantryItem {
     },
     addedAt: row.created_at,
     updatedAt: row.updated_at,
-    source: row.scan_source,
+    source: assertEnumValue(PANTRY_ITEM_SOURCE_VALUES, row.scan_source, 'pantry_items.scan_source'),
     notes: row.notes ?? undefined,
 
     normalizedName: row.normalized_name,
-    status: row.status,
-    storageLocation: row.storage_location ?? undefined,
-    quantityConfidence: row.quantity_confidence,
+    status: assertEnumValue(PANTRY_ITEM_STATUS_VALUES, row.status, 'pantry_items.status'),
+    storageLocation: parseNullableEnumValue(
+      STORAGE_LOCATION_VALUES,
+      row.storage_location,
+      'pantry_items.storage_location',
+    ),
+    quantityConfidence: assertEnumValue(
+      QUANTITY_CONFIDENCE_VALUES,
+      row.quantity_confidence,
+      'pantry_items.quantity_confidence',
+    ),
     purchaseDate: row.purchase_date ?? undefined,
     openedDate: row.opened_date ?? undefined,
     userProvidedDate: row.user_provided_date ?? undefined,
-    userProvidedDateType: row.user_provided_date_type ?? undefined,
+    userProvidedDateType: parseNullableEnumValue(
+      USER_PROVIDED_DATE_TYPE_VALUES,
+      row.user_provided_date_type,
+      'pantry_items.user_provided_date_type',
+    ),
     estimatedExpirationDate: row.estimated_expiration_date ?? undefined,
-    expirationConfidence: row.expiration_confidence,
+    expirationConfidence,
     lastConfirmedAt: row.last_confirmed_at ?? undefined,
 
     estimatedGrams: row.estimated_grams ?? undefined,
@@ -102,6 +134,9 @@ export interface CreatePantryItemParams {
 }
 
 export async function createPantryItem(params: CreatePantryItemParams, timeZone: string): Promise<PantryItem> {
+  // Every optional p_* below is a `DEFAULT NULL` SQL param (migrations 0002 /
+  // 0008); a grocery source is never set on this path (grocery transfers use
+  // transfer_grocery_item_to_pantry). Omitting is identical to sending SQL NULL.
   const { data, error } = await supabase.rpc('create_pantry_item', {
     p_ingredient_id: params.ingredientId,
     p_display_name: params.displayName,
@@ -109,24 +144,25 @@ export async function createPantryItem(params: CreatePantryItemParams, timeZone:
     p_category: params.category,
     p_quantity: params.quantity,
     p_unit: params.unit,
-    p_storage_location: params.storageLocation ?? null,
-    p_notes: params.notes ?? null,
-    p_purchase_date: params.purchaseDate ?? null,
-    p_opened_date: params.openedDate ?? null,
-    p_user_provided_date: params.userProvidedDate ?? null,
-    p_user_provided_date_type: params.userProvidedDateType ?? null,
-    p_estimated_expiration_date: params.estimatedExpirationDate ?? null,
     p_expiration_confidence: params.expirationConfidence ?? 'unknown',
     p_source: params.source ?? 'manual',
-    p_source_scan_detection_id: params.sourceScanDetectionId ?? null,
-    // Grocery transfers go through transfer_grocery_item_to_pantry, which sets
-    // this itself; a direct manual/scan create never carries a grocery source.
-    p_source_grocery_item_id: null,
-    p_barcode: params.barcode ?? null,
-    p_brand: params.brand ?? null,
-    p_fdc_id: params.fdcId ?? null,
-    p_source_receipt_candidate_id: params.sourceReceiptCandidateId ?? null,
-    p_source_receipt_id: params.sourceReceiptId ?? null,
+    ...(params.storageLocation != null ? { p_storage_location: params.storageLocation } : {}),
+    ...(params.notes != null ? { p_notes: params.notes } : {}),
+    ...(params.purchaseDate != null ? { p_purchase_date: params.purchaseDate } : {}),
+    ...(params.openedDate != null ? { p_opened_date: params.openedDate } : {}),
+    ...(params.userProvidedDate != null ? { p_user_provided_date: params.userProvidedDate } : {}),
+    ...(params.userProvidedDateType != null ? { p_user_provided_date_type: params.userProvidedDateType } : {}),
+    ...(params.estimatedExpirationDate != null
+      ? { p_estimated_expiration_date: params.estimatedExpirationDate }
+      : {}),
+    ...(params.sourceScanDetectionId != null ? { p_source_scan_detection_id: params.sourceScanDetectionId } : {}),
+    ...(params.barcode != null ? { p_barcode: params.barcode } : {}),
+    ...(params.brand != null ? { p_brand: params.brand } : {}),
+    ...(params.fdcId != null ? { p_fdc_id: params.fdcId } : {}),
+    ...(params.sourceReceiptCandidateId != null
+      ? { p_source_receipt_candidate_id: params.sourceReceiptCandidateId }
+      : {}),
+    ...(params.sourceReceiptId != null ? { p_source_receipt_id: params.sourceReceiptId } : {}),
   });
   if (error) throw error;
   return mapRow(data, timeZone);
@@ -161,6 +197,8 @@ export async function transferGroceryItemToPantry(
   params: TransferGroceryItemParams,
   timeZone: string,
 ): Promise<PantryItem> {
+  // The optional p_* below are all `DEFAULT NULL` SQL params (migration 0009) -
+  // omitting is identical to sending SQL NULL.
   const { data, error } = await supabase.rpc('transfer_grocery_item_to_pantry', {
     p_grocery_item_id: params.groceryItemId,
     p_ingredient_id: params.ingredientId,
@@ -169,13 +207,15 @@ export async function transferGroceryItemToPantry(
     p_category: params.category,
     p_quantity: params.quantity,
     p_unit: params.unit,
-    p_storage_location: params.storageLocation ?? null,
-    p_notes: params.notes ?? null,
-    p_purchase_date: params.purchaseDate ?? null,
-    p_user_provided_date: params.userProvidedDate ?? null,
-    p_user_provided_date_type: params.userProvidedDateType ?? null,
-    p_estimated_expiration_date: params.estimatedExpirationDate ?? null,
     p_expiration_confidence: params.expirationConfidence ?? 'unknown',
+    ...(params.storageLocation != null ? { p_storage_location: params.storageLocation } : {}),
+    ...(params.notes != null ? { p_notes: params.notes } : {}),
+    ...(params.purchaseDate != null ? { p_purchase_date: params.purchaseDate } : {}),
+    ...(params.userProvidedDate != null ? { p_user_provided_date: params.userProvidedDate } : {}),
+    ...(params.userProvidedDateType != null ? { p_user_provided_date_type: params.userProvidedDateType } : {}),
+    ...(params.estimatedExpirationDate != null
+      ? { p_estimated_expiration_date: params.estimatedExpirationDate }
+      : {}),
   });
   if (error) throw error;
   return mapRow(data, timeZone);
@@ -237,11 +277,12 @@ export async function adjustPantryQuantity(
   reason: string | undefined,
   timeZone: string,
 ): Promise<PantryItem> {
+  // p_reason is a `DEFAULT NULL` SQL param (migration 0002).
   const { data, error } = await supabase.rpc('adjust_pantry_quantity', {
     p_item_id: itemId,
     p_delta: delta,
     p_event_type: eventType,
-    p_reason: reason ?? null,
+    ...(reason != null ? { p_reason: reason } : {}),
   });
   if (error) throw error;
   return mapRow(data, timeZone);
@@ -253,19 +294,21 @@ export async function depletePantryItem(
   reason: string | undefined,
   timeZone: string,
 ): Promise<PantryItem> {
+  // p_reason is a `DEFAULT NULL` SQL param (migration 0002).
   const { data, error } = await supabase.rpc('deplete_pantry_item', {
     p_item_id: itemId,
     p_event_type: eventType,
-    p_reason: reason ?? null,
+    ...(reason != null ? { p_reason: reason } : {}),
   });
   if (error) throw error;
   return mapRow(data, timeZone);
 }
 
 export async function restorePantryItem(itemId: string, reason: string | undefined, timeZone: string): Promise<PantryItem> {
+  // p_reason is a `DEFAULT NULL` SQL param (migration 0002).
   const { data, error } = await supabase.rpc('restore_pantry_item', {
     p_item_id: itemId,
-    p_reason: reason ?? null,
+    ...(reason != null ? { p_reason: reason } : {}),
   });
   if (error) throw error;
   return mapRow(data, timeZone);

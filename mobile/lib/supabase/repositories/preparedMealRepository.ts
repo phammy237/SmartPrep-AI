@@ -1,6 +1,7 @@
-import { MealLog, NutritionSnapshot, PreparedMeal } from '@/types';
+import { MealLog, NutritionSnapshot, PREPARED_MEAL_STATUS_VALUES, PreparedMeal } from '@/types';
 import { Database } from '@/types/database.types';
 import { supabase } from '../client';
+import { assertEnumValue } from './enumMappers';
 import { mapMealLogRow } from './mealLogRepository';
 
 type PreparedMealRow = Database['public']['Tables']['prepared_meals']['Row'];
@@ -20,7 +21,7 @@ export function mapPreparedMealRow(row: PreparedMealRow): PreparedMeal {
     preparedAt: row.prepared_at,
     storageLocation: row.storage_location ?? undefined,
     useByDate: row.use_by_date ?? undefined,
-    status: row.status,
+    status: assertEnumValue(PREPARED_MEAL_STATUS_VALUES, row.status, 'prepared_meals.status'),
   };
 }
 
@@ -39,12 +40,13 @@ export async function logPreparedMealConsumption(params: {
   notes?: string;
   idempotencyKey?: string;
 }): Promise<{ preparedMeal: PreparedMeal; mealLog: MealLog }> {
+  // p_notes / p_idempotency_key are `DEFAULT NULL` SQL params (migration 0003).
   const { data, error } = await supabase.rpc('log_prepared_meal_consumption', {
     p_prepared_meal_id: params.preparedMealId,
     p_servings_consumed: params.servingsConsumed,
     p_meal_type: params.mealType,
-    p_notes: params.notes ?? null,
-    p_idempotency_key: params.idempotencyKey ?? null,
+    ...(params.notes != null ? { p_notes: params.notes } : {}),
+    ...(params.idempotencyKey != null ? { p_idempotency_key: params.idempotencyKey } : {}),
   });
   if (error) throw error;
   const result = data as unknown as { preparedMeal: PreparedMealRow; mealLog: Database['public']['Tables']['meal_logs']['Row'] };

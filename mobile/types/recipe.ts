@@ -2,22 +2,32 @@ import type { IngredientCoverage } from '@/lib/nutrition/pantryCoverage';
 import { QuantityUnit } from './common';
 import { NutritionFacts, NutritionSnapshot, NutritionStatus } from './nutrition';
 
-export type RecipeDifficulty = 'easy' | 'medium' | 'hard';
+export const RECIPE_DIFFICULTY_VALUES = ['easy', 'medium', 'hard'] as const;
+export type RecipeDifficulty = (typeof RECIPE_DIFFICULTY_VALUES)[number];
 
-export type RecipeCollectionId =
-  | 'use_it_before_you_lose_it'
-  | 'cook_right_now'
-  | 'almost_there'
-  | 'quick_meals'
-  | 'for_you'
-  | 'something_different';
+export const RECIPE_COLLECTION_ID_VALUES = [
+  'use_it_before_you_lose_it',
+  'cook_right_now',
+  'almost_there',
+  'quick_meals',
+  'for_you',
+  'something_different',
+] as const;
+export type RecipeCollectionId = (typeof RECIPE_COLLECTION_ID_VALUES)[number];
 
 /**
  * How much this recipe's provenance/nutrition can be trusted. 'demo' is the
  * only label Phase 3's seed data uses - never 'source_tested'/'community_tested'
  * without real provenance, never 'verified' nutrition without USDA (Phase 4+).
  */
-export type RecipeTrustLabel = 'source_tested' | 'community_tested' | 'ai_experimental' | 'user_created' | 'demo';
+export const RECIPE_TRUST_LABEL_VALUES = [
+  'source_tested',
+  'community_tested',
+  'ai_experimental',
+  'user_created',
+  'demo',
+] as const;
+export type RecipeTrustLabel = (typeof RECIPE_TRUST_LABEL_VALUES)[number];
 
 export interface RecipeIngredient {
   ingredientId: string;

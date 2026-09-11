@@ -1,13 +1,20 @@
 import {
+  GUIDED_SCAN_SECTION_VALUES,
+  INGREDIENT_CATEGORY_VALUES,
+  PERSISTED_SCAN_STATUS_VALUES,
   PersistedScanStatus,
+  QUANTITY_UNIT_VALUES,
   QuantityUnit,
+  SCAN_MODE_VALUES,
   ScanMode,
   ScanRecord,
   ScanRecordDetail,
   ScanRecordDetection,
+  ScanRecordSection,
 } from '@/types';
 import { Database } from '@/types/database.types';
 import { supabase } from '../client';
+import { assertEnumValue, parseEnumValueOrNull } from './enumMappers';
 
 type ScanRow = Database['public']['Tables']['scans']['Row'];
 type ScanSectionRow = Database['public']['Tables']['scan_sections']['Row'];
@@ -24,12 +31,12 @@ const PREVIEW_LIMIT = 4;
 function mapDetectionRow(row: ScanDetectionRow): ScanRecordDetection {
   return {
     detectionId: row.detection_id,
-    section: row.section,
+    section: parseEnumValueOrNull(GUIDED_SCAN_SECTION_VALUES, row.section, 'scan_detections.section'),
     name: row.display_name,
     canonicalIngredientId: row.canonical_ingredient_id,
     quantity: row.quantity,
-    unit: row.unit as QuantityUnit,
-    category: row.category,
+    unit: assertEnumValue(QUANTITY_UNIT_VALUES, row.unit, 'scan_detections.unit'),
+    category: parseEnumValueOrNull(INGREDIENT_CATEGORY_VALUES, row.category, 'scan_detections.category'),
     identityEdited: row.identity_edited,
     quantityEdited: row.quantity_edited,
     pantryItemId: row.pantry_item_id,
@@ -42,14 +49,19 @@ function mapScanRow(row: ScanJoinRow): ScanRecord {
   return {
     id: row.id,
     clientScanId: row.client_scan_id,
-    mode: row.mode,
-    status: row.status,
+    mode: assertEnumValue(SCAN_MODE_VALUES, row.mode, 'scans.mode'),
+    status: assertEnumValue(PERSISTED_SCAN_STATUS_VALUES, row.status, 'scans.status'),
     startedAt: row.started_at,
     confirmedAt: row.confirmed_at,
     createdAt: row.created_at,
     sections: [...row.scan_sections]
       .sort((a, b) => a.sort_order - b.sort_order)
-      .map((s) => ({ section: s.section, skipped: s.skipped })),
+      .map(
+        (s): ScanRecordSection => ({
+          section: assertEnumValue(GUIDED_SCAN_SECTION_VALUES, s.section, 'scan_sections.section'),
+          skipped: s.skipped,
+        }),
+      ),
     confirmedItemCount: confirmed.length,
     detectionCount: detections.length,
     ingredientPreview: confirmed.slice(0, PREVIEW_LIMIT).map((d) => d.display_name),
@@ -118,10 +130,11 @@ export async function beginScanConfirmation(params: {
   sections: { section: string; skipped: boolean; sortOrder: number }[];
   detections: BeginScanConfirmationDetection[];
 }): Promise<BeginScanConfirmationResult> {
+  // p_started_at is a `DEFAULT NULL` SQL param (migration 0008).
   const { data, error } = await supabase.rpc('begin_scan_confirmation', {
     p_client_scan_id: params.clientScanId,
     p_mode: params.mode,
-    p_started_at: params.startedAt ?? null,
+    ...(params.startedAt != null ? { p_started_at: params.startedAt } : {}),
     p_sections: params.sections.map((s) => ({
       section: s.section,
       skipped: s.skipped,
@@ -168,5 +181,9 @@ export async function finalizeScanConfirmation(
   const { data, error } = await supabase.rpc('finalize_scan_confirmation', { p_scan_id: scanId });
   if (error) throw error;
   const row = data as unknown as ScanRow;
-  return { id: row.id, status: row.status, confirmedAt: row.confirmed_at };
+  return {
+    id: row.id,
+    status: assertEnumValue(PERSISTED_SCAN_STATUS_VALUES, row.status, 'scans.status'),
+    confirmedAt: row.confirmed_at,
+  };
 }

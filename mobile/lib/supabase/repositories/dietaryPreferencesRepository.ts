@@ -1,6 +1,7 @@
-import { CookingTimePreference, DietaryPreference, SmartPrepPriorities } from '@/types';
+import { COOKING_TIME_PREFERENCE_VALUES, CookingTimePreference, DietaryPreference, SmartPrepPriorities } from '@/types';
 import { Database, Json } from '@/types/database.types';
 import { supabase } from '../client';
+import { assertEnumValue } from './enumMappers';
 
 type DietaryPreferencesRowDb = Database['public']['Tables']['dietary_preferences']['Row'];
 
@@ -34,7 +35,7 @@ function mapRow(row: DietaryPreferencesRowDb): DietaryPreferencesRecord {
     allergies: row.allergens,
     favoriteCuisines: row.preferred_cuisines,
     dislikedFoods: row.excluded_ingredients,
-    cookingTime: row.max_cook_time,
+    cookingTime: assertEnumValue(COOKING_TIME_PREFERENCE_VALUES, row.max_cook_time, 'dietary_preferences.max_cook_time'),
     priorities: isSmartPrepPriorities(row.priorities) ? row.priorities : DEFAULT_PRIORITIES,
     weeklyGroceryBudget: row.weekly_grocery_budget ?? 75,
   };

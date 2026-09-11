@@ -1,7 +1,19 @@
-import { NutritionSnapshot, Recipe, RecipeCollectionId, RecipeDifficulty, RecipeIngredient, RecipeTrustLabel, RecommendationReason, SavedRecipe } from '@/types';
+import {
+  NUTRITION_STATUS_VALUES,
+  NutritionSnapshot,
+  QUANTITY_UNIT_VALUES,
+  RECIPE_COLLECTION_ID_VALUES,
+  RECIPE_DIFFICULTY_VALUES,
+  RECIPE_TRUST_LABEL_VALUES,
+  Recipe,
+  RecipeIngredient,
+  RecommendationReason,
+  SavedRecipe,
+} from '@/types';
 import { Database } from '@/types/database.types';
 import { ingredientPhotoUri } from '@/utils/ingredientPhoto';
 import { supabase } from '../client';
+import { assertEnumValue, parseNullableEnumValue } from './enumMappers';
 
 type RecipeVersionRow = Database['public']['Tables']['recipe_versions']['Row'];
 type RecipeIngredientRow = Database['public']['Tables']['recipe_ingredients']['Row'];
@@ -28,7 +40,7 @@ function mapIngredientRow(row: RecipeIngredientRow): RecipeIngredient {
     // Every Phase 3 seeded ingredient has a real quantity/unit; the fallback
     // only guards against a hypothetical future ingredient authored without one.
     quantity: row.quantity ?? 0,
-    unit: (row.unit ?? 'item') as RecipeIngredient['unit'],
+    unit: parseNullableEnumValue(QUANTITY_UNIT_VALUES, row.unit, 'recipe_ingredients.unit') ?? 'item',
     isPantryStaple: row.is_pantry_staple,
     recipeIngredientId: row.id,
     isOptional: row.is_optional,
@@ -47,7 +59,7 @@ function mapVersionRow(row: RecipeVersionJoinRow): Recipe {
     imageUri: row.image_uri ?? '',
     prepTimeMinutes: row.prep_time_minutes ?? 0,
     cookTimeMinutes: row.cook_time_minutes ?? 0,
-    difficulty: (row.difficulty ?? 'easy') as RecipeDifficulty,
+    difficulty: parseNullableEnumValue(RECIPE_DIFFICULTY_VALUES, row.difficulty, 'recipe_versions.difficulty') ?? 'easy',
     servings: row.servings,
     additionalCostEstimate: row.additional_cost_estimate ?? 0,
     // Computed by recipeService against the live pantry on every read - not
@@ -64,14 +76,19 @@ function mapVersionRow(row: RecipeVersionJoinRow): Recipe {
       fiberG: snapshot.fiberG ?? 0,
     },
     nutritionSnapshot: snapshot,
-    nutritionStatus: row.nutrition_status,
+    nutritionStatus: assertEnumValue(NUTRITION_STATUS_VALUES, row.nutrition_status, 'recipe_versions.nutrition_status'),
     reasons: Array.isArray(row.demo_reasons) ? (row.demo_reasons as unknown as RecommendationReason[]) : [],
     ingredients,
     steps: row.instructions,
     cuisines: row.cuisines,
     tags: row.tags,
-    collections: row.collections as RecipeCollectionId[],
-    trustLabel: (row.recipes?.trust_label ?? 'demo') as RecipeTrustLabel,
+    collections: row.collections.map((c) =>
+      assertEnumValue(RECIPE_COLLECTION_ID_VALUES, c, 'recipe_versions.collections[]'),
+    ),
+    trustLabel:
+      row.recipes?.trust_label == null
+        ? 'demo'
+        : assertEnumValue(RECIPE_TRUST_LABEL_VALUES, row.recipes.trust_label, 'recipes.trust_label'),
   };
 }
 

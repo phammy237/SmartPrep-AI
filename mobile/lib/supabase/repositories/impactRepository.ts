@@ -44,10 +44,12 @@ function mapSummary(data: Record<string, unknown>): KitchenImpactSummary {
  * the raw ledger.
  */
 export async function fetchKitchenImpactSummary(args: FetchKitchenImpactArgs): Promise<KitchenImpactSummary> {
+  // p_start_date / p_end_date are `DEFAULT NULL` SQL params (migration 0006):
+  // a null bound and an omitted bound both mean "unbounded on that side".
   const { data, error } = await supabase.rpc('get_kitchen_impact_summary', {
-    p_start_date: args.startDate,
-    p_end_date: args.endDate,
     p_timezone: args.timeZone,
+    ...(args.startDate !== null ? { p_start_date: args.startDate } : {}),
+    ...(args.endDate !== null ? { p_end_date: args.endDate } : {}),
   });
   if (error) throw error;
   if (data == null || typeof data !== 'object') {

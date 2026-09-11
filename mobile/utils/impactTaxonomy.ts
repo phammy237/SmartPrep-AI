@@ -9,9 +9,27 @@
  * one obvious place.
  */
 
-import { Database } from '@/types/database.types';
+/**
+ * Every event_type the pantry_events CHECK constraint allows (migration 0002).
+ * The generated `Database` type exposes `pantry_events.event_type` as plain
+ * `string` (a CHECK constraint is not reflected in generated TypeScript), so the
+ * domain union is authored here - hand-kept in sync with the SQL, exactly as the
+ * classification groups below already are.
+ */
+export const ALL_PANTRY_EVENT_TYPES = [
+  'added',
+  'adjusted',
+  'consumed',
+  'deducted_by_cooking',
+  'depleted',
+  'discarded',
+  'donated',
+  'traded',
+  'corrected',
+  'restored',
+] as const;
 
-export type PantryEventType = Database['public']['Tables']['pantry_events']['Row']['event_type'];
+export type PantryEventType = (typeof ALL_PANTRY_EVENT_TYPES)[number];
 
 /** Inventory coming in - counted on its own, never as "used" or "discarded". */
 export const IMPACT_ADDED_EVENT_TYPES = ['added'] as const;
@@ -46,18 +64,3 @@ export function classifyPantryEventForImpact(eventType: PantryEventType): Impact
   if ((IMPACT_DISCARDED_EVENT_TYPES as readonly string[]).includes(eventType)) return 'discarded';
   return 'excluded';
 }
-
-/** Every event_type the pantry_events CHECK constraint allows (0002). Kept here so the
- *  taxonomy test can assert the classification is total. */
-export const ALL_PANTRY_EVENT_TYPES: PantryEventType[] = [
-  'added',
-  'adjusted',
-  'consumed',
-  'deducted_by_cooking',
-  'depleted',
-  'discarded',
-  'donated',
-  'traded',
-  'corrected',
-  'restored',
-];

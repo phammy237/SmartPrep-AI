@@ -149,6 +149,7 @@ do $$
 declare
   leaked_count int;
   affected int;
+  succeeded boolean;
 begin
   select count(*) into leaked_count from public.dietary_preferences where user_id = 'TEST_USER_B_ID'::uuid;
   if leaked_count <> 0 then
@@ -171,9 +172,18 @@ begin
     raise exception 'FAIL: user_a was able to update user_b''s profile';
   end if;
 
-  delete from public.dietary_preferences where user_id = 'TEST_USER_B_ID'::uuid;
-  get diagnostics affected = row_count;
-  if affected <> 0 then
+  -- dietary_preferences has no DELETE grant to authenticated at all (0001),
+  -- so this raises permission_denied rather than being RLS-filtered to 0
+  -- rows - either outcome proves the delete didn't apply; only an applied
+  -- change (affected <> 0) is a real failure.
+  succeeded := false;
+  begin
+    delete from public.dietary_preferences where user_id = 'TEST_USER_B_ID'::uuid;
+    get diagnostics affected = row_count;
+    succeeded := (affected <> 0);
+  exception when others then succeeded := false;
+  end;
+  if succeeded then
     raise exception 'FAIL: user_a was able to delete user_b''s dietary_preferences (no delete policy should exist at all)';
   end if;
 
@@ -193,20 +203,32 @@ do $$
 declare
   total_count int;
 begin
-  select count(*) into total_count from public.profiles;
-  if total_count <> 0 then
-    raise exception 'FAIL: anon role could read % profiles rows', total_count;
-  end if;
+  -- anon has no GRANT at all on any public table (no migration grants
+  -- anything to anon), so each of these raises permission_denied rather than
+  -- being RLS-filtered to 0 rows - either outcome proves anon cannot read.
+  begin
+    select count(*) into total_count from public.profiles;
+    if total_count <> 0 then
+      raise exception 'FAIL: anon role could read % profiles rows', total_count;
+    end if;
+  exception when insufficient_privilege then null;
+  end;
 
-  select count(*) into total_count from public.dietary_preferences;
-  if total_count <> 0 then
-    raise exception 'FAIL: anon role could read % dietary_preferences rows', total_count;
-  end if;
+  begin
+    select count(*) into total_count from public.dietary_preferences;
+    if total_count <> 0 then
+      raise exception 'FAIL: anon role could read % dietary_preferences rows', total_count;
+    end if;
+  exception when insufficient_privilege then null;
+  end;
 
-  select count(*) into total_count from public.nutrition_goals;
-  if total_count <> 0 then
-    raise exception 'FAIL: anon role could read % nutrition_goals rows', total_count;
-  end if;
+  begin
+    select count(*) into total_count from public.nutrition_goals;
+    if total_count <> 0 then
+      raise exception 'FAIL: anon role could read % nutrition_goals rows', total_count;
+    end if;
+  exception when insufficient_privilege then null;
+  end;
 
   raise notice 'PASS: anonymous role cannot read any private data';
 end $$;
@@ -233,6 +255,12 @@ commit;
 -- A session-scoped scratch table to pass an id between transactions/roles
 -- without relying on psql-only `\gset` (works identically in the SQL editor).
 create temporary table if not exists rls_test_scratch (key text primary key, value uuid);
+-- Test-harness object only (session-scoped, dropped in cleanup / at session
+-- end) - not a product table, so no migration grants it. It must be readable
+-- across the authenticated/anon role-switches this file does within the same
+-- session, or those blocks hit permission_denied on the scratch table itself
+-- rather than testing the RPC/RLS behavior they're actually meant to check.
+grant select, insert, update, delete on rls_test_scratch to authenticated, anon;
 
 -- ----------------------------------------------------------------------------
 -- Setup: user_a and user_b each create one pantry item via the real RPC.
@@ -538,15 +566,23 @@ declare
   total_count int;
   succeeded boolean := false;
 begin
-  select count(*) into total_count from public.pantry_items;
-  if total_count <> 0 then
-    raise exception 'FAIL: anon role could read % pantry_items rows', total_count;
-  end if;
+  -- anon has no GRANT at all on any public table - permission_denied here is
+  -- an equally valid proof of "cannot read" as an RLS-filtered 0-row count.
+  begin
+    select count(*) into total_count from public.pantry_items;
+    if total_count <> 0 then
+      raise exception 'FAIL: anon role could read % pantry_items rows', total_count;
+    end if;
+  exception when insufficient_privilege then null;
+  end;
 
-  select count(*) into total_count from public.pantry_events;
-  if total_count <> 0 then
-    raise exception 'FAIL: anon role could read % pantry_events rows', total_count;
-  end if;
+  begin
+    select count(*) into total_count from public.pantry_events;
+    if total_count <> 0 then
+      raise exception 'FAIL: anon role could read % pantry_events rows', total_count;
+    end if;
+  exception when insufficient_privilege then null;
+  end;
 
   begin
     perform public.create_pantry_item(
@@ -598,6 +634,8 @@ commit;
 -- ============================================================================
 
 create temporary table if not exists rls_test_scratch_p3 (key text primary key, value uuid);
+-- Test-harness object only - see the grant comment on rls_test_scratch above.
+grant select, insert, update, delete on rls_test_scratch_p3 to authenticated, anon;
 
 -- ----------------------------------------------------------------------------
 -- Setup: locate the seeded "Creamy Spinach Pasta" demo recipe and its Pasta
@@ -1022,6 +1060,8 @@ commit;
 -- user_b with no elevated rights, and no RLS policy or grant is relaxed.
 -- ----------------------------------------------------------------------------
 create temporary table if not exists rls_test_scratch_p3_num (key text primary key, value numeric);
+-- Test-harness object only - see the grant comment on rls_test_scratch above.
+grant select, insert, update, delete on rls_test_scratch_p3_num to authenticated, anon;
 
 begin;
 set local role postgres;
@@ -1178,7 +1218,7 @@ begin
   end if;
 
   -- Restore stock and clean up this event so it doesn't interfere with later checks.
-  perform public.adjust_pantry_quantity(pantry_id, quantity_before - 50, 'corrected', 'rls test cleanup - restore stock');
+  perform public.adjust_pantry_quantity(pantry_id, quantity_before - 50, 'adjusted', 'rls test cleanup - restore stock');
   perform public.cancel_cooking_event(event4.id, 'rls test cleanup');
 
   raise notice 'PASS: a deduction that was coverable when planned but no longer is by completion time is rejected atomically, with no partial pantry change';
@@ -1415,10 +1455,16 @@ begin
     raise exception 'FAIL: a client could not void their own meal_logs row through the restricted column grant';
   end if;
 
-  -- Re-voiding (or un-voiding) must fail.
+  -- Re-voiding (or un-voiding) must fail. Uses clock_timestamp(), not now():
+  -- now() is frozen for the whole transaction (transaction start time), so a
+  -- second now() here would equal the value the first void just wrote, and
+  -- the trigger's `new.voided_at is distinct from old.voided_at` guard would
+  -- never fire - not because re-voiding is allowed, but because the "new"
+  -- value would be byte-identical to the old one. clock_timestamp() actually
+  -- advances per-statement, giving a genuinely different value to attempt.
   succeeded := false;
   begin
-    update public.meal_logs set voided_at = now() where id = log_id;
+    update public.meal_logs set voided_at = clock_timestamp() where id = log_id;
     succeeded := true;
   exception when others then succeeded := false;
   end;
@@ -1448,10 +1494,20 @@ select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_A_ID
 do $$
 declare
   affected int;
+  succeeded boolean;
 begin
-  delete from public.meal_logs where id = (select value from rls_test_scratch_p3 where key = 'meal_log_1_id');
-  get diagnostics affected = row_count;
-  if affected <> 0 then raise exception 'FAIL: a meal_logs row was hard-deleted by a client'; end if;
+  -- meal_logs has no DELETE grant to authenticated at all (0003: only SELECT
+  -- + a restricted-column UPDATE), so this raises permission_denied rather
+  -- than being RLS-filtered to 0 rows - either outcome proves it didn't
+  -- apply; only an applied change (affected <> 0) is a real failure.
+  succeeded := false;
+  begin
+    delete from public.meal_logs where id = (select value from rls_test_scratch_p3 where key = 'meal_log_1_id');
+    get diagnostics affected = row_count;
+    succeeded := (affected <> 0);
+  exception when others then succeeded := false;
+  end;
+  if succeeded then raise exception 'FAIL: a meal_logs row was hard-deleted by a client'; end if;
   raise notice 'PASS: meal_logs rows cannot be hard-deleted through normal client access';
 end $$;
 
@@ -1594,13 +1650,15 @@ declare
   total_count int;
   succeeded boolean;
 begin
-  select count(*) into total_count from public.recipes; if total_count <> 0 then raise exception 'FAIL: anon read % recipes rows (only public ones should ever be readable, and only by authenticated users)', total_count; end if;
-  select count(*) into total_count from public.recipe_versions; if total_count <> 0 then raise exception 'FAIL: anon read % recipe_versions rows', total_count; end if;
-  select count(*) into total_count from public.saved_recipes; if total_count <> 0 then raise exception 'FAIL: anon read % saved_recipes rows', total_count; end if;
-  select count(*) into total_count from public.meal_plan_items; if total_count <> 0 then raise exception 'FAIL: anon read % meal_plan_items rows', total_count; end if;
-  select count(*) into total_count from public.cooking_events; if total_count <> 0 then raise exception 'FAIL: anon read % cooking_events rows', total_count; end if;
-  select count(*) into total_count from public.prepared_meals; if total_count <> 0 then raise exception 'FAIL: anon read % prepared_meals rows', total_count; end if;
-  select count(*) into total_count from public.meal_logs; if total_count <> 0 then raise exception 'FAIL: anon read % meal_logs rows', total_count; end if;
+  -- anon has no GRANT at all on any public table - permission_denied here is
+  -- an equally valid proof of "cannot read" as an RLS-filtered 0-row count.
+  begin select count(*) into total_count from public.recipes; if total_count <> 0 then raise exception 'FAIL: anon read % recipes rows (only public ones should ever be readable, and only by authenticated users)', total_count; end if; exception when insufficient_privilege then null; end;
+  begin select count(*) into total_count from public.recipe_versions; if total_count <> 0 then raise exception 'FAIL: anon read % recipe_versions rows', total_count; end if; exception when insufficient_privilege then null; end;
+  begin select count(*) into total_count from public.saved_recipes; if total_count <> 0 then raise exception 'FAIL: anon read % saved_recipes rows', total_count; end if; exception when insufficient_privilege then null; end;
+  begin select count(*) into total_count from public.meal_plan_items; if total_count <> 0 then raise exception 'FAIL: anon read % meal_plan_items rows', total_count; end if; exception when insufficient_privilege then null; end;
+  begin select count(*) into total_count from public.cooking_events; if total_count <> 0 then raise exception 'FAIL: anon read % cooking_events rows', total_count; end if; exception when insufficient_privilege then null; end;
+  begin select count(*) into total_count from public.prepared_meals; if total_count <> 0 then raise exception 'FAIL: anon read % prepared_meals rows', total_count; end if; exception when insufficient_privilege then null; end;
+  begin select count(*) into total_count from public.meal_logs; if total_count <> 0 then raise exception 'FAIL: anon read % meal_logs rows', total_count; end if; exception when insufficient_privilege then null; end;
 
   succeeded := false;
   begin
@@ -1660,6 +1718,8 @@ commit;
 -- ============================================================================
 
 create temporary table if not exists rls_test_scratch_grocery (key text primary key, value uuid);
+-- Test-harness object only - see the grant comment on rls_test_scratch above.
+grant select, insert, update, delete on rls_test_scratch_grocery to authenticated, anon;
 
 -- ----------------------------------------------------------------------------
 -- Owner CRUD: user_a resolves their active list, inserts an item, reads it,
@@ -1884,11 +1944,19 @@ declare
   total int;
   succeeded boolean := false;
 begin
-  select count(*) into total from public.grocery_lists;
-  if total <> 0 then raise exception 'FAIL: anon can read grocery_lists (% rows)', total; end if;
+  -- anon has no GRANT at all on any public table - permission_denied here is
+  -- an equally valid proof of "cannot read" as an RLS-filtered 0-row count.
+  begin
+    select count(*) into total from public.grocery_lists;
+    if total <> 0 then raise exception 'FAIL: anon can read grocery_lists (% rows)', total; end if;
+  exception when insufficient_privilege then null;
+  end;
 
-  select count(*) into total from public.grocery_list_items;
-  if total <> 0 then raise exception 'FAIL: anon can read grocery_list_items (% rows)', total; end if;
+  begin
+    select count(*) into total from public.grocery_list_items;
+    if total <> 0 then raise exception 'FAIL: anon can read grocery_list_items (% rows)', total; end if;
+  exception when insufficient_privilege then null;
+  end;
 
   begin
     perform public.get_or_create_active_grocery_list();
@@ -1933,6 +2001,8 @@ commit;
 -- ============================================================================
 
 create temporary table if not exists rls_test_scratch_impact (key text primary key, value uuid);
+-- Test-harness object only - see the grant comment on rls_test_scratch above.
+grant select, insert, update, delete on rls_test_scratch_impact to authenticated, anon;
 
 -- ----------------------------------------------------------------------------
 -- Setup: user_a generates added(2) / used(4: 2 consumed + 1 consumed + 1
@@ -2522,6 +2592,8 @@ set local role postgres;
 drop table if exists _rls_scan_a;
 create temp table _rls_scan_a as
   select id from public.scans where client_scan_id = 'rls-scan-a' and user_id = 'TEST_USER_A_ID'::uuid;
+-- Test-harness object only - see the grant comment on rls_test_scratch above.
+grant select on _rls_scan_a to authenticated, anon;
 do $$
 begin
   if (select count(*) from _rls_scan_a) <> 1 then raise exception 'FAIL: could not stash user_a scan id'; end if;
@@ -2643,6 +2715,8 @@ create temp table _rls_gi_a as
   select
     (select id from public.grocery_list_items where user_id = 'TEST_USER_A_ID'::uuid and display_name = 'rls-transfer-eggs') as checked_id,
     (select id from public.grocery_list_items where user_id = 'TEST_USER_A_ID'::uuid and display_name = 'rls-transfer-unchecked') as unchecked_id;
+-- Test-harness object only - see the grant comment on rls_test_scratch above.
+grant select on _rls_gi_a to authenticated, anon;
 do $$
 begin
   if (select checked_id from _rls_gi_a) is null or (select unchecked_id from _rls_gi_a) is null then
@@ -2903,6 +2977,8 @@ create temp table _rls_trip_a as
     null::uuid as new_active_id,
     null::uuid as completed_item_id,
     null::timestamptz as completed_at;
+-- Test-harness object only - see the grant comment on rls_test_scratch above.
+grant select on _rls_trip_a to authenticated, anon;
 commit;
 
 begin;
@@ -3303,6 +3379,15 @@ begin
 end $$;
 commit;
 
+-- The active grocery_lists row this phase's get_or_create_active_grocery_list()
+-- call created (Phase 8's cleanup above already removed user_a's prior lists,
+-- so this phase always starts a fresh one) - the items are gone but the list
+-- row itself was never deleted, leaving an empty "active" list behind.
+begin;
+set local role postgres;
+delete from public.grocery_lists where user_id = 'TEST_USER_A_ID'::uuid and status = 'active';
+commit;
+
 -- ============================================================================
 -- Barcode intake (migration 0012): barcode/brand are provenance on an
 -- owner-scoped row - they add no new access path. Verify:
@@ -3345,10 +3430,24 @@ select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID
 do $$
 declare v_id uuid; n int;
 begin
+  -- find A's item id as postgres (RLS would otherwise filter this SELECT to
+  -- 0 rows for user_b, leaving v_id null and making the update below a
+  -- vacuous no-op that always "passes" regardless of grants/RLS), then
+  -- switch back to user_b to attempt the actual hijack - same pattern used
+  -- for the receipt-intake cross-user check further down this file.
+  set local role postgres;
   select id into v_id from public.pantry_items where display_name = 'RLS Barcode Item A';
-  -- user_b's UPDATE is filtered by RLS to zero rows (not an error) - the point
-  -- is that user_a's provenance is untouched.
-  update public.pantry_items set brand = 'HIJACKED' where id = v_id;
+  set local role authenticated;
+  perform set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
+
+  -- pantry_items has no UPDATE grant to authenticated for `brand` at all
+  -- (0002/0012: only specific metadata columns are grantable), so this raises
+  -- permission_denied rather than being RLS-filtered to 0 rows - either
+  -- outcome proves user_a's provenance is untouched.
+  begin
+    update public.pantry_items set brand = 'HIJACKED' where id = v_id;
+  exception when insufficient_privilege then null;
+  end;
   set local role postgres;
   select count(*) into n from public.pantry_items where id = v_id and brand = 'RLS Brand';
   if n <> 1 then raise exception 'FAIL: user_b altered user_a barcode provenance'; end if;
@@ -3362,8 +3461,13 @@ select set_config('request.jwt.claims', '', true);
 do $$
 declare n int;
 begin
-  select count(*) into n from public.pantry_items where display_name = 'RLS Barcode Item A';
-  if n <> 0 then raise exception 'FAIL: anon read a barcode-sourced pantry row'; end if;
+  -- anon has no GRANT at all on any public table - permission_denied here is
+  -- an equally valid proof of "cannot read" as an RLS-filtered 0-row count.
+  begin
+    select count(*) into n from public.pantry_items where display_name = 'RLS Barcode Item A';
+    if n <> 0 then raise exception 'FAIL: anon read a barcode-sourced pantry row'; end if;
+  exception when insufficient_privilege then null;
+  end;
   raise notice 'PASS: anon cannot read barcode-sourced pantry rows';
 end $$;
 commit;
@@ -3526,6 +3630,12 @@ begin
   if v.status <> 'verified' or v.provider <> 'usda' or v.fdc_id <> 777777 then
     raise exception 'FAIL: service-role verified upsert wrote status=% provider=% fdc_id=%', v.status, v.provider, v.fdc_id;
   end if;
+
+  -- usda_foods only grants SELECT to authenticated (0007), not service_role -
+  -- the RPC call above still works as service_role regardless (it's the
+  -- privileged write path being tested), but this extra verification read of
+  -- the secondary-cache row needs a role that can actually read the table.
+  set local role postgres;
   select * into u from public.usda_foods where fdc_id = 777777;
   if not found then raise exception 'FAIL: verified upsert did not also write the usda_foods secondary cache row'; end if;
   raise notice 'PASS: service_role verified upsert writes barcode_product_nutrition + usda_foods atomically';
@@ -3596,7 +3706,7 @@ begin
   set local role postgres;
   select id into v_scan from public.receipt_scans where client_receipt_id = 'rls-receipt-A';
   set local role authenticated;
-  select set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
+  perform set_config('request.jwt.claims', json_build_object('sub', 'TEST_USER_B_ID', 'role', 'authenticated')::text, true);
   begin
     perform public.link_receipt_scan_item(v_scan, 'L0', gen_random_uuid());
   exception when others then denied := true;

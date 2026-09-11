@@ -1,6 +1,13 @@
-import { MealLog, NutritionSnapshot } from '@/types';
+import {
+  MEAL_LOG_SOURCE_VALUES,
+  MEAL_TYPE_VALUES,
+  MealLog,
+  NUTRITION_STATUS_VALUES,
+  NutritionSnapshot,
+} from '@/types';
 import { Database, Json } from '@/types/database.types';
 import { supabase } from '../client';
+import { assertEnumValue } from './enumMappers';
 
 // NutritionSnapshot is a closed interface (no index signature), so it isn't
 // structurally assignable to the open Json type - this is a plain data
@@ -17,15 +24,15 @@ export function mapMealLogRow(row: MealLogRow): MealLog {
     consumedAt: row.consumed_at,
     localDate: row.local_date,
     timezone: row.timezone,
-    mealType: row.meal_type,
+    mealType: assertEnumValue(MEAL_TYPE_VALUES, row.meal_type, 'meal_logs.meal_type'),
     recipeVersionId: row.recipe_version_id ?? undefined,
     cookingEventId: row.cooking_event_id ?? undefined,
     preparedMealId: row.prepared_meal_id ?? undefined,
     servingsConsumed: row.servings_consumed ?? undefined,
     gramsConsumed: row.grams_consumed ?? undefined,
     nutritionSnapshot: row.nutrition_snapshot as unknown as NutritionSnapshot,
-    nutritionStatus: row.nutrition_status,
-    logSource: row.log_source,
+    nutritionStatus: assertEnumValue(NUTRITION_STATUS_VALUES, row.nutrition_status, 'meal_logs.nutrition_status'),
+    logSource: assertEnumValue(MEAL_LOG_SOURCE_VALUES, row.log_source, 'meal_logs.log_source'),
     notes: row.notes ?? undefined,
     voidedAt: row.voided_at ?? undefined,
     voidReason: row.void_reason ?? undefined,
@@ -54,12 +61,15 @@ export async function quickAddMealLog(params: {
   idempotencyKey: string;
   consumedAt?: string;
 }): Promise<MealLog> {
+  // p_notes is `DEFAULT NULL` and p_consumed_at is `DEFAULT now()` and the RPC
+  // body coalesces it to now() (migration 0003) - omitting either is identical
+  // to the previous `?? null`.
   const { data, error } = await supabase.rpc('quick_add_meal_log', {
     p_meal_type: params.mealType,
     p_nutrition: toJson(params.nutrition),
     p_idempotency_key: params.idempotencyKey,
-    p_notes: params.notes ?? null,
-    p_consumed_at: params.consumedAt ?? null,
+    ...(params.notes != null ? { p_notes: params.notes } : {}),
+    ...(params.consumedAt != null ? { p_consumed_at: params.consumedAt } : {}),
   });
   if (error) throw error;
   return mapMealLogRow(data);
@@ -89,16 +99,19 @@ export async function correctMealLog(params: {
   newIdempotencyKey?: string;
   newConsumedAt?: string;
 }): Promise<{ voided: MealLog; replacement: MealLog }> {
+  // p_new_servings_consumed / p_new_grams_consumed / p_new_notes /
+  // p_new_idempotency_key / p_new_consumed_at are all `DEFAULT NULL` SQL params
+  // (migration 0003) - omitting is identical to sending SQL NULL.
   const { data, error } = await supabase.rpc('correct_meal_log', {
     p_meal_log_id: params.mealLogId,
     p_reason: params.reason,
     p_new_meal_type: params.newMealType,
     p_new_nutrition: toJson(params.newNutrition),
-    p_new_servings_consumed: params.newServingsConsumed ?? null,
-    p_new_grams_consumed: params.newGramsConsumed ?? null,
-    p_new_notes: params.newNotes ?? null,
-    p_new_idempotency_key: params.newIdempotencyKey ?? null,
-    p_new_consumed_at: params.newConsumedAt ?? null,
+    ...(params.newServingsConsumed != null ? { p_new_servings_consumed: params.newServingsConsumed } : {}),
+    ...(params.newGramsConsumed != null ? { p_new_grams_consumed: params.newGramsConsumed } : {}),
+    ...(params.newNotes != null ? { p_new_notes: params.newNotes } : {}),
+    ...(params.newIdempotencyKey != null ? { p_new_idempotency_key: params.newIdempotencyKey } : {}),
+    ...(params.newConsumedAt != null ? { p_new_consumed_at: params.newConsumedAt } : {}),
   });
   if (error) throw error;
   const result = data as unknown as { voided: MealLogRow; replacement: MealLogRow };
