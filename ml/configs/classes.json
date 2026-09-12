@@ -1,0 +1,18 @@
+{
+  "version": "v0",
+  "classes": [
+    "apple",
+    "banana",
+    "tomato",
+    "onion",
+    "potato",
+    "carrot",
+    "broccoli",
+    "spinach",
+    "egg",
+    "milk",
+    "bread",
+    "chicken",
+    "cheese"
+  ]
+}

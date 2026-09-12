@@ -1,0 +1,11 @@
+[project]
+name = "smartprep-ml"
+version = "0.1.0"
+description = "SmartPrep custom ingredient-recognition model workspace (v0: classification baseline)."
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+# Lets `import src...` resolve when running `pytest` from this directory,
+# without needing to `pip install -e .` or manipulate sys.path in every test.
+pythonpath = ["."]
+testpaths = ["tests"]

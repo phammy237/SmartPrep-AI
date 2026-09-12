@@ -1,0 +1,34 @@
+# Datasets, model weights, and generated run outputs are never committed -
+# see ml/README.md ("Reproducibility") for how to regenerate them instead.
+
+# Raw/processed images and the generated split manifest.
+data/raw/*
+data/processed/*
+data/splits/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/splits/.gitkeep
+
+# Every training run's artifacts (checkpoints, metrics, plots). Small,
+# individually-interesting metrics.json/config.json files can still be copied
+# out and committed elsewhere deliberately if ever wanted - this only ignores
+# the bulk run-output tree by default.
+outputs/*
+!outputs/.gitkeep
+
+# Model weight / experiment-cache file types, wherever they end up.
+*.pt
+*.pth
+*.onnx
+*.tflite
+*.mlmodel
+*.ckpt
+*.h5
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/

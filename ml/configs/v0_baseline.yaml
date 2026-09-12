@@ -1,0 +1,42 @@
+# SmartPrep Ingredient Model v0 - classification baseline.
+# See ml/README.md for the full explanation of every field and how to run this.
+# See src/training/config.py for validation rules and defaults.
+
+run_name: v0-baseline
+seed: 42
+
+# --- Data ---
+classes_path: configs/classes.json
+data_dir: data/raw
+manifest_path: data/splits/manifest.csv
+force_resplit: false
+
+# --- Model / optimization ---
+image_size: 224
+batch_size: 32
+epochs: 20
+learning_rate: 0.001
+optimizer: adamw
+weight_decay: 0.0001
+pretrained: true
+backbone: resnet18 # see ml/README.md for the ResNet18 vs. EfficientNet-B0 vs. MobileNetV3-Small comparison
+
+# --- Runtime ---
+num_workers: 2
+device: auto # "auto" | "cpu" | "cuda"
+output_dir: outputs
+
+split:
+  train: 0.7
+  val: 0.15
+  test: 0.15
+
+augmentation:
+  random_horizontal_flip: true
+  random_rotation_degrees: 10.0
+  color_jitter: true
+
+early_stopping:
+  enabled: true
+  patience: 5
+  min_delta: 0.001
