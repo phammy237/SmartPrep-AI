@@ -6,27 +6,9 @@ import { Text, View } from 'react-native';
 import { Button, Screen } from '@/components';
 import { useProcessCapture } from '@/hooks';
 import { useTheme } from '@/hooks/useTheme';
-import { ScanInferenceError } from '@/services';
 import { useScanSessionStore } from '@/store';
 import { ProcessingAnimation } from '../components/ProcessingAnimation';
-
-function messageFor(err: unknown): string {
-  const code = err instanceof ScanInferenceError ? err.code : 'unknown';
-  switch (code) {
-    case 'unauthenticated':
-      return 'Your session expired. Sign in again and retry.';
-    case 'network':
-      return "You're offline. Reconnect and try again.";
-    case 'rate_limited':
-      return 'The scanner is busy right now. Wait a moment and try again.';
-    case 'upstream_timeout':
-      return 'That took too long. Try again in good light with the items in frame.';
-    case 'image_too_large':
-      return 'That photo was too large. Retake it a bit further back.';
-    default:
-      return "We couldn't read that photo. Try again, or add items by hand.";
-  }
-}
+import { messageFor } from './processingErrorMessages';
 
 export function ProcessingScreen() {
   const theme = useTheme();

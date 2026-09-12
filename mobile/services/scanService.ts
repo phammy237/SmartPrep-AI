@@ -1,5 +1,6 @@
 import { INGREDIENTS_BY_ID, resolveCanonicalIngredient } from '@/data';
 import { normalizeUnit } from '@/lib/nutrition/units';
+import { getActiveIngredientInferenceProvider, IngredientDetectionCandidate } from '@/lib/scan/providers';
 import {
   BLOCKING_REVIEW_REASONS,
   SCAN_IDENTITY_NOISE_THRESHOLD,
@@ -10,13 +11,11 @@ import {
 import {
   ScanInferenceError,
   beginScanConfirmation,
-  detectScanIngredients,
   fetchConfirmedScans,
   fetchScanDetail,
   finalizeScanConfirmation,
   linkScanDetection,
 } from '@/lib/supabase/repositories';
-import { VisionDetection } from '@/lib/validation/scanSchemas';
 import {
   FreshnessState,
   GuidedScanSection,
@@ -72,7 +71,7 @@ function skippedSection(section: ScanSection): ScanSectionResult {
  *  - a missing / low-confidence quantity is flagged (blocking) rather than fabricated
  *  - a low-confidence identity is flagged (non-blocking - the user may accept it)
  */
-function mapVisionDetection(v: VisionDetection, box: ScanDetection['boundingBox']): ScanDetection {
+function mapVisionDetection(v: IngredientDetectionCandidate, box: ScanDetection['boundingBox']): ScanDetection {
   const canonical = resolveCanonicalIngredient(v.name);
   const reviewReasons: ScanReviewReason[] = [];
 
@@ -129,12 +128,16 @@ function mapVisionDetection(v: VisionDetection, box: ScanDetection['boundingBox'
 }
 
 /**
- * REAL vision inference: capture -> authenticated Edge Function -> vision model
- * -> validated detections -> Review-ready `ScanDetection[]`.
+ * REAL ingredient inference: capture -> the active `IngredientInferenceProvider`
+ * (today: the OpenAI benchmark/fallback Edge Function; later: SmartPrep's own
+ * model - see docs/INGREDIENT_MODEL_ROADMAP.md) -> validated detections ->
+ * Review-ready `ScanDetection[]`. This function never imports a specific
+ * provider directly, only `getActiveIngredientInferenceProvider()`, so
+ * changing which model is active never requires touching this file.
  *
- * Any failure throws a `ScanInferenceError` (or bubbles a `ScanInferenceError`
- * from the repository). There is NO fallback to canned demo detections - an
- * inference failure surfaces an honest retry / manual-entry path in the UI.
+ * Any failure throws a `ScanInferenceError` (or bubbles one from the
+ * provider). There is NO fallback to canned demo detections - an inference
+ * failure surfaces an honest retry / manual-entry path in the UI.
  */
 async function processCapture(
   mode: ScanMode,
@@ -144,7 +147,7 @@ async function processCapture(
 ): Promise<ScanSectionResult> {
   await requireUserId();
 
-  const { detections: raw } = await detectScanIngredients({ image, scanMode: mode, section });
+  const { detections: raw } = await getActiveIngredientInferenceProvider().detect({ image, scanMode: mode, section });
 
   const usable = raw.filter((d) => d.confidence >= SCAN_IDENTITY_NOISE_THRESHOLD);
   const boxes = gridBoxes(usable.length);

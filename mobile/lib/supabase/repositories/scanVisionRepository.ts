@@ -8,9 +8,14 @@ import { ScanCaptureImage, ScanMode, ScanSection } from '@/types';
 import { supabase } from '../client';
 
 /**
- * The one path from the app to the vision Edge Function. `scanService` calls
- * here; nothing else invokes `supabase.functions` for scanning, and no
- * screen touches it. The OpenAI key lives only as an Edge Function secret.
+ * The transport for ONE ingredient-inference provider: the `scan-ingredients`
+ * Edge Function (OpenAI vision), wrapped by `lib/scan/providers/openAiBenchmarkProvider.ts`.
+ * That provider is `scanService`'s current default - see
+ * docs/INGREDIENT_MODEL_ROADMAP.md - but is no longer assumed to be the
+ * permanent production path; a future SmartPrep custom model is a separate
+ * provider behind the same `IngredientInferenceProvider` interface, not a
+ * change to this file. Nothing outside `lib/scan/providers/` should call this
+ * directly. The OpenAI key lives only as an Edge Function secret.
  */
 
 export type ScanInferenceErrorCode =
@@ -24,6 +29,8 @@ export type ScanInferenceErrorCode =
   | 'malformed_upstream'
   | 'model_refusal'
   | 'network'
+  /** No ingredient-inference provider is configured/available (see lib/scan/providers) - never returned by the Edge Function itself. */
+  | 'provider_unavailable'
   | 'unknown';
 
 /** A single typed failure surface for every way vision inference can go wrong. Never falls back to canned detections. */

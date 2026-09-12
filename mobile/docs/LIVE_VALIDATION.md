@@ -1,35 +1,25 @@
 # Live-validation readiness checklist
 
 Status of everything that can only be proven against a **real** Supabase project +
-real devices. Nothing in this list has been executed live in the environment this
-was built in (no linked Supabase project, no Docker, no device). This is the
-checklist to run before user testing or a TestFlight build - not a claim that any
-of it passed.
+real devices. This is the checklist to run before user testing or a TestFlight
+build - not a claim that everything below has passed just because some items now
+have.
 
 Legend: ☐ not started · ◐ partially done / code-ready · ☑ verified live (date + who)
 
 ---
 
-## 0. BLOCKER - there is no SmartPrep Supabase project yet (checked 2026-09-09)
+## 0. Project linked (updated 2026-09-11 - supersedes the original "no project" blocker)
 
-Read-only discovery via the logged-in Supabase CLI:
-
-- The SmartPrep repo is **not linked** (`supabase/.temp/` has no `project-ref`;
-  `supabase migration list` → `LegacyProjectNotLinkedError`).
-- There is **no `.env`** in the repo, so the app cannot connect to anything.
-- The Supabase account has **exactly one project**, `kkhwianmmuyvznncmsoc`
-  ("Job application prj"), and it is **a different application** - its public
-  schema is `applications, jobs, resumes, experiences, generated_answers,
-  requirement_evidence_mappings, …` (a job-application tracker), migrations
-  `0001-0012` with unrelated names. It contains **zero** SmartPrep tables.
-- **Do NOT `supabase link` + `db push` the SmartPrep migrations to that project.**
-  It would apply 15 migrations (incl. a recipe-catalog seed and `profiles`
-  changes) on top of a live unrelated database.
-
-**To unblock:** create a dedicated SmartPrep Supabase project (or designate one),
-then `supabase link` it, add `.env` with its URL + anon key, and only then work
-through the checklist below. Everything from section 1 onward is ☐ until that
-project exists.
+The original blocker recorded here (checked 2026-09-09: no linked project, no
+`.env`, only an unrelated job-application-tracker project on the account) is
+resolved. A dedicated SmartPrep Supabase project (`knbqyqhnbyotipmxygml`) now
+exists, is linked, and has `.env` configured. Migrations `0001`-`0015` are
+applied and `supabase/tests/rls_verification.sql` has passed live twice (see
+1.1/1.3 below) with explicit User A / User B isolation checks, both direct
+table access and RPC access, in both directions - no RLS/grant/schema bug
+found. Generated types (`types/database.types.ts`) have been regenerated
+against the live schema and the app aligned to them.
 
 ---
 
@@ -37,31 +27,42 @@ project exists.
 
 | # | Check | How | Status |
 |---|-------|-----|--------|
-| 1.1 | All 15 migrations apply clean on a fresh project | `npx supabase db push` against a new project ref | ☐ |
-| 1.2 | Generated types match the live schema | `npx supabase gen types typescript --linked > types/database.types.ts`, then `npm run typecheck` clean | ◐ (types are a hand-authored stand-in until this is run) |
-| 1.3 | RLS is actually enforced on every user table | Run `supabase/tests/rls_verification.sql` in the SQL editor with two throwaway accounts; must end in `ALL RLS CHECKS PASSED` | ☐ |
-| 1.4 | Security-definer RPCs reject `auth.uid() = null` and cross-user ids | Covered by 1.3; spot-check `create_pantry_item`, `complete_cooking_event`, `complete_grocery_list`, `transfer_grocery_item_to_pantry` | ☐ |
-| 1.5 | Append-only ledgers have no UPDATE/DELETE grant | `pantry_events`, `meal_logs`, `cooking_event_ingredients` - confirm in 1.3 output | ☐ |
+| 1.1 | All 15 migrations apply clean | Applied live to `knbqyqhnbyotipmxygml` | ☑ verified live (2026-09-11) |
+| 1.2 | Generated types match the live schema | `npx supabase gen types typescript --linked > types/database.types.ts`, then drift fixed at repository boundaries, `npx tsc --noEmit` clean | ☑ verified live (2026-09-11) |
+| 1.3 | RLS is actually enforced on every user table | `supabase/tests/rls_verification.sql` run live twice against `knbqyqhnbyotipmxygml` with two real throwaway accounts; ended in `ALL RLS CHECKS PASSED` both times | ☑ verified live (2026-09-11) |
+| 1.4 | Security-definer RPCs reject `auth.uid() = null` and cross-user ids | Covered by 1.3, plus a standalone independent isolation script (direct table + RPC access, both directions) | ☑ verified live (2026-09-11) |
+| 1.5 | Append-only ledgers have no UPDATE/DELETE grant | `pantry_events`, `meal_logs`, `cooking_event_ingredients` - confirmed in 1.3 output (several were test-assumption bugs, not real gaps - see session notes) | ☑ verified live (2026-09-11) |
 | 1.6 | Recipe catalog seed present | `0004` seed produced 16 public `trust_label = 'demo'` recipes | ☐ |
-| 1.7 | `nutrition_reference` cache table writable only by the Edge Function role | `0007` / `0013` | ☐ |
+| 1.7 | `nutrition_reference` cache table writable only by the Edge Function role | `0007` / `0013` | ☐ (schema/grants confirmed via 1.3; no Edge Function has actually written to it live yet - see §2) |
 
 ## 2. Edge Functions
 
+**Sequencing note (2026-09-11): ingredient scanning is no longer first in this
+list.** SmartPrep is moving to a custom ingredient-recognition model instead of
+OpenAI Vision as the production-primary path - see
+`docs/INGREDIENT_MODEL_ROADMAP.md`. The validation order is now:
+
+1. `usda-lookup` live validation
+2. Barcode nutrition E2E (Open Food Facts + USDA exact-GTIN verification)
+3. `receipt-ocr` / Textract validation, if receipt intake is wanted live
+4. Custom ingredient model development (separate track - `docs/INGREDIENT_MODEL_ROADMAP.md`)
+5. Ingredient scan integration, once custom inference is ready
+
 | # | Check | How | Status |
 |---|-------|-----|--------|
-| 2.1 | `scan-ingredients` deployed | `npx supabase functions deploy scan-ingredients` | ☐ |
-| 2.2 | `usda-lookup` deployed | `npx supabase functions deploy usda-lookup` | ☐ |
-| 2.3 | `receipt-ocr` deployed | `npx supabase functions deploy receipt-ocr` | ☐ |
-| 2.4 | Each function requires a valid user JWT (401 without) | `curl` the function URL with no `Authorization` header | ☐ |
-| 2.5 | Functions return the provider-neutral shape the client validates (Zod) | Real call from a dev build; watch for `ScanInferenceError` / OCR failure copy | ☐ |
-| 2.6 | Vision image + receipt image are transient (never written to storage or logs) | Review function logs after a call - no base64, no data URL | ◐ (code is written this way; confirm in live logs) |
+| 2.1 | `usda-lookup` deployed | `npx supabase functions deploy usda-lookup` | ☐ |
+| 2.2 | `receipt-ocr` deployed | `npx supabase functions deploy receipt-ocr` | ☐ |
+| 2.3 | `scan-ingredients` (OpenAI) deployed | **DEFERRED / OPTIONAL BENCHMARK** - not part of the current production-readiness push. Kept implemented (`lib/scan/providers/openAiBenchmarkProvider.ts`) as a future benchmark/fallback only, and only runs at all when `EXPO_PUBLIC_INGREDIENT_INFERENCE_PROVIDER=openai-benchmark` is explicitly set (unset in production - Scan fails closed with `provider_unavailable`, never a silent OpenAI call). Do not report ingredient scanning as production-live on the strength of this function alone. | ☐ deferred |
+| 2.4 | Each deployed function requires a valid user JWT (401 without) | `curl` the function URL with no `Authorization` header | ☐ |
+| 2.5 | Deployed functions return the provider-neutral shape the client validates (Zod) | Real call from a dev build; watch for `ScanInferenceError` / OCR failure copy | ☐ |
+| 2.6 | Any image sent to a provider is transient (never written to storage or logs) | Review function logs after a call - no base64, no data URL | ◐ (code is written this way; confirm in live logs once deployed) |
 
 ## 3. Secrets (Edge Function only - never `EXPO_PUBLIC_`)
 
 | # | Secret | Function | Status |
 |---|--------|----------|--------|
 | 3.1 | `USDA_API_KEY` | `usda-lookup` | ☐ |
-| 3.2 | `OPENAI_API_KEY` (+ optional `OPENAI_SCAN_MODEL`) | `scan-ingredients` | ☐ |
+| 3.2 | `OPENAI_API_KEY` (+ optional `OPENAI_SCAN_MODEL`) | `scan-ingredients` (deferred/optional benchmark - see §2) | ☐ not needed until §2.3 is actually pursued |
 | 3.3 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION` | `receipt-ocr` | ☐ |
 | 3.4 | IAM user for 3.3 is limited to `textract:AnalyzeExpense` | AWS console | ☐ |
 | 3.5 | Client bundle carries no secret | `grep -r EXPO_PUBLIC_ src` shows only `SUPABASE_URL` / `SUPABASE_ANON_KEY`; `OPENAI` / `AWS` / `USDA` appear only under `supabase/functions/` | ☑ verified by static grep (2026-09-08) |

@@ -1,3 +1,4 @@
+import { getIngredientInferenceProviderFlag } from '@/lib/scan/providers/config';
 import { supabase } from '@/lib/supabase/client';
 import * as repositories from '@/lib/supabase/repositories';
 import { Scan, ScanDetection, ScanSectionResult } from '@/types';
@@ -30,6 +31,17 @@ jest.mock('../recipeService', () => ({
   recipeService: { countReadyToCookRecipes: jest.fn() },
 }));
 
+// This suite exercises scanService's mapping/normalization of what an active
+// ingredient-inference provider returns - it needs one actually selected. The
+// OpenAI benchmark provider is opt-in (lib/scan/providers/config.ts); select
+// it explicitly by mocking the env-reading wrapper (Expo's babel preset
+// statically inlines EXPO_PUBLIC_* at transform time, so mutating
+// process.env at test runtime would have no effect - see config.ts).
+jest.mock('@/lib/scan/providers/config', () => {
+  const actual = jest.requireActual('@/lib/scan/providers/config');
+  return { ...actual, getIngredientInferenceProviderFlag: jest.fn(() => 'openai-benchmark') };
+});
+
 const detectScanIngredients = repositories.detectScanIngredients as jest.Mock;
 const beginScanConfirmation = repositories.beginScanConfirmation as jest.Mock;
 const linkScanDetection = repositories.linkScanDetection as jest.Mock;
@@ -41,6 +53,7 @@ const countReadyToCookRecipes = recipeService.countReadyToCookRecipes as jest.Mo
 const getUser = supabase.auth.getUser as jest.Mock;
 
 const IMAGE = { base64: 'x'.repeat(500), mimeType: 'image/jpeg' as const };
+const getInferenceProviderFlag = getIngredientInferenceProviderFlag as jest.Mock;
 
 type V = {
   name: string;
@@ -199,6 +212,14 @@ describe('processCapture - failure never falls back to canned detections', () =>
   it('a malformed/model failure rejects - no ScanDetection[] is ever returned on error', async () => {
     detectScanIngredients.mockRejectedValue(new ScanInferenceError('malformed_upstream'));
     await expect(scanService.processCapture('quick', 'quick', IMAGE, 'p')).rejects.toBeInstanceOf(ScanInferenceError);
+  });
+
+  it('with no provider configured, fails with provider_unavailable and never calls OpenAI', async () => {
+    getInferenceProviderFlag.mockReturnValueOnce(undefined);
+    const err = await scanService.processCapture('quick', 'quick', IMAGE, 'p').catch((e) => e);
+    expect(err).toBeInstanceOf(ScanInferenceError);
+    expect(err.code).toBe('provider_unavailable');
+    expect(detectScanIngredients).not.toHaveBeenCalled();
   });
 });
 

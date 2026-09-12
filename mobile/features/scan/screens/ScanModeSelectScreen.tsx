@@ -1,12 +1,17 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import React from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Alert, Pressable, Text, View } from 'react-native';
 
 import { Screen } from '@/components';
 import { useTheme } from '@/hooks/useTheme';
+import { isIngredientInferenceAvailable } from '@/lib/scan/providers';
 import { useScanSessionStore } from '@/store';
 import { ScanMode } from '@/types';
+
+/** Never mentions OpenAI or any specific provider - see docs/INGREDIENT_MODEL_ROADMAP.md. */
+const PHOTO_SCAN_UNAVAILABLE_MESSAGE =
+  'Ingredient photo scanning is currently in development. You can still add items manually or scan a barcode.';
 
 interface ModeOption {
   mode: ScanMode;
@@ -33,8 +38,18 @@ const OPTIONS: ModeOption[] = [
 export function ScanModeSelectScreen() {
   const theme = useTheme();
   const beginScan = useScanSessionStore((s) => s.beginScan);
+  // Checked once per render, not cached - this is a cheap, synchronous,
+  // local config check (see lib/scan/providers), not a network call.
+  const photoScanAvailable = isIngredientInferenceAvailable();
 
   const handleSelect = (mode: ScanMode) => {
+    if (!photoScanAvailable) {
+      // Belt-and-suspenders: the cards below are already visually disabled,
+      // but a tap (e.g. before the disabled style registers) must still not
+      // start a capture session nobody can complete.
+      Alert.alert('Not available yet', PHOTO_SCAN_UNAVAILABLE_MESSAGE);
+      return;
+    }
     beginScan(mode);
     if (mode === 'quick') {
       router.push({ pathname: '/scan/capture', params: { mode, section: 'quick' } });
@@ -179,6 +194,8 @@ export function ScanModeSelectScreen() {
             onPress={() => handleSelect(option.mode)}
             accessibilityRole="button"
             accessibilityLabel={option.title}
+            accessibilityState={{ disabled: !photoScanAvailable }}
+            accessibilityHint={photoScanAvailable ? undefined : PHOTO_SCAN_UNAVAILABLE_MESSAGE}
             style={({ pressed }) => [
               {
                 flexDirection: 'row',
@@ -189,6 +206,7 @@ export function ScanModeSelectScreen() {
                 borderColor: theme.colors.border,
                 borderRadius: theme.radius.lg,
                 padding: theme.spacing.lg,
+                opacity: photoScanAvailable ? 1 : 0.5,
               },
               theme.shadow.card,
               pressed && { opacity: 0.9 },
@@ -209,10 +227,12 @@ export function ScanModeSelectScreen() {
             <View style={{ flex: 1, gap: 2 }}>
               <Text style={[theme.typography.headline, { color: theme.colors.textPrimary }]}>{option.title}</Text>
               <Text style={[theme.typography.footnote, { color: theme.colors.textSecondary }]}>
-                {option.description}
+                {photoScanAvailable ? option.description : PHOTO_SCAN_UNAVAILABLE_MESSAGE}
               </Text>
             </View>
-            <Ionicons name="chevron-forward" size={20} color={theme.colors.textTertiary} />
+            {photoScanAvailable ? (
+              <Ionicons name="chevron-forward" size={20} color={theme.colors.textTertiary} />
+            ) : null}
           </Pressable>
         ))}
       </View>
