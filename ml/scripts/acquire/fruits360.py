@@ -169,6 +169,15 @@ def acquire(
                         license=LICENSE,
                         original_id=f["name"],
                         first_party=False,
+                        # Fruits-360's own top-level category name (the first
+                        # word of its variety folder, e.g. "Apple" from
+                        # "Apple Braeburn 1") - happens to be a trivial
+                        # identity mapping onto our `label` here, but recorded
+                        # anyway so every acquired source is equally
+                        # traceable back to its own taxonomy, per the same
+                        # convention BanglaVegNet's acquisition needs for its
+                        # real renames (e.g. "Green Spinach" -> "spinach").
+                        source_label=variety.split()[0],
                     )
                 )
                 kept += 1

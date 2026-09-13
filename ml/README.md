@@ -92,9 +92,11 @@ data/raw/<class_name>/*.jpg|png     # one subdirectory per class in classes.json
 `data/raw/`, `data/raw_acquired/`, `data/processed/`, and `data/splits/` are
 gitignored - no dataset is or should be committed to this repository.
 
-**Real dataset status (2026-09-12): NOT READY FOR TRAINING** - only 3 of 13
+**Real dataset status (2026-09-13): NOT READY FOR TRAINING** - only 3 of 13
 classes have any real, licensed images so far, and even those three don't
-yet have enough distinct groups for a usable train/val/test split. See
+yet have enough distinct groups for a usable train/val/test split. A second
+acquisition script (BanglaVegNet, targeting tomato/onion/potato/broccoli/
+spinach) is built and tested but blocked on one documented manual step - see
 `data/DATASET_AUDIT_v0.md` for the full audit and `data/README.md` for the
 acquisition tooling (`scripts/acquire/`), curation tooling (`src/curation/`
 - duplicate detection, validation, label-review queues, leakage auditing,

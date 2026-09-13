@@ -34,7 +34,17 @@ from src.training.config import SplitConfig
 from src.utils.classes import ClassMap
 
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
-CANDIDATE_FIELDS = ("path", "label", "group", "source_dataset", "source_url", "license", "original_id", "first_party")
+CANDIDATE_FIELDS = (
+    "path",
+    "label",
+    "source_label",
+    "group",
+    "source_dataset",
+    "source_url",
+    "license",
+    "original_id",
+    "first_party",
+)
 MANIFEST_FIELDS = CANDIDATE_FIELDS[:2] + ("split",) + CANDIDATE_FIELDS[2:]
 SPLIT_NAMES = ("train", "val", "test")
 
@@ -51,6 +61,17 @@ class CandidateImage:
     license: str = ""
     original_id: str = ""
     first_party: bool = True
+    # The class name/category as the SOURCE dataset itself calls it - kept
+    # distinct from `label` (SmartPrep's own taxonomy) whenever an
+    # acquisition script maps a source category onto a different SmartPrep
+    # class (e.g. BanglaVegNet's "Green Spinach" -> SmartPrep's "spinach").
+    # Never silently discarded: a category rename is still fully traceable
+    # back to what the original dataset called it. Empty ("") means either
+    # first-party (no source taxonomy to map from) or a source whose
+    # category name is already identical to `label` (e.g. Fruits-360's
+    # "apple" needs no rename, though acquisition scripts are still
+    # encouraged to fill this in for completeness - see fruits360.py).
+    source_label: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -180,6 +201,7 @@ def read_candidates_csv(path: str | Path) -> list[CandidateImage]:
                 license=row.get("license", ""),
                 original_id=row.get("original_id", ""),
                 first_party=row.get("first_party", "True") == "True",
+                source_label=row.get("source_label", ""),
             )
             for row in reader
         ]
@@ -301,6 +323,7 @@ def read_manifest(path: str | Path) -> list[ManifestRow]:
                 license=row.get("license", ""),
                 original_id=row.get("original_id", ""),
                 first_party=row.get("first_party", "True") == "True",
+                source_label=row.get("source_label", ""),
             )
             for row in reader
         ]

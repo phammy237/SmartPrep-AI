@@ -1,0 +1,20 @@
+{
+  "_readme": "Folder-id lookup for scripts/acquire/banglavegnet.py. Filling these in is a ONE-TIME MANUAL STEP (see ml/data/DATASET_AUDIT_v0.md, 'BanglaVegNet acquisition status', for exactly why) - everything downstream of it (listing, downloading, validating, grouping, provenance) is fully scripted and idempotent. To fill in a class: open https://data.mendeley.com/datasets/rtx9ngb68j/2/files in a browser, open DevTools > Network, filter on 'files?version=2', click into that vegetable's folder in the file browser, and copy the 'folder_id' query parameter (a UUID) from the request that fires. Each class has exactly TWO folders (raw originals, several MB per file; processed/compressed, ~10-15KB per file) - copy the RAW one only, per the 'prefer raw, skip processed derivatives' instruction this script follows. A still-null folder_id_raw means that class is skipped (never guessed, never left silently empty in a way that looks like 'acquired').",
+  "dataset": {
+    "title": "A Comprehensive Image Dataset of Vegetables Grown in Bangladesh",
+    "also_known_as": "BanglaVegNet (v1 title on the same Mendeley record)",
+    "authors": "Rabeya Bashri Sumona, John Pritom Biswas, Md Ashiqur Rahman, Mamun Hasan, Sudipto Chaki",
+    "institution": "Bangladesh University of Business and Technology",
+    "doi": "10.17632/rtx9ngb68j.2",
+    "version": 2,
+    "license": "CC BY 4.0",
+    "official_url": "https://data.mendeley.com/datasets/rtx9ngb68j/2"
+  },
+  "classes": {
+    "tomato": {"source_label": "Tomato", "folder_id_raw": null},
+    "onion": {"source_label": "Onion", "folder_id_raw": null},
+    "potato": {"source_label": "Potato", "folder_id_raw": null},
+    "broccoli": {"source_label": "Broccoli", "folder_id_raw": null},
+    "spinach": {"source_label": "Green Spinach", "folder_id_raw": null}
+  }
+}

@@ -6,11 +6,15 @@ currently contain nothing but a `.gitkeep` placeholder each (plus, locally,
 whatever `scripts/acquire/*.py` has actually downloaded into
 `raw_acquired/` — those files exist on disk but are never committed).
 
-**Current real-dataset status (2026-09-12): NOT READY FOR TRAINING.** Only
+**Current real-dataset status (2026-09-13): NOT READY FOR TRAINING.** Only
 3 of 13 classes (apple, banana, carrot) have any real, licensed images, and
-even those three fail the per-class split-coverage gate. See
-`data/DATASET_AUDIT_v0.md` for the full, mechanically-generated audit (real
-numbers, not projected) and exactly what's missing.
+even those three fail the per-class split-coverage gate. A second source
+(BanglaVegNet, targeting tomato/onion/potato/broccoli/spinach) was
+researched and its acquisition script built and tested, but real acquisition
+is currently **blocked on one documented manual step** (see "BanglaVegNet"
+below and `data/DATASET_AUDIT_v0.md`) — not bypassed, not guessed around.
+See `data/DATASET_AUDIT_v0.md` for the full, mechanically-generated audit
+(real numbers, not projected) and exactly what's missing.
 
 ## Expected raw-data layout
 
@@ -53,9 +57,17 @@ Every row carries machine-readable provenance — never license/attribution
 recorded only in prose:
 
 ```text
-path,label,group,source_dataset,source_url,license,original_id,first_party
-data/raw_acquired/fruits360/apple/fruits360_Apple_Braeburn_1_0_100.jpg,apple,fruits360:apple:Apple Braeburn 1,fruits360,https://github.com/fruits-360/fruits-360-100x100/blob/main/Training/Apple%20Braeburn%201/0_100.jpg,CC BY-SA 4.0,0_100.jpg,False
+path,label,source_label,group,source_dataset,source_url,license,original_id,first_party
+data/raw_acquired/fruits360/apple/fruits360_Apple_Braeburn_1_0_100.jpg,apple,Apple,fruits360:apple:Apple Braeburn 1,fruits360,https://github.com/fruits-360/fruits-360-100x100/blob/main/Training/Apple%20Braeburn%201/0_100.jpg,CC BY-SA 4.0,0_100.jpg,False
 ```
+
+`source_label` is the class name AS THE SOURCE DATASET ITSELF calls it —
+kept distinct from `label` (SmartPrep's taxonomy) whenever an acquisition
+script maps a source category onto a different SmartPrep class. This
+matters when the two genuinely differ (e.g. BanglaVegNet's "Green Spinach"
+→ SmartPrep's "spinach", below) — the rename is never silent; both names are
+always in the row. Never assume `source_label == label` just because a
+particular source (like Fruits-360 here) happens not to need a rename.
 
 Properties every acquisition script must have (enforced by
 `tests/test_acquire_fruits360.py` as the template for future scripts):
@@ -83,7 +95,7 @@ provenance CSV (`data/provenance/<source>.csv` — small, no image bytes).
 **Never committed:** the downloaded image files
 (`data/raw_acquired/<source>/`, gitignored).
 
-### Fruits-360 (the only source acquired so far)
+### Fruits-360
 
 - **Script:** `scripts/acquire/fruits360.py`
 - **Official source (verified 2026-09-12):** https://github.com/fruits-360/fruits-360-100x100
@@ -121,6 +133,60 @@ provenance CSV (`data/provenance/<source>.csv` — small, no image bytes).
   `data/DATASET_AUDIT_v0.md` for why this is still not enough — too few
   *groups* per class for a usable 3-way split, independent of image count.
 
+### BanglaVegNet — built and tested, acquisition currently blocked
+
+- **Script:** `scripts/acquire/banglavegnet.py`
+- **Official source (verified 2026-09-13):** Mendeley Data, DOI
+  `10.17632/rtx9ngb68j.2` — "A Comprehensive Image Dataset of Vegetables
+  Grown in Bangladesh" (this record's v1 was titled "BanglaVegNet: A
+  Multiclass Image Dataset of Traditional Vegetables in Bangladesh" — same
+  DOI base, renamed at v2; both names refer to the one dataset). Authors:
+  Rabeya Bashri Sumona, John Pritom Biswas, Md Ashiqur Rahman, Mamun Hasan,
+  Sudipto Chaki (Bangladesh University of Business and Technology). Fetched
+  via Mendeley's own file-listing API
+  (`data.mendeley.com/api/datasets/rtx9ngb68j/files`) and per-file
+  `download_url`s — not a Kaggle mirror.
+- **License:** CC BY 4.0 — attribution only, no ShareAlike, simpler than
+  Fruits-360's obligation.
+- **Target classes (of 42 total in the dataset):** tomato, onion, potato,
+  broccoli, and Green Spinach → SmartPrep's `spinach` — this rename is
+  recorded explicitly via `source_label="Green Spinach"` /
+  `label="spinach"` on every acquired row, never silently equated.
+- **Structure — verified, matches the published description:** each class
+  is split into two folders of *matching image count* — one raw (several
+  MB/file) and one small (~10-15KB/file, almost certainly a resized copy of
+  the same originals given the identical per-class counts). The script only
+  ever requests the raw folder, with a built-in safety check (aborts a class
+  if its configured folder averages under 200KB/file — that would mean the
+  *processed* folder's id was pasted by mistake).
+- **Why nothing has been downloaded yet:** the dataset's public file-listing
+  API hard-caps its unscoped (whole-dataset) listing at 100 results, which —
+  alphabetically — only reaches the 4th of 42 classes. Every plausible
+  pagination override was tried (see `DATASET_AUDIT_v0.md`'s "BanglaVegNet
+  acquisition status" for the full list of ~20 attempts) and none worked.
+  Listing a **known** `folder_id` directly works perfectly; the only missing
+  piece is discovering the folder_id for each target class's raw folder, and
+  no lookup endpoint for that was found short of running the dataset page's
+  client-side Angular app (no headless browser available in this
+  environment).
+- **The one manual step** (documented, not bypassed): open
+  `https://data.mendeley.com/datasets/rtx9ngb68j/2/files`, use DevTools →
+  Network to find each target class's raw-folder `folder_id`, paste the 5
+  UUIDs into `scripts/acquire/banglavegnet_folders.json` (its own `_readme`
+  field has the exact steps). Everything else — listing, downloading,
+  validating, near-duplicate-based grouping (see below), provenance,
+  idempotent re-runs — is already built and tested
+  (`tests/test_acquire_banglavegnet.py`, 7 tests, no network) and needs no
+  further code changes once those 5 ids are filled in.
+- **Grouping:** unlike Fruits-360 (whole variety folder = one group, from
+  real metadata), BanglaVegNet gives no specimen/session metadata at all —
+  just sequentially-numbered files. The script instead runs
+  `src.curation.duplicates.cluster_near_duplicates` (transitive union-find
+  over near-duplicate pairs) over each class's downloaded images and uses
+  the resulting cluster as `group`, conservatively keeping any chain of
+  visually-similar photos together rather than assuming every file is an
+  independent specimen.
+
 ## The manifest
 
 `src/datasets/manifest.py` builds a manifest at `splits/manifest.csv` two
@@ -139,9 +205,10 @@ ways:
   images at all (see `DATASET_AUDIT_v0.md`).
 
 ```text
-path,label,split,group,source_dataset,source_url,license,original_id,first_party
-data/raw/apple/apple_session1_01.jpg,apple,train,apple_session1,first_party,,,apple_session1_01.jpg,True
-data/raw_acquired/fruits360/apple/fruits360_Apple_Braeburn_1_0_100.jpg,apple,val,fruits360:apple:Apple Braeburn 1,fruits360,https://github.com/...,CC BY-SA 4.0,0_100.jpg,False
+path,label,source_label,split,group,source_dataset,source_url,license,original_id,first_party
+data/raw/apple/apple_session1_01.jpg,apple,,train,apple_session1,first_party,,,apple_session1_01.jpg,True
+data/raw_acquired/fruits360/apple/fruits360_Apple_Braeburn_1_0_100.jpg,apple,Apple,val,fruits360:apple:Apple Braeburn 1,fruits360,https://github.com/...,CC BY-SA 4.0,0_100.jpg,False
+data/raw_acquired/banglavegnet/spinach/banglavegnet_Green_Spinach_0001.jpg,spinach,Green Spinach,train,<cluster-id>,banglavegnet,https://data.mendeley.com/datasets/rtx9ngb68j/2?folder_id=...,CC BY 4.0,Green_Spinach_0001.jpg,False
 ```
 
 - `group` exists to keep near-duplicate images (e.g. several photos from the
@@ -200,24 +267,38 @@ should aim for before being called a real baseline.
 | apple | Fruits-360 (acquired: 45 img / 3 groups) | first-party photos to add groups | Yes — needs more groups, not more frames |
 | banana | Fruits-360 (acquired: 30 img / 2 groups) | first-party photos to add groups | Yes — same reason |
 | carrot | Fruits-360 (acquired: 15 img / 1 group) | first-party photos (this source alone is insufficient — 1 group total) | Yes, required — cannot be split at all from Fruits-360 alone |
-| tomato | BanglaVegNet (Mendeley, CC BY 4.0) — evaluated, not yet acquired (open taxonomy/structure questions, see below) | first-party | Likely, to supplement |
-| onion | BanglaVegNet — same status | first-party | Likely |
-| broccoli | BanglaVegNet — same status | first-party | Likely |
-| spinach | BanglaVegNet — same status | first-party | Likely |
-| potato | No verified permissively-licensed source identified yet | first-party | Yes, primary source |
+| tomato | BanglaVegNet (Mendeley, CC BY 4.0) — **script ready, blocked on 1 manual step** (see BanglaVegNet section above) | "Vegetable Image Dataset ... Bangladeshi Perspective" (Mendeley, CC BY 4.0, 329 tomato images, natural background) — research only, see below | Likely, to supplement once BanglaVegNet is unblocked |
+| onion | BanglaVegNet — same status | same backup dataset (357 onion images) | Likely |
+| potato | BanglaVegNet — same status (not previously identified as covered; confirmed present in this dataset's 42 classes) | same backup dataset (365 potato images) | Likely |
+| broccoli | BanglaVegNet — same status | none identified in the backup dataset's 12 classes | Likely |
+| spinach | BanglaVegNet ("Green Spinach" → `spinach`) — same status | none identified in the backup dataset's 12 classes | Likely |
 | egg | None identified | first-party (packaged carton + individual eggs) | Yes, primary source |
 | milk | None identified | first-party (multiple cartons/brands, packaged) | Yes, primary source |
 | bread | None identified | first-party (loaf, sliced, bagged) | Yes, primary source |
 | chicken | None identified (raw meat packaging is poorly covered by general-purpose datasets, and food-safety/quality concerns make sourcing real photos harder) | first-party (packaged, raw, both if feasible) | Yes, primary source |
 | cheese | None identified | first-party (block, sliced, packaged) | Yes, primary source |
 
-**BanglaVegNet was deliberately NOT acquired in this pass** — it was
-identified as CC BY 4.0 on Mendeley Data and covers tomato/onion/broccoli
-among its classes, but its exact folder structure and per-class taxonomy
-still need to be verified against the live dataset page before writing an
-acquisition script for it (same standard applied to Fruits-360: verify
-structure directly, don't assume from a description). This is the natural
-next acquisition target.
+**BanglaVegNet's acquisition script is built, tested, and ready to run** —
+it is blocked on exactly one documented manual step (a human copying 5
+folder_id UUIDs out of a browser session; see the BanglaVegNet section
+above and `DATASET_AUDIT_v0.md`), not on unresolved taxonomy or structure
+questions — both were verified directly against the live API. Note also:
+`potato` was previously listed as having no candidate source at all; it IS
+one of BanglaVegNet's 42 classes and has been added to the target list.
+
+**A second, independent Mendeley dataset — "Vegetable Image Dataset for
+Classification Models: A Bangladeshi Perspective" (DOI
+`10.17632/b9rvg4f2st.4`, CC BY 4.0, verified 2026-09-13)** — was researched
+as a possible backup/domain-diversity supplement per this task's
+instruction, but **deliberately not acquired**: 4,319 mobile-phone photos
+with natural (unmodified) backgrounds across 12 classes, including potato
+(365), onion (357), and tomato (329). Its simpler flat per-class folder
+structure (no raw/processed split, per a related paper's description) would
+likely be *easier* to script than BanglaVegNet if pursued later — and its
+"natural background" domain is more SmartPrep-realistic than either
+Fruits-360's studio shots or BanglaVegNet's likely-similar market/isolated
+photography. Held back for now per the task's explicit "research only,
+don't auto-combine without a clear quality reason" instruction.
 
 **Open Images V7** was evaluated and deliberately excluded from acquisition
 despite covering more of our classes: Google's own dataset page carries an
@@ -231,39 +312,50 @@ not a script.
 
 ## First-party collection plan
 
-**Required for potato and essential for egg, milk, bread, chicken, cheese**
-(no viable bulk-dataset source identified for any of these six). Also needed
-to add *groups* (not just images) to apple/banana/carrot/tomato/onion/
-broccoli/spinach, since bulk sources so far are single-domain and
-low-group-count.
+**Required (no bulk-dataset source identified at all) for:** egg, milk,
+bread, chicken, cheese. **Also planned, deliberately, for the 8 classes that
+DO have a bulk source** (apple, banana, carrot, tomato, onion, potato,
+broccoli, spinach) — per this task's instruction, the eventual v0 dataset
+should not be dominated by public-dataset imagery even for classes where a
+bulk source exists, both to add SmartPrep-realistic domain coverage (see
+"Domain-diversity audit" below) and to add *groups* (independent physical
+specimens), since every bulk source evaluated so far is thin on distinct
+specimens per class even when it has plenty of images (the Fruits-360
+carrot case above: 15 images, but only 1 specimen).
 
-Per class, target for a first pass:
-- **≥8 distinct physical specimens** (8 different eggs/cartons/loaves/
-  chicken packages/cheese blocks — not 8 photos of the same one), each
-  treated as its own `group` in the manifest (nothing here is a "session" of
-  the same item; a new specimen index, e.g. `egg_specimen03`, per physical
-  item).
-- **3–5 photos per specimen**, varying angle/distance only — these photos of
-  the *same specimen* correctly stay one group.
-- **Explicitly do NOT** take dozens of burst photos of one item and count
-  them as independent examples — that inflates one group's size without
-  adding a new group, which is exactly the failure mode the Fruits-360
-  carrot case above demonstrates.
+**General naming convention for every class:** `group` =
+`firstparty:<class>:specimenNN` (e.g. `firstparty:egg:specimen03`) — one
+group per physical item, never per photo. `assign_splits` handles the
+train/val/test assignment automatically from there; nothing about groups
+needs to be pre-planned by split.
 
-Conditions to vary **across specimens** (this is what the bulk sources
-above are weakest on, so first-party data should deliberately compensate):
-- **Locations:** fridge shelf, freezer (if relevant), pantry shelf,
-  countertop, grocery bag/cart.
-- **Lighting:** overhead kitchen light, phone flash, natural daylight, dim/
-  evening light.
-- **Backgrounds:** cluttered (realistic, other items partially in frame —
-  but still one PRIMARY ingredient per the v0 labeling rule) vs. isolated
-  single-item shots.
-- **Devices:** at least 2 different phone/camera sensors, to avoid
-  overfitting to one sensor's color/sharpness signature.
-- **Packaging state:** both packaged (carton, wrapped, bagged) and
-  unpackaged/loose where realistic (a peeled banana skin vs. whole, a sliced
-  vs. whole loaf, etc.).
+### egg, milk, bread, chicken, cheese (no bulk source — first-party is the ONLY source)
+
+| | Minimum target |
+|---|---|
+| Distinct physical specimens | ≥8 (8 different eggs/cartons/loaves/packages/blocks — not 8 photos of one) |
+| Sessions | ≥2 separate photography sessions (different day/lighting/location each time), specimens spread across sessions, not all photographed at once |
+| Photos per specimen | 3–5, varying angle/distance/framing only |
+| Backgrounds | both cluttered (other items partially in frame, still one PRIMARY ingredient per the v0 labeling rule) and isolated single-item shots |
+| Context | fridge shelf, pantry shelf, countertop, and grocery bag — at least 3 of these 4 represented per class |
+| Packaged vs. unpackaged | both where realistic: milk (carton, always packaged — vary carton size/brand instead), egg (carton AND a few loose eggs), bread (bagged loaf AND a few sliced/unwrapped pieces), cheese (packaged block AND sliced/unwrapped), chicken (packaged raw only — food-safety reasons make "unpackaged loose chicken" impractical and unnecessary; vary packaging/cut instead) |
+| Lighting | overhead kitchen light, phone flash, natural daylight, dim/evening — at least 3 of these 4 |
+| Devices | ≥2 different phone/camera sensors, to avoid overfitting to one sensor's color/sharpness signature |
+
+### apple, banana, carrot, tomato, onion, potato, broccoli, spinach (bulk source exists — first-party supplements it)
+
+| | Minimum target |
+|---|---|
+| Distinct physical specimens | ≥5 per class (fewer than the no-bulk-source classes since the bulk source contributes some groups too — but ≥5 is what actually fixes the Fruits-360-style "1-3 groups total" problem found in this audit) |
+| Sessions | ≥1 dedicated session per class, ideally spread across ≥2 |
+| Photos per specimen | 3–5, varying angle/distance |
+| Backgrounds / context / packaging / lighting / devices | same targets as the no-bulk-source table above — the whole point is SmartPrep-realistic domain coverage these classes currently have zero of, bulk source or not |
+
+**Explicitly do NOT** take dozens of burst photos of one item and count them
+as independent examples — that inflates one group's size without adding a
+new group, which is exactly the failure mode the Fruits-360 carrot case in
+`DATASET_AUDIT_v0.md` demonstrates (15 images, 1 group, unusable for any
+split at all).
 
 **Train/test separation for first-party data:** specimens (groups), not
 just images, must be split before any photo is taken with a specific split
@@ -285,21 +377,28 @@ off, not a completed collection.
 
 See `data/DATASET_AUDIT_v0.md`'s "Domain-diversity audit" section for the
 current (single-domain, studio-only) finding on the 3 acquired classes.
-Every bulk/public source evaluated so far (Fruits-360, BanglaVegNet, Open
-Images, USDA/public-domain produce photography, Food-101 — see table below)
-shares some version of this problem to varying degrees; first-party data is
-what's meant to close the domain gap, per the plan above.
+**Zero of SmartPrep's 13 classes currently have any SmartPrep-realistic
+(fridge/pantry/countertop/grocery-bag/cluttered) imagery** — every bulk/
+public source evaluated so far (Fruits-360, BanglaVegNet, the backup
+Bangladeshi dataset, Open Images, USDA/public-domain produce photography,
+Food-101 — see table below) shares some version of this domain gap, ranging
+from Fruits-360's plain-white-turntable extreme to the backup dataset's
+comparatively closer "mobile phone, natural background" style. First-party
+data (see the plan above, now covering all 13 classes, not only the 5
+without any bulk source) is the only way to close this gap — no combination
+of the public sources researched substitutes for it.
 
 ## Dataset candidates researched
 
 | Dataset | Source | License (verified) | Relevant classes | Approx. images | Redistribution allowed? | Derivative/model training allowed? | Known domain mismatch | Date checked |
 |---|---|---|---|---|---|---|---|---|
 | Fruits-360 (`fruits-360-100x100`) | https://github.com/fruits-360/fruits-360-100x100 | CC BY-SA 4.0 (repo LICENSE) | apple, banana, carrot (verified directly — not tomato/onion/potato, despite an earlier incorrect secondhand summary) | ~90k total across 100+ classes; ~300-500/variety for our 3 classes | Yes, with attribution + ShareAlike | Yes, with the ShareAlike caveat noted above (unresolved legally for a shipped model) | Single fruit, plain background, turntable rotation — nothing like a cluttered fridge/pantry photo | 2026-09-12 (acquired) |
-| BanglaVegNet | Mendeley Data | CC BY 4.0 (attribution only) | tomato, onion, broccoli (candidate — structure not yet verified) | Not yet confirmed | Yes, with attribution | Yes | Unknown until verified | 2026-09-12 (researched, not acquired) |
+| BanglaVegNet / "A Comprehensive Image Dataset of Vegetables Grown in Bangladesh" | Mendeley Data, DOI `10.17632/rtx9ngb68j.2` | CC BY 4.0 (attribution only) | tomato, onion, potato, broccoli, Green Spinach→spinach — all 5 verified present among its 42 classes | 4,730 total (1,877 raw); per-class counts for our 5 not yet confirmed (acquisition blocked) | Yes, with attribution | Yes | Market/isolated vegetable photography per description — not fridge/pantry conditions; not yet directly observed for our 5 classes | 2026-09-13 (researched + script built; acquisition blocked on 1 manual step) |
+| "Vegetable Image Dataset for Classification Models: A Bangladeshi Perspective" | Mendeley Data, DOI `10.17632/b9rvg4f2st.4` | CC BY 4.0 (attribution only) | potato (365), onion (357), tomato (329) | 4,319 total across 12 classes | Yes, with attribution | Yes | Mobile-phone photos, natural (unmodified) background — the closest of any researched source to SmartPrep's real domain, but still not fridge/pantry/countertop specifically | 2026-09-13 (researched only, not acquired — backup/diversity candidate per task instruction) |
 | Open Images Dataset (V7) | https://storage.googleapis.com/openimages/web/index.html | Per-image (Flickr-sourced); Google explicitly disclaims a blanket license and requires per-image verification | Most of our 13 classes have a matching category | Hundreds–low thousands per class after filtering | Only if each individual image's license is separately verified | Only if each individual image's license is separately verified | Mixed — studio and natural scenes | 2026-09-12 (researched, excluded from scripted acquisition — see rationale above) |
 | Food-101 | https://data.vision.ee.ethz.ch/cvl/food-101.html | Academic/research use; commercial use unclear | None directly (prepared dishes, not raw ingredients) | 101,000 | Check terms | Check terms | Wrong problem — dishes, not raw/packaged ingredients | Previously researched |
 | USDA / public-domain produce photography | Varies (USDA ARS image gallery, etc.) | Often public domain (US govt work) — verify per image | Most produce classes | Small; needs manual curation | Yes if genuinely public domain | Yes | Idealized/studio produce photography | Previously researched |
-| Milk/egg/bread/cheese/chicken | No bulk source identified | N/A | milk, egg, bread, chicken, cheese | N/A | N/A | N/A | These 5 (+potato) need first-party photography — see plan above | 2026-09-12 |
+| Milk/egg/bread/cheese/chicken | No bulk source identified | N/A | milk, egg, bread, chicken, cheese | N/A | N/A | N/A | These 5 need first-party photography — see plan below | 2026-09-13 |
 
 ## User data policy (explicit)
 
