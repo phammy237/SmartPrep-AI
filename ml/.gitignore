@@ -9,6 +9,13 @@ data/splits/*
 !data/processed/.gitkeep
 !data/splits/.gitkeep
 
+# Images downloaded by ml/scripts/acquire/* scripts. Never committed - only
+# the small provenance CSV (data/provenance/*.csv, relative paths, no image
+# bytes) and the acquisition script itself are: anyone can reproduce the
+# exact same files by re-running the script against the recorded source.
+data/raw_acquired/*
+!data/raw_acquired/.gitkeep
+
 # Every training run's artifacts (checkpoints, metrics, plots). Small,
 # individually-interesting metrics.json/config.json files can still be copied
 # out and committed elsewhere deliberately if ever wanted - this only ignores

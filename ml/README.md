@@ -89,8 +89,16 @@ Short version:
 data/raw/<class_name>/*.jpg|png     # one subdirectory per class in classes.json
 ```
 
-`data/raw/`, `data/processed/`, and `data/splits/` are gitignored - no
-dataset is or should be committed to this repository.
+`data/raw/`, `data/raw_acquired/`, `data/processed/`, and `data/splits/` are
+gitignored - no dataset is or should be committed to this repository.
+
+**Real dataset status (2026-09-12): NOT READY FOR TRAINING** - only 3 of 13
+classes have any real, licensed images so far, and even those three don't
+yet have enough distinct groups for a usable train/val/test split. See
+`data/DATASET_AUDIT_v0.md` for the full audit and `data/README.md` for the
+acquisition tooling (`scripts/acquire/`), curation tooling (`src/curation/`
+- duplicate detection, validation, label-review queues, leakage auditing,
+dataset statistics), and per-class sourcing plan.
 
 ## Commands
 
