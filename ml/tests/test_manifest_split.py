@@ -5,6 +5,8 @@ is never silently overwritten."""
 from __future__ import annotations
 
 from src.datasets.manifest import (
+    CandidateImage,
+    assign_splits,
     build_manifest_rows,
     build_or_load_manifest,
     default_group_key,
@@ -51,9 +53,52 @@ def test_split_groups_covers_every_group_exactly_once():
     assert set(assignment.values()) <= {"train", "val", "test"}
 
 
+def test_assign_splits_stratifies_per_label_not_globally():
+    """A class with very few groups must get its OWN train/val/test ratio,
+    independent of how many groups other classes in the same manifest have -
+    reproduces the real bug found on a 6-class manifest combining a
+    1-3-groups/class source with an 11-57-groups/class source, where a
+    global (unstratified) group pool let a low-group class's actual split
+    ratio drift arbitrarily based on unrelated classes' group counts."""
+    candidates = []
+    # "rare" has exactly 3 groups (10 images each) - too few to reliably
+    # land in all three splits under a GLOBAL pool dominated by "common"'s
+    # 90 groups, but must still get a sensible per-class split on its own.
+    for g in range(3):
+        for i in range(10):
+            candidates.append(CandidateImage(path=f"rare_{g}_{i}.jpg", label="rare", group=f"rare_g{g}"))
+    for g in range(90):
+        candidates.append(CandidateImage(path=f"common_{g}.jpg", label="common", group=f"common_g{g}"))
+
+    rows = assign_splits(candidates, SplitConfig(train=0.7, val=0.15, test=0.15), seed=42)
+
+    rare_splits = {r.split for r in rows if r.label == "rare"}
+    # with only 3 groups split 70/15/15 -> round(3*.7)=2 train, round(3*.15)=0 val, 1 test:
+    # "rare" should show up in exactly train+test (2 splits), by design of
+    # its OWN group count - not zero, and not dictated by "common"'s 90 groups.
+    assert rare_splits == {"train", "test"}
+
+    common_groups_by_split: dict[str, set[str]] = {}
+    for r in rows:
+        if r.label == "common":
+            common_groups_by_split.setdefault(r.split, set()).add(r.group)
+    # "common" (90 groups) gets a real 3-way split on its own terms too.
+    assert len(common_groups_by_split) == 3
+
+
+def test_assign_splits_is_deterministic_when_stratified():
+    candidates = [
+        CandidateImage(path=f"a{i}.jpg", label="apple", group=f"ag{i}") for i in range(10)
+    ] + [CandidateImage(path=f"b{i}.jpg", label="banana", group=f"bg{i}") for i in range(10)]
+    split = SplitConfig(train=0.6, val=0.2, test=0.2)
+    first = assign_splits(candidates, split, seed=7)
+    second = assign_splits(candidates, split, seed=7)
+    assert first == second
+
+
 def test_scan_raw_directory_finds_every_image(tiny_raw_data_dir, tiny_class_map):
     pairs = scan_raw_directory(tiny_raw_data_dir, tiny_class_map)
-    assert len(pairs) == 3 * 6  # 3 classes * 2 sessions * 3 images
+    assert len(pairs) == 3 * 12  # 3 classes * 4 sessions * 3 images
     labels = {label for _path, label in pairs}
     assert labels == set(tiny_class_map)
 

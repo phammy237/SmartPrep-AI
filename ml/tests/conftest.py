@@ -45,15 +45,22 @@ _CLASS_COLORS = {
 
 @pytest.fixture
 def tiny_raw_data_dir(tmp_path, tiny_class_map):
-    """`tmp_path/raw/<class>/<class>_session<S>_<I>.png` - 2 sessions x 3 images
-    per class, so tests can also verify session-grouped splitting."""
+    """`tmp_path/raw/<class>/<class>_session<S>_<I>.png` - 4 sessions x 3 images
+    per class, so tests can also verify session-grouped splitting. 4 groups
+    (not fewer) is deliberate: `assign_splits` stratifies PER CLASS, and a
+    0.5/0.25/0.25 split needs at least 4 groups for every one of train/val/
+    test to land non-empty for a class this small (round(4*.5)=2 train,
+    round(4*.25)=1 val, remainder=1 test) - 2 or 3 groups can round a split
+    to zero for val or test depending on seed, which used to be masked by
+    an old (fixed) bug where all classes' groups were pooled into one global
+    shuffle instead of being split independently per class."""
     raw_dir = tmp_path / "raw"
     for label in tiny_class_map:
         class_dir = raw_dir / label
         class_dir.mkdir(parents=True)
         color = _CLASS_COLORS[label]
         image_index = 0
-        for session in range(1, 3):
+        for session in range(1, 5):
             for i in range(1, 4):
                 filename = f"{label}_session{session}_{i}.png"
                 _make_tiny_image(class_dir / filename, color, seed=image_index)

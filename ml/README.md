@@ -92,15 +92,20 @@ data/raw/<class_name>/*.jpg|png     # one subdirectory per class in classes.json
 `data/raw/`, `data/raw_acquired/`, `data/processed/`, and `data/splits/` are
 gitignored - no dataset is or should be committed to this repository.
 
-**Real dataset status (2026-09-13): NOT READY FOR TRAINING** - only 3 of 13
-classes have any real, licensed images so far, and even those three don't
-yet have enough distinct groups for a usable train/val/test split. A second
-acquisition script (BanglaVegNet, targeting tomato/onion/potato/broccoli/
-spinach) is built and tested but blocked on one documented manual step - see
-`data/DATASET_AUDIT_v0.md` for the full audit and `data/README.md` for the
-acquisition tooling (`scripts/acquire/`), curation tooling (`src/curation/`
-- duplicate detection, validation, label-review queues, leakage auditing,
-dataset statistics), and per-class sourcing plan.
+**Real dataset status (2026-09-13): NOT READY FOR TRAINING. READY FOR
+FIRST-PARTY COLLECTION.** 7 of 13 classes have real, licensed images
+(apple, banana, carrot, potato, onion, tomato, spinach); apple/banana/
+carrot still don't have enough distinct groups, and spinach's only source
+is leaf-domain, not grocery-domain. 6 classes have zero images (broccoli,
+egg, milk, bread, chicken, cheese). BanglaVegNet's acquisition script is
+built and tested but deferred (no longer on the critical path - see
+`data/README.md`). See `data/DATASET_AUDIT_v0.md` for the full audit
+(reproduce any time with `python scripts/audit_dataset.py`),
+`data/FIRST_PARTY_COLLECTION_GUIDE.md` for what to shoot next, and
+`data/README.md` for the acquisition tooling (`scripts/acquire/`),
+curation tooling (`src/curation/` - duplicate detection, validation,
+label-review queues, leakage auditing, dataset statistics), first-party
+import (`scripts/import_first_party.py`), and per-class sourcing plan.
 
 ## Commands
 

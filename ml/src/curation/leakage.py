@@ -37,9 +37,19 @@ class CrossSplitDuplicate:
 
 
 def find_cross_split_exact_duplicates(rows: list[ManifestRow]) -> list[CrossSplitDuplicate]:
+    """A row whose file can't be read (missing/moved/permission error) is
+    silently skipped here, same as `find_cross_split_near_duplicates` - an
+    audit should report on what it CAN verify rather than crash entirely
+    over one bad path; a missing file is exactly the kind of thing
+    `src/curation/validation.py` is responsible for surfacing, not this
+    function."""
     by_hash: dict[str, list[ManifestRow]] = {}
     for row in rows:
-        by_hash.setdefault(compute_file_hash(row.path), []).append(row)
+        try:
+            file_hash = compute_file_hash(row.path)
+        except OSError:
+            continue
+        by_hash.setdefault(file_hash, []).append(row)
 
     violations: list[CrossSplitDuplicate] = []
     for same_hash_rows in by_hash.values():
@@ -54,6 +64,17 @@ def find_cross_split_exact_duplicates(rows: list[ManifestRow]) -> list[CrossSpli
 
 
 def find_cross_split_near_duplicates(rows: list[ManifestRow], max_distance: int = 5) -> list[CrossSplitDuplicate]:
+    """Only compares rows sharing the same `label`. A "near duplicate"
+    conceptually means the same real-world specimen photographed twice - two
+    images of DIFFERENT classes can never be the same specimen, no matter
+    how visually similar a coarse perceptual hash finds them (e.g. two
+    photos from the same studio session/background/lighting rig, one of a
+    potato and one of an onion, can collide at a low Hamming distance
+    without either being mislabeled or leaked). Comparing across labels was
+    tried first and produced thousands of such cross-CLASS hash collisions
+    on a real multi-class photo archive that shared photography conditions
+    across classes - a real finding, but about domain/background
+    uniformity, not train/test leakage; see `data/DATASET_AUDIT_v0.md`."""
     hashes: dict[str, int] = {}
     for row in rows:
         try:
@@ -67,7 +88,7 @@ def find_cross_split_near_duplicates(rows: list[ManifestRow], max_distance: int 
         a = rows_with_hash[i]
         for j in range(i + 1, len(rows_with_hash)):
             b = rows_with_hash[j]
-            if a.split == b.split:
+            if a.split == b.split or a.label != b.label:
                 continue
             distance = hamming_distance(hashes[a.path], hashes[b.path])
             if distance <= max_distance:

@@ -234,9 +234,28 @@ def split_groups(groups: list[str], split: SplitConfig, seed: int) -> dict[str, 
 def assign_splits(candidates: list[CandidateImage], split: SplitConfig, seed: int) -> list[ManifestRow]:
     """The ONE place a split is ever assigned, regardless of where the
     candidates came from. Splits on GROUPS, never individual images - every
-    candidate sharing a `group` value lands in the same split."""
-    groups = [c.group for c in candidates]
-    assignment = split_groups(groups, split, seed)
+    candidate sharing a `group` value lands in the same split.
+
+    Stratified PER LABEL: each class's own groups are shuffled and split
+    independently at the configured train/val/test ratio, rather than
+    pooling every class's groups into one shuffled list. A global pool
+    lets a class's actual split ratio drift arbitrarily far from the
+    configured one, purely as a side effect of which OTHER classes and how
+    many of their groups happen to be in the same manifest - not something
+    a per-class ratio should depend on at all. This was not a hypothetical
+    concern: it showed up as a real, visible problem on a real 6-class
+    manifest combining Fruits-360 (1-3 groups/class) with a second source
+    (11-57 groups/class) - see `data/DATASET_AUDIT_v0.md`, "Split
+    stratification fix"."""
+    candidates_by_label: dict[str, list[CandidateImage]] = {}
+    for c in candidates:
+        candidates_by_label.setdefault(c.label, []).append(c)
+
+    assignment: dict[str, str] = {}
+    for label in sorted(candidates_by_label):
+        groups = [c.group for c in candidates_by_label[label]]
+        assignment.update(split_groups(groups, split, seed))
+
     rows = [ManifestRow.from_candidate(c, split=assignment[c.group]) for c in candidates]
     # Stable, human-readable ordering in the written file - not load-bearing
     # for correctness, just for diffability.

@@ -207,7 +207,15 @@ def acquire_class(
 
     # Grouping: conservative near-duplicate clustering, since this source
     # gives us no specimen/session metadata at all (see module docstring).
+    # Clustering itself needs real, absolute paths to open and hash the
+    # files, but the resulting group id (the lexicographically-smallest
+    # member path - see `cluster_near_duplicates`) must be relativized
+    # before it goes in the manifest, same as `path` - a group id
+    # containing a local absolute path (with a username in it) would leak
+    # local machine details into what's meant to be a portable, committable
+    # provenance record.
     groups = cluster_near_duplicates([str(p) for p in downloaded_paths], max_distance=NEAR_DUPLICATE_MAX_DISTANCE)
+    groups = {p: _relative_path(Path(group_id)) for p, group_id in groups.items()}
 
     candidates = [
         CandidateImage(

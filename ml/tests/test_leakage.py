@@ -55,6 +55,16 @@ def test_same_split_exact_duplicate_is_not_a_cross_split_violation(tmp_path):
     assert find_cross_split_exact_duplicates(rows) == []
 
 
+def test_cross_split_exact_duplicate_skips_unreadable_files_without_raising(tmp_path):
+    a = _write_bytes(tmp_path / "a.bin", b"identical bytes")
+    missing = str(tmp_path / "does_not_exist.bin")
+    rows = [
+        ManifestRow(path=a, label="apple", group="g1", split="train"),
+        ManifestRow(path=missing, label="apple", group="g2", split="test"),
+    ]
+    assert find_cross_split_exact_duplicates(rows) == []  # must not raise
+
+
 def _make_image(path, color):
     from PIL import Image
 
@@ -72,6 +82,24 @@ def test_cross_split_near_duplicate_is_detected(tmp_path):
     ]
     violations = find_cross_split_near_duplicates(rows, max_distance=5)
     assert len(violations) == 1
+
+
+def test_cross_split_near_duplicate_ignores_pairs_of_different_labels(tmp_path):
+    """Two DIFFERENT classes can never be the same physical specimen, no
+    matter how visually similar a coarse perceptual hash finds them (e.g.
+    shared background/lighting across a photo session) - see
+    src/curation/leakage.py's docstring for the real dataset finding that
+    prompted this. Same images as the positive-case test above, but
+    different labels - must NOT be flagged."""
+    a = tmp_path / "a.png"
+    b = tmp_path / "b.png"
+    _make_image(a, (120, 120, 120))
+    _make_image(b, (122, 118, 121))  # visually near-identical, as in the positive-case test
+    rows = [
+        ManifestRow(path=str(a), label="apple", group="g1", split="train"),
+        ManifestRow(path=str(b), label="banana", group="g2", split="val"),
+    ]
+    assert find_cross_split_near_duplicates(rows, max_distance=5) == []
 
 
 def test_audit_manifest_leakage_returns_all_three_checks(tiny_raw_data_dir, tiny_class_map):

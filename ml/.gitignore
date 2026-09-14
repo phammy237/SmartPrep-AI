@@ -16,6 +16,12 @@ data/splits/*
 data/raw_acquired/*
 !data/raw_acquired/.gitkeep
 
+# First-party photos staged for import (scripts/import_first_party.py).
+# Never committed - real photos of real ingredients live here only until
+# imported into data/raw/, same as every other raw-image location above.
+data/first_party_inbox/*
+!data/first_party_inbox/.gitkeep
+
 # Every training run's artifacts (checkpoints, metrics, plots). Small,
 # individually-interesting metrics.json/config.json files can still be copied
 # out and committed elsewhere deliberately if ever wanted - this only ignores
