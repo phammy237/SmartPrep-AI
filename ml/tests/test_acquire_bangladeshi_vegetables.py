@@ -11,7 +11,6 @@ monkeypatched for the higher-level `acquire()`/`acquire_class()` tests.
 from __future__ import annotations
 
 import io
-import random
 import sys
 import zipfile
 from pathlib import Path
@@ -22,21 +21,13 @@ from scripts.acquire import bangladeshi_vegetables as bv
 from src.curation.leakage import audit_manifest_leakage
 from src.datasets.manifest import assign_splits
 from src.training.config import SplitConfig
+from tests.conftest import make_tiny_image_bytes
 
 
 def _make_jpeg_bytes(color, size=32, seed=0) -> bytes:
-    from PIL import Image
-
-    rng = random.Random(seed)
-    img = Image.new("RGB", (size, size))
-    pixels = img.load()
-    for x in range(size):
-        for y in range(size):
-            noise = rng.randint(-15, 15)
-            pixels[x, y] = tuple(max(0, min(255, c + noise)) for c in color)
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG")
-    return buf.getvalue()
+    # size=32 (not conftest's 16 default): validate_image's MIN_DIMENSION
+    # is 32, and these tests exercise real validation.
+    return make_tiny_image_bytes(color, size=size, seed=seed, format="JPEG")
 
 
 def _build_archive(entries: dict[str, bytes]) -> tuple[bytes, list[zipfile.ZipInfo]]:

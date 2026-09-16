@@ -96,7 +96,7 @@ def _existing_hashes(class_raw_dir: Path) -> dict[str, str]:
     return hashes
 
 
-def import_class(label: str, inbox_class_dir: Path, raw_class_dir: Path) -> ImportResult:
+def import_class(inbox_class_dir: Path, raw_class_dir: Path) -> ImportResult:
     result = ImportResult()
     raw_class_dir.mkdir(parents=True, exist_ok=True)
     known_hashes = _existing_hashes(raw_class_dir)
@@ -144,7 +144,7 @@ def import_first_party(inbox_dir: Path, raw_dir: Path, class_map: ClassMap) -> d
 
     results: dict[str, ImportResult] = {}
     for label in inbox_subfolders:
-        results[label] = import_class(label, inbox_dir / label, raw_dir / label)
+        results[label] = import_class(inbox_dir / label, raw_dir / label)
     return results
 
 

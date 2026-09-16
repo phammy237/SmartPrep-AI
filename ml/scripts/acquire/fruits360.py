@@ -59,6 +59,7 @@ _ML_ROOT = Path(__file__).resolve().parents[2]
 if str(_ML_ROOT) not in sys.path:
     sys.path.insert(0, str(_ML_ROOT))
 
+from scripts.acquire._shared import USER_AGENT, download_file, relative_path  # noqa: E402
 from src.curation.validation import validate_image  # noqa: E402
 from src.datasets.manifest import CandidateImage, write_candidates_csv  # noqa: E402
 
@@ -66,7 +67,6 @@ REPO = "fruits-360/fruits-360-100x100"
 REF = "main"
 SOURCE_REPO_URL = f"https://github.com/{REPO}"
 LICENSE = "CC BY-SA 4.0"
-USER_AGENT = "smartprep-ml-dataset-acquisition/0.1 (research; see ml/data/README.md)"
 SPLIT_DIR = "Training"  # Fruits-360's own train/test split is irrelevant - we resplit ourselves
 
 # class -> Fruits-360 variety folder names to sample, verified to exist via
@@ -97,22 +97,8 @@ def list_variety_files(variety: str) -> list[dict]:
     return _api_get(url)
 
 
-def download_file(download_url: str, dest: Path) -> None:
-    req = urllib.request.Request(download_url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as resp:
-        data = resp.read()
-    dest.write_bytes(data)
-
-
 def _relative_path(path: Path) -> str:
-    """Paths in the committed provenance CSV must be relative (portable
-    across machines, and free of any local username in the path) - never the
-    absolute path this script happens to have used locally. Relative to the
-    `ml/` directory, matching the convention documented in data/README.md."""
-    try:
-        return str(path.resolve().relative_to(_ML_ROOT)).replace("\\", "/")
-    except ValueError:
-        return str(path)  # outside the ml/ tree (e.g. a test's tmp_path) - leave as-is
+    return relative_path(path, _ML_ROOT)
 
 
 def acquire(
@@ -147,7 +133,7 @@ def acquire(
                 dest = class_dir / f"fruits360_{variety.replace(' ', '_')}_{f['name']}"
                 if not dest.exists():
                     try:
-                        download_file(f["download_url"], dest)
+                        download_file(f["download_url"], dest)  # shared default timeout matches REQUEST_TIMEOUT_SECONDS above
                         time.sleep(DOWNLOAD_DELAY_SECONDS)
                     except (urllib.error.HTTPError, urllib.error.URLError) as exc:
                         print(f"  [skip] {dest.name}: download failed ({exc})", file=sys.stderr)

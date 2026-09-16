@@ -15,6 +15,7 @@ from scripts.acquire import banglavegnet
 from src.datasets.manifest import assign_splits
 from src.curation.leakage import audit_manifest_leakage
 from src.training.config import SplitConfig
+from tests.conftest import _make_tiny_image
 
 
 def _fake_listing(names: list[str], size: int = 4_000_000) -> list[dict]:
@@ -30,18 +31,11 @@ def _fake_listing(names: list[str], size: int = 4_000_000) -> list[dict]:
 
 
 def _make_image(dest, color, seed=0, size=32):
-    import random
-
-    from PIL import Image
-
-    rng = random.Random(seed)
-    image = Image.new("RGB", (size, size))
-    pixels = image.load()
-    for x in range(size):
-        for y in range(size):
-            noise = rng.randint(-15, 15)
-            pixels[x, y] = tuple(max(0, min(255, c + noise)) for c in color)
-    image.save(dest)
+    # size=32 (not conftest's 16 default): validate_image's MIN_DIMENSION
+    # is 32, and these tests exercise real validation. Format (JPEG) is
+    # inferred from `dest`'s .jpg suffix, same as every other first-party
+    # image conftest's `_make_tiny_image` writes.
+    _make_tiny_image(dest, color, size=size, seed=seed)
 
 
 DATASET_META = {

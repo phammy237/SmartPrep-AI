@@ -96,6 +96,40 @@ def test_assign_splits_is_deterministic_when_stratified():
     assert first == second
 
 
+def test_assign_splits_handles_the_same_group_string_reused_across_labels():
+    """Nothing requires a group id to be namespaced by class - a
+    `group_key_fn` or first-party filename convention that happens to
+    produce the same literal group string for two different labels must
+    NOT let one label's split assignment silently overwrite the other's
+    (the per-label assignment is keyed by (label, group), not by the bare
+    group string). Each label's OWN second group is chosen to sort on the
+    opposite side of "shared_group_name" (zzz_... after it, banana_... before
+    it), so the pre-shuffle order - and thus the resulting split - genuinely
+    differs per label rather than coincidentally matching; asserting
+    against an independent `split_groups` call per label then directly
+    proves there is no cross-label leakage into `assignment`."""
+    split = SplitConfig(train=0.5, val=0.0, test=0.5)
+    seed = 3
+    candidates = [
+        CandidateImage(path="apple_1.jpg", label="apple", group="shared_group_name"),
+        CandidateImage(path="apple_2.jpg", label="apple", group="zzz_apple_group"),
+        CandidateImage(path="banana_1.jpg", label="banana", group="shared_group_name"),
+        CandidateImage(path="banana_2.jpg", label="banana", group="banana_only_group"),
+    ]
+    rows = assign_splits(candidates, split, seed=seed)
+
+    expected_apple = split_groups(["shared_group_name", "zzz_apple_group"], split, seed)
+    expected_banana = split_groups(["shared_group_name", "banana_only_group"], split, seed)
+    # sanity check that this scenario is actually discriminating - otherwise
+    # the assertions below couldn't tell correct per-label behavior apart
+    # from the old cross-label-overwrite bug.
+    assert expected_apple["shared_group_name"] != expected_banana["shared_group_name"]
+
+    for r in rows:
+        expected = expected_apple if r.label == "apple" else expected_banana
+        assert r.split == expected[r.group], f"{r.label}/{r.group} got {r.split}, expected {expected[r.group]}"
+
+
 def test_scan_raw_directory_finds_every_image(tiny_raw_data_dir, tiny_class_map):
     pairs = scan_raw_directory(tiny_raw_data_dir, tiny_class_map)
     assert len(pairs) == 3 * 12  # 3 classes * 4 sessions * 3 images

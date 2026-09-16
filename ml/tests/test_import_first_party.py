@@ -32,7 +32,7 @@ def test_import_copies_valid_images_into_raw_dir(tmp_path):
     _make_image(inbox / "fp_milk_01_kitchen-night_02.jpg", (200, 200, 220), seed=2)
 
     raw_dir = tmp_path / "raw" / "milk"
-    result = import_class("milk", inbox, raw_dir)
+    result = import_class(inbox, raw_dir)
 
     assert len(result.imported) == 2
     assert (raw_dir / "fp_milk_01_kitchen-night_01.jpg").exists()
@@ -53,7 +53,7 @@ def test_group_is_derived_from_the_trailing_index_convention(tmp_path):
     _make_image(inbox / "fp_egg_03_pantry-day1_01.jpg", (230, 220, 180), seed=3)
 
     raw_dir = tmp_path / "raw" / "egg"
-    import_class("egg", inbox, raw_dir)
+    import_class(inbox, raw_dir)
 
     class_map = ClassMap(version="test", classes=("egg",))
     candidates = candidates_from_first_party_scan(tmp_path / "raw", class_map)
@@ -75,7 +75,7 @@ def test_import_rejects_corrupt_files_and_reports_them(tmp_path):
     _make_image(inbox / "good.jpg", (200, 180, 100), seed=1)
 
     raw_dir = tmp_path / "raw" / "bread"
-    result = import_class("bread", inbox, raw_dir)
+    result = import_class(inbox, raw_dir)
 
     assert len(result.imported) == 1
     assert len(result.rejected) == 1
@@ -90,10 +90,10 @@ def test_import_is_idempotent_never_overwrites_and_skips_reimport(tmp_path):
     _make_image(inbox / "fp_cheese_01_s1_01.jpg", (230, 200, 80), seed=1)
 
     raw_dir = tmp_path / "raw" / "cheese"
-    first = import_class("cheese", inbox, raw_dir)
+    first = import_class(inbox, raw_dir)
     assert len(first.imported) == 1
 
-    second = import_class("cheese", inbox, raw_dir)
+    second = import_class(inbox, raw_dir)
     assert second.imported == []
     assert len(second.skipped_existing) == 1
 
@@ -110,7 +110,7 @@ def test_import_skips_byte_identical_duplicate_under_a_different_filename(tmp_pa
     duplicate.write_bytes(src.read_bytes())  # byte-identical copy, different name
 
     raw_dir = tmp_path / "raw" / "chicken"
-    result = import_class("chicken", inbox, raw_dir)
+    result = import_class(inbox, raw_dir)
 
     assert len(result.imported) == 1
     assert len(result.skipped_duplicate) == 1

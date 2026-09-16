@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections import Counter
 from pathlib import Path
 
 _ML_ROOT = Path(__file__).resolve().parent.parent
@@ -35,13 +36,7 @@ if str(_ML_ROOT) not in sys.path:
     sys.path.insert(0, str(_ML_ROOT))
 
 from src.curation.leakage import audit_manifest_leakage  # noqa: E402
-from src.curation.statistics import (  # noqa: E402
-    build_dataset_statistics,
-    imbalance_ratio,
-    images_per_class,
-    source_distribution_per_class,
-    split_counts,
-)
+from src.curation.statistics import build_dataset_statistics  # noqa: E402
 from src.curation.validation import validate_images  # noqa: E402
 from src.datasets.manifest import (  # noqa: E402
     CandidateImage,
@@ -84,17 +79,13 @@ def run_audit(
 ) -> dict:
     """Everything the collection-progress report needs, computed once.
     Returns a plain dict so both `main()`'s printing and any future
-    caller (e.g. a test) can consume it without re-running the audit."""
-    counts = images_per_class(candidates, class_map)
-    zero_data_classes = [label for label in class_map if counts.get(label, 0) == 0]
-    covered_candidates = [c for c in candidates if c.label not in zero_data_classes]
+    caller (e.g. a test) can consume it without re-running the audit.
 
-    rows = assign_splits(covered_candidates, split, seed) if covered_candidates else []
-    leakage_report = audit_manifest_leakage(rows) if rows else {
-        "group_split_violations": {},
-        "cross_split_exact_duplicates": [],
-        "cross_split_near_duplicates": [],
-    }
+    `assign_splits` and `audit_manifest_leakage` both already return their
+    empty-input result cleanly (`[]` / all-empty dict) for an empty
+    `candidates` list, so there's no need to special-case that here."""
+    rows = assign_splits(candidates, split, seed)
+    leakage_report = audit_manifest_leakage(rows)
 
     validation_results = validate_images([c.path for c in candidates])
     stats = build_dataset_statistics(
@@ -105,15 +96,17 @@ def run_audit(
         near_duplicate_count=0,
         manifest_rows=rows,
     )
+    # Reuse everything build_dataset_statistics already computed rather than
+    # deriving the same per-class/source counts a second time.
+    counts = stats["images_per_class"]
+    sources = stats["source_distribution_per_class"]
+    zero_data_classes = [label for label in class_map if counts.get(label, 0) == 0]
 
     per_class: dict[str, dict] = {}
-    from collections import Counter
-
     split_by_label = Counter((r.label, r.split) for r in rows)
     groups_by_label: dict[str, set[str]] = {}
-    for c in covered_candidates:
+    for c in candidates:
         groups_by_label.setdefault(c.label, set()).add(c.group)
-    sources = source_distribution_per_class(candidates)
 
     for label in class_map:
         n_images = counts.get(label, 0)
@@ -137,9 +130,9 @@ def run_audit(
     return {
         "per_class": per_class,
         "zero_data_classes": zero_data_classes,
-        "total_images": len(candidates),
-        "overall_split_counts": split_counts(rows) if rows else {"train": 0, "val": 0, "test": 0},
-        "imbalance_ratio": imbalance_ratio(counts),
+        "total_images": stats["total_candidates"],
+        "overall_split_counts": stats.get("split_counts", {"train": 0, "val": 0, "test": 0}),
+        "imbalance_ratio": stats["imbalance_ratio"],
         "leakage": leakage_report,
         "dimension_summary": stats.get("dimensions", {}),
         "rejected_count": stats.get("rejected_count", 0),

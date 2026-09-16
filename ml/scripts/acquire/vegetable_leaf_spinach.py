@@ -50,6 +50,7 @@ _ML_ROOT = Path(__file__).resolve().parents[2]
 if str(_ML_ROOT) not in sys.path:
     sys.path.insert(0, str(_ML_ROOT))
 
+from scripts.acquire._shared import USER_AGENT, relative_path  # noqa: E402
 from src.curation.duplicates import cluster_near_duplicates  # noqa: E402
 from src.curation.validation import validate_image  # noqa: E402
 from src.datasets.manifest import CandidateImage, write_candidates_csv  # noqa: E402
@@ -66,7 +67,6 @@ ZIP_DOWNLOAD_URL = (
 ZIP_ENTRY_PREFIX = "Root/spinach/"
 SMARTPREP_LABEL = "spinach"
 SOURCE_LABEL = "spinach"  # this archive's own folder name - no rename needed
-USER_AGENT = "smartprep-ml-dataset-acquisition/0.1 (research; see ml/data/README.md)"
 REQUEST_TIMEOUT_SECONDS = 60
 NEAR_DUPLICATE_MAX_DISTANCE = 5
 
@@ -80,10 +80,7 @@ def download_zip_bytes() -> bytes:
 
 
 def _relative_path(path: Path) -> str:
-    try:
-        return str(path.resolve().relative_to(_ML_ROOT)).replace("\\", "/")
-    except ValueError:
-        return str(path)
+    return relative_path(path, _ML_ROOT)
 
 
 def acquire(output_dir: Path, max_images: int | None = None) -> list[CandidateImage]:

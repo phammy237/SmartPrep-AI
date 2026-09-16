@@ -246,17 +246,25 @@ def assign_splits(candidates: list[CandidateImage], split: SplitConfig, seed: in
     concern: it showed up as a real, visible problem on a real 6-class
     manifest combining Fruits-360 (1-3 groups/class) with a second source
     (11-57 groups/class) - see `data/DATASET_AUDIT_v0.md`, "Split
-    stratification fix"."""
+    stratification fix".
+
+    The per-label assignment is keyed by `(label, group)`, not by the bare
+    group string - every current group-id producer happens to namespace its
+    groups by class already (e.g. `fruits360:apple:...`, or a first-party
+    scan directory that's itself per-class), but nothing enforces that, and
+    a bare group string colliding across two labels would otherwise let one
+    label's split assignment silently overwrite another's."""
     candidates_by_label: dict[str, list[CandidateImage]] = {}
     for c in candidates:
         candidates_by_label.setdefault(c.label, []).append(c)
 
-    assignment: dict[str, str] = {}
+    assignment: dict[tuple[str, str], str] = {}
     for label in sorted(candidates_by_label):
         groups = [c.group for c in candidates_by_label[label]]
-        assignment.update(split_groups(groups, split, seed))
+        for group, split_name in split_groups(groups, split, seed).items():
+            assignment[(label, group)] = split_name
 
-    rows = [ManifestRow.from_candidate(c, split=assignment[c.group]) for c in candidates]
+    rows = [ManifestRow.from_candidate(c, split=assignment[(c.label, c.group)]) for c in candidates]
     # Stable, human-readable ordering in the written file - not load-bearing
     # for correctness, just for diffability.
     rows.sort(key=lambda r: (r.split, r.label, r.source_dataset, r.path))

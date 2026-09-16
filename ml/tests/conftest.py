@@ -20,7 +20,17 @@ def tiny_class_map() -> ClassMap:
     return ClassMap(version="test", classes=TINY_CLASSES)
 
 
-def _make_tiny_image(path, color: tuple[int, int, int], size: int = 16, seed: int = 0) -> None:
+def make_tiny_image_bytes(color: tuple[int, int, int], size: int = 16, seed: int = 0, format: str = "PNG") -> bytes:
+    """Seeded per-pixel noise around a base color, encoded in memory - the
+    one place this noise-image generator is implemented. Used directly by
+    tests that embed images in an in-memory archive (e.g. a ZIP built with
+    `zipfile.writestr`) without ever touching disk; `_make_tiny_image` below
+    is a thin wrapper for tests that want a real file on disk instead. The
+    per-pixel noise (not a flat solid color) matters for anything that
+    perceptually hashes these images - see `tests/test_duplicates.py` for
+    why a solid color is a degenerate case for average-hashing."""
+    import io
+
     from PIL import Image
 
     rng = random.Random(seed)
@@ -30,7 +40,17 @@ def _make_tiny_image(path, color: tuple[int, int, int], size: int = 16, seed: in
         for y in range(size):
             noise = rng.randint(-15, 15)
             pixels[x, y] = tuple(max(0, min(255, channel + noise)) for channel in color)
-    image.save(path)
+    buf = io.BytesIO()
+    image.save(buf, format=format)
+    return buf.getvalue()
+
+
+def _make_tiny_image(path, color: tuple[int, int, int], size: int = 16, seed: int = 0) -> None:
+    from pathlib import Path
+
+    suffix = Path(path).suffix.lower()
+    fmt = "JPEG" if suffix in (".jpg", ".jpeg") else "PNG"
+    Path(path).write_bytes(make_tiny_image_bytes(color, size=size, seed=seed, format=fmt))
 
 
 # One deterministic-but-distinct base color per class, so a real model has a

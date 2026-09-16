@@ -74,6 +74,7 @@ _ML_ROOT = Path(__file__).resolve().parents[2]
 if str(_ML_ROOT) not in sys.path:
     sys.path.insert(0, str(_ML_ROOT))
 
+from scripts.acquire._shared import USER_AGENT, relative_path  # noqa: E402
 from src.curation.duplicates import cluster_near_duplicates  # noqa: E402
 from src.curation.validation import validate_image  # noqa: E402
 from src.datasets.manifest import CandidateImage, write_candidates_csv  # noqa: E402
@@ -88,7 +89,6 @@ ZIP_DOWNLOAD_URL = (
     "815e9f04-3d17-4eaa-9998-c81aeabfd78f/file_downloaded"
 )
 ZIP_ENTRY_PREFIX = "Vegetable_Image/Dataset/"
-USER_AGENT = "smartprep-ml-dataset-acquisition/0.1 (research; see ml/data/README.md)"
 REQUEST_TIMEOUT_SECONDS = 60
 
 # SmartPrep label -> the archive's own folder name for that class (kept as
@@ -237,12 +237,7 @@ def extract_entry(span: bytes, span_start_offset: int, info: zipfile.ZipInfo) ->
 
 
 def _relative_path(path: Path) -> str:
-    """See fruits360.py / banglavegnet.py's identical helper: provenance
-    CSVs store paths relative to `ml/` - portable, no local username."""
-    try:
-        return str(path.resolve().relative_to(_ML_ROOT)).replace("\\", "/")
-    except ValueError:
-        return str(path)
+    return relative_path(path, _ML_ROOT)
 
 
 def _class_entries(all_entries: list[zipfile.ZipInfo], source_label: str) -> list[zipfile.ZipInfo]:
@@ -261,12 +256,10 @@ def _span_end_for_class(all_entries: list[zipfile.ZipInfo], class_entries: list[
     in-class entry's local header + compressed data can end. Falls back to
     the whole archive size if this class's last entry is also the
     archive's last entry overall."""
-    by_offset = sorted(all_entries, key=lambda e: e.header_offset)
+    offsets = sorted(e.header_offset for e in all_entries)
     last_offset = max(e.header_offset for e in class_entries)
-    for i, e in enumerate(by_offset):
-        if e.header_offset == last_offset:
-            return by_offset[i + 1].header_offset - 1 if i + 1 < len(by_offset) else zip_size - 1
-    return zip_size - 1  # unreachable in practice; safe fallback
+    i = offsets.index(last_offset)
+    return offsets[i + 1] - 1 if i + 1 < len(offsets) else zip_size - 1
 
 
 def acquire_class(

@@ -80,6 +80,7 @@ _ML_ROOT = Path(__file__).resolve().parents[2]
 if str(_ML_ROOT) not in sys.path:
     sys.path.insert(0, str(_ML_ROOT))
 
+from scripts.acquire._shared import USER_AGENT, download_file, relative_path  # noqa: E402
 from src.curation.duplicates import cluster_near_duplicates  # noqa: E402
 from src.curation.validation import validate_image  # noqa: E402
 from src.datasets.manifest import CandidateImage, write_candidates_csv  # noqa: E402
@@ -87,7 +88,6 @@ from src.datasets.manifest import CandidateImage, write_candidates_csv  # noqa: 
 DOI = "10.17632/rtx9ngb68j.2"
 FILES_API = "https://data.mendeley.com/api/datasets/rtx9ngb68j/files"
 DATASET_VERSION = 2
-USER_AGENT = "smartprep-ml-dataset-acquisition/0.1 (research; see ml/data/README.md)"
 REQUEST_TIMEOUT_SECONDS = 30
 DOWNLOAD_DELAY_SECONDS = 0.1
 
@@ -114,20 +114,8 @@ def list_folder_files(folder_id: str) -> list[dict]:
         return json.load(resp)
 
 
-def download_file(download_url: str, dest: Path) -> None:
-    req = urllib.request.Request(download_url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as resp:
-        data = resp.read()
-    dest.write_bytes(data)
-
-
 def _relative_path(path: Path) -> str:
-    """See fruits360.py's identical helper: provenance CSVs store paths
-    relative to `ml/` - portable, no local username, safe to commit."""
-    try:
-        return str(path.resolve().relative_to(_ML_ROOT)).replace("\\", "/")
-    except ValueError:
-        return str(path)
+    return relative_path(path, _ML_ROOT)
 
 
 def acquire_class(
