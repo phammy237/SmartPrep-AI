@@ -112,18 +112,28 @@ CLASS_TO_OI_NAME = {
 # (pasta, rice, salmon fillet, steak...) are deliberately left out. Which of
 # these end up usable depends on real counts after filtering - see
 # scripts/refresh_and_train.py, which only trains classes with enough data.
-EXTRA_CLASS_TO_OI_NAME = {
-    name.lower().replace(" ", "_"): name
-    for name in (
+_EXTRA_NAMES = (
         "Strawberry", "Grape", "Pineapple", "Mango", "Pear", "Peach", "Watermelon", "Cherry",
         "Blueberry", "Raspberry", "Kiwifruit", "Grapefruit", "Coconut", "Pomegranate", "Papaya",
-        "Avocado", "Fig", "Apricot", "Cantaloupe", "Guava", "Lychee",
+        "Avocado", "Apricot", "Cantaloupe", "Guava", "Lychee",
         "Cucumber", "Pumpkin", "Zucchini", "Garlic", "Mushroom", "Cabbage", "Cauliflower",
         "Lettuce", "Bell pepper", "Chili pepper", "Corn", "Eggplant", "Celery", "Asparagus",
         "Sweet potato", "Kale", "Ginger", "Beet", "Radish", "Turnip", "Leek", "Artichoke",
         "Brussels sprout", "Green bean", "Peas", "Olive", "Basil", "Parsley",
         "Shrimp", "Sausage", "Bacon", "Butter", "Yogurt", "Tofu",
-    )
+        "Crab", "Lobster", "Oyster", "Squid", "Bagel", "Croissant", "Winter melon",
+)
+# Open Images' own label names differ from the everyday word for these (found
+# by walking its Food hierarchy: 2018_04/bbox_labels_600_hierarchy.json).
+_EXTRA_SPECIAL = {
+    "lemon": "Lemon (plant)",
+    "orange": "Orange (fruit)",
+    "fig": "Common fig",
+    "squash": "Squash (Plant)",
+}
+EXTRA_CLASS_TO_OI_NAME = {
+    **{name.lower().replace(" ", "_"): name for name in _EXTRA_NAMES},
+    **_EXTRA_SPECIAL,
 }
 ALL_CLASS_TO_OI_NAME = {**CLASS_TO_OI_NAME, **EXTRA_CLASS_TO_OI_NAME}
 

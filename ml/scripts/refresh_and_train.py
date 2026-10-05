@@ -80,6 +80,7 @@ def main() -> None:
     parser.add_argument("--backbone", default="resnet18")
     parser.add_argument("--no-pretrained", action="store_true", help="Train from random init (usually much worse).")
     parser.add_argument("--device", default="auto")
+    parser.add_argument("--dry-run", action="store_true", help="Print the trainable classes and stop.")
     args = parser.parse_args()
 
     if args.acquire:
@@ -94,6 +95,9 @@ def main() -> None:
     skipped = {l: s for l, s in stats.items() if l not in trainable}
     for label, (n, g) in sorted(skipped.items()):
         print(f"  [skip] {label}: {n} images / {g} groups (< {args.min_images} images or < {args.min_groups} groups)")
+    if args.dry_run:
+        print(f"\nTrainable ({len(trainable)}): " + ", ".join(f"{l}={stats[l][0]}/{stats[l][1]}g" for l in trainable))
+        return
     if len(trainable) < 2:
         sys.exit("Need at least 2 trainable classes.")
 
