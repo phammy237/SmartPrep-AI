@@ -67,6 +67,9 @@ class TrainingConfig:
     # (see src/datasets/manifest.py).
     force_resplit: bool = False
     group_by_stem_prefix: bool = True
+    # Acquisition provenance CSVs (data/provenance/*.csv) to merge with any
+    # first-party photos in data_dir. Empty = first-party only.
+    acquired_provenance_paths: list[str] = field(default_factory=list)
 
     # Model / optimization
     image_size: int = 224

@@ -12,7 +12,7 @@ import argparse
 import copy
 
 from src.datasets.ingredient_dataset import IngredientImageDataset
-from src.datasets.manifest import build_or_load_manifest, rows_for_split
+from src.datasets.manifest import build_or_load_combined_manifest, build_or_load_manifest, rows_for_split
 from src.datasets.transforms import build_eval_transform, build_train_transform
 from src.training.config import TrainingConfig, load_config
 from src.training.engine import build_optimizer, evaluate_loss_and_accuracy, train_one_epoch
@@ -34,14 +34,25 @@ def run_training(cfg: TrainingConfig) -> dict:
     class_map = load_class_map(cfg.classes_path)
     device = get_device(cfg.device)
 
-    rows = build_or_load_manifest(
-        data_dir=cfg.data_dir,
-        class_map=class_map,
-        manifest_path=cfg.manifest_path,
-        split=cfg.split,
-        seed=cfg.seed,
-        force=cfg.force_resplit,
-    )
+    if cfg.acquired_provenance_paths:
+        rows = build_or_load_combined_manifest(
+            class_map=class_map,
+            manifest_path=cfg.manifest_path,
+            split=cfg.split,
+            seed=cfg.seed,
+            data_dir=cfg.data_dir,
+            acquired_provenance_paths=cfg.acquired_provenance_paths,
+            force=cfg.force_resplit,
+        )
+    else:
+        rows = build_or_load_manifest(
+            data_dir=cfg.data_dir,
+            class_map=class_map,
+            manifest_path=cfg.manifest_path,
+            split=cfg.split,
+            seed=cfg.seed,
+            force=cfg.force_resplit,
+        )
     train_rows = rows_for_split(rows, "train")
     val_rows = rows_for_split(rows, "val")
     if not train_rows:

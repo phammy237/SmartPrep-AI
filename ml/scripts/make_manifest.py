@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # so `import src...` works run from anywhere
 
-from src.datasets.manifest import build_or_load_manifest  # noqa: E402
+from src.datasets.manifest import build_or_load_combined_manifest, build_or_load_manifest  # noqa: E402
 from src.training.config import load_config  # noqa: E402
 from src.utils.classes import load_class_map  # noqa: E402
 
@@ -29,14 +29,25 @@ def main() -> None:
 
     cfg = load_config(args.config)
     class_map = load_class_map(cfg.classes_path)
-    rows = build_or_load_manifest(
-        data_dir=cfg.data_dir,
-        class_map=class_map,
-        manifest_path=cfg.manifest_path,
-        split=cfg.split,
-        seed=cfg.seed,
-        force=args.force,
-    )
+    if cfg.acquired_provenance_paths:
+        rows = build_or_load_combined_manifest(
+            class_map=class_map,
+            manifest_path=cfg.manifest_path,
+            split=cfg.split,
+            seed=cfg.seed,
+            data_dir=cfg.data_dir,
+            acquired_provenance_paths=cfg.acquired_provenance_paths,
+            force=args.force,
+        )
+    else:
+        rows = build_or_load_manifest(
+            data_dir=cfg.data_dir,
+            class_map=class_map,
+            manifest_path=cfg.manifest_path,
+            split=cfg.split,
+            seed=cfg.seed,
+            force=args.force,
+        )
 
     print(f"Manifest: {cfg.manifest_path} ({len(rows)} rows)")
     by_split = Counter(r.split for r in rows)
