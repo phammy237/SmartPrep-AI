@@ -82,6 +82,7 @@ def main() -> None:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--dry-run", action="store_true", help="Print the trainable classes and stop.")
     parser.add_argument("--run-tag", default="", help="Suffix for the run folder name, e.g. 'scratch'.")
+    parser.add_argument("--batch-size", type=int, default=32, help="Lower this if the machine runs short of RAM.")
     args = parser.parse_args()
 
     if args.acquire:
@@ -117,6 +118,7 @@ def main() -> None:
             "acquired_provenance_paths": [str(combined_csv.relative_to(_ML_ROOT)).replace("\\", "/")],
             "manifest_path": f"data/splits/manifest_auto_{stamp}.csv",
             "epochs": args.epochs,
+            "batch_size": args.batch_size,
             "backbone": args.backbone,
             "pretrained": not args.no_pretrained,
             "num_workers": 0,
