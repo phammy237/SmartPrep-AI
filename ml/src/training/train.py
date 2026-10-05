@@ -23,6 +23,18 @@ from src.utils.io import create_run_dir, save_json
 from src.utils.seed import set_seed
 
 
+def _build_checkpoint(state_dict, cfg: TrainingConfig, class_map, best_epoch: int, best_val_accuracy: float) -> dict:
+    return {
+        "model_state_dict": state_dict,
+        "backbone": cfg.backbone,
+        "image_size": cfg.image_size,
+        "class_map": class_map.to_dict(),
+        "model_version": f"ingredient-classifier-{cfg.run_name}",
+        "best_epoch": best_epoch,
+        "best_val_accuracy": best_val_accuracy,
+    }
+
+
 def run_training(cfg: TrainingConfig) -> dict:
     """Returns a summary dict (run_dir, best_epoch, best_val_accuracy, history) -
     the actual artifacts are written to disk, not just returned, so a crashed
@@ -121,6 +133,9 @@ def run_training(cfg: TrainingConfig) -> dict:
             best_epoch = epoch
             best_state_dict = copy.deepcopy(model.state_dict())
             epochs_without_improvement = 0
+            # Persist the best model as soon as it exists, so a killed/crashed
+            # run (e.g. out of memory) still leaves a usable checkpoint.
+            torch.save(_build_checkpoint(best_state_dict, cfg, class_map, best_epoch, best_val_accuracy), run_dir / "best_model.pt")
         else:
             epochs_without_improvement += 1
 
@@ -132,16 +147,7 @@ def run_training(cfg: TrainingConfig) -> dict:
         # against ever writing a checkpoint that wasn't actually selected.
         raise RuntimeError("Training completed without ever selecting a best checkpoint.")
 
-    checkpoint = {
-        "model_state_dict": best_state_dict,
-        "backbone": cfg.backbone,
-        "image_size": cfg.image_size,
-        "class_map": class_map.to_dict(),
-        "model_version": f"ingredient-classifier-{cfg.run_name}",
-        "best_epoch": best_epoch,
-        "best_val_accuracy": best_val_accuracy,
-    }
-    torch.save(checkpoint, run_dir / "best_model.pt")
+    torch.save(_build_checkpoint(best_state_dict, cfg, class_map, best_epoch, best_val_accuracy), run_dir / "best_model.pt")
     save_json(cfg.to_dict(), run_dir / "config.json")
     save_json(class_map.to_dict(), run_dir / "class_map.json")
     save_json(history, run_dir / "history.json")

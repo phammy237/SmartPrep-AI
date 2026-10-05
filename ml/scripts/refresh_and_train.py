@@ -81,6 +81,7 @@ def main() -> None:
     parser.add_argument("--no-pretrained", action="store_true", help="Train from random init (usually much worse).")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--dry-run", action="store_true", help="Print the trainable classes and stop.")
+    parser.add_argument("--run-tag", default="", help="Suffix for the run folder name, e.g. 'scratch'.")
     args = parser.parse_args()
 
     if args.acquire:
@@ -111,7 +112,7 @@ def main() -> None:
 
     cfg = config_from_dict(
         {
-            "run_name": f"auto-{len(trainable)}class",
+            "run_name": f"auto-{len(trainable)}class" + (f"-{args.run_tag}" if args.run_tag else ""),
             "classes_path": str(classes_path.relative_to(_ML_ROOT)).replace("\\", "/"),
             "acquired_provenance_paths": [str(combined_csv.relative_to(_ML_ROOT)).replace("\\", "/")],
             "manifest_path": f"data/splits/manifest_auto_{stamp}.csv",
