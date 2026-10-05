@@ -45,3 +45,7 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+
+# Generated per-run by scripts/refresh_and_train.py (class maps, combined provenance).
+data/provenance_auto/
+configs/classes_auto_*.json
