@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.refresh_and_train import select_trainable_labels
+from scripts.refresh_and_train import cap_per_group, select_trainable_labels
 from src.datasets.manifest import CandidateImage
 
 
@@ -25,3 +25,16 @@ def test_select_trainable_labels_needs_both_enough_images_and_enough_groups():
     assert trainable == ["apple"]
     assert stats["burst"] == (200, 1)
     assert stats["rare"] == (20, 20)
+
+
+def test_cap_per_group_limits_big_groups_deterministically_and_keeps_small_ones():
+    candidates = _c("pear", "big_store_group", 90) + _c("pear", "small", 3) + _c("apple", "big_store_group", 40)
+    capped = cap_per_group(candidates, max_per_group=10, seed=1)
+    again = cap_per_group(candidates, max_per_group=10, seed=1)
+    assert [c.path for c in capped] == [c.path for c in again]  # deterministic
+    counts = {}
+    for c in capped:
+        counts[(c.label, c.group)] = counts.get((c.label, c.group), 0) + 1
+    assert counts == {("pear", "big_store_group"): 10, ("pear", "small"): 3, ("apple", "big_store_group"): 10}
+    kept = {c.path for c in capped}
+    assert [c.path for c in capped] == [c.path for c in candidates if c.path in kept]  # original order kept

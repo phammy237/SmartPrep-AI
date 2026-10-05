@@ -63,6 +63,28 @@ def select_trainable_labels(
     return trainable, stats
 
 
+def cap_per_group(candidates: list[CandidateImage], max_per_group: int, seed: int = 42) -> list[CandidateImage]:
+    """Keep at most `max_per_group` images from any one (label, group).
+
+    Group-aware splitting puts a whole group in one split, so a single huge
+    group (e.g. 90 shots of three pear varieties in one store) can swing a
+    class's test score on its own and make the metric about that group rather
+    than the class. Capping keeps every group's influence comparable.
+    Deterministic for a given seed; the kept images are a seeded random sample
+    of each oversized group, returned in the input's original order."""
+    import random
+
+    by_key: dict[tuple[str, str], list[int]] = defaultdict(list)
+    for i, c in enumerate(candidates):
+        by_key[(c.label, c.group)].append(i)
+    rng = random.Random(seed)
+    keep: set[int] = set()
+    for key in sorted(by_key):
+        idxs = by_key[key]
+        keep.update(idxs if len(idxs) <= max_per_group else rng.sample(idxs, max_per_group))
+    return [c for i, c in enumerate(candidates) if i in keep]
+
+
 def load_all_candidates(provenance_dir: Path) -> list[CandidateImage]:
     candidates: list[CandidateImage] = []
     for csv_path in sorted(provenance_dir.glob("*.csv")):
@@ -82,6 +104,7 @@ def main() -> None:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--dry-run", action="store_true", help="Print the trainable classes and stop.")
     parser.add_argument("--run-tag", default="", help="Suffix for the run folder name, e.g. 'scratch'.")
+    parser.add_argument("--max-per-group", type=int, default=15, help="Cap images per (class, group) before splitting; 0 = no cap.")
     parser.add_argument("--batch-size", type=int, default=32, help="Lower this if the machine runs short of RAM.")
     args = parser.parse_args()
 
@@ -92,6 +115,10 @@ def main() -> None:
         )
 
     candidates = load_all_candidates(PROVENANCE_DIR)
+    if args.max_per_group:
+        before = len(candidates)
+        candidates = cap_per_group(candidates, args.max_per_group)
+        print(f"Capped at {args.max_per_group} images per group: {before} -> {len(candidates)} images.")
     trainable, stats = select_trainable_labels(candidates, args.min_images, args.min_groups)
     print(f"{len(candidates)} candidate images across {len(stats)} classes; {len(trainable)} trainable.")
     skipped = {l: s for l, s in stats.items() if l not in trainable}
