@@ -105,6 +105,15 @@ def run_training(cfg: TrainingConfig) -> dict:
                 "val_accuracy": val_metrics["accuracy"],
             }
         )
+        # Progress is visible mid-run: one line per epoch, and history.json is
+        # rewritten each epoch (not only at the end) so a killed run keeps it.
+        print(
+            f"epoch {epoch}/{cfg.epochs} "
+            f"train_loss={train_metrics['loss']:.4f} train_acc={train_metrics['accuracy']:.4f} "
+            f"val_loss={val_metrics['loss']:.4f} val_acc={val_metrics['accuracy']:.4f}",
+            flush=True,
+        )
+        save_json(history, run_dir / "history.json")
 
         improved = val_metrics["accuracy"] > best_val_accuracy + cfg.early_stopping.min_delta
         if improved:
